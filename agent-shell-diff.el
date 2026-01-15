@@ -32,6 +32,7 @@
 (eval-when-compile
   (require 'cl-lib))
 (require 'diff-mode)
+(require 'xterm-color)
 
 (defvar-local agent-shell-on-exit nil
   "Function to call when the diff buffer is killed.
@@ -40,7 +41,85 @@ This variable is automatically set by :on-exit from `agent-shell-diff'
 and can be temporarily let-bound to nil to prevent the
 on-exit callback from running when the buffer is killed.")
 
-(cl-defun agent-shell-diff (&key old new on-exit title bindings)
+(defcustom agent-shell-delta-executable "delta"
+  "The delta executable on your system to be used by Magit."
+  :type 'string
+  :group 'agent-shell)
+
+(defcustom agent-shell-default-light-theme "GitHub"
+  "The default color theme when Emacs has a light background."
+  :type 'string
+  :group 'agent-shell)
+
+(defcustom agent-shell-default-dark-theme "Monokai Extended"
+  "The default color theme when Emacs has a dark background."
+  :type 'string
+  :group 'agent-shell)
+
+(defcustom agent-shell-delta-args
+  `("--max-line-distance" "0.6"
+    "--true-color" ,(if xterm-color--support-truecolor "always" "never")
+    "--color-only")
+  "Delta command line arguments as a list of strings.
+
+If the color theme is not specified using --theme, then it will
+be chosen automatically according to whether the current Emacs
+frame has a light or dark background. See `agent-shell-default-light-theme' and
+`agent-shell-default-dark-theme'.
+
+--color-only is required in order to use delta with magit; it
+will be added if not present."
+  :type '(repeat string)
+  :group 'agent-shell)
+
+(defcustom agent-shell-max-size 50000
+  "Don't use delta if length of the buffer is greater than specified.
+This setting is needed to avoid situations when delta will freezes
+the whole Emacs when trying to process extremely large diff"
+  :type 'integer
+  :group 'agent-shell)
+
+
+(defun agent-shell--make-delta-args ()
+  "Make final list of delta command-line arguments."
+  (let ((args agent-shell-delta-args))
+    (unless (seq-intersection '("--syntax-theme" "--light" "--dark") args)
+      (setq args (nconc
+                  (list "--syntax-theme"
+                        (if (eq (frame-parameter nil 'background-mode) 'dark)
+                            agent-shell-default-dark-theme
+                              agent-shell-default-light-theme))
+                       args)))
+    (unless (member "--color-only" args)
+      (setq args (cons "--color-only" args)))
+    (setq args (nconc
+                `("--plus-style"
+                  ,(format "syntax \"%s\""
+                           (face-attribute 'diff-added :background))
+                  "--plus-emph-style"
+                  ,(format "syntax \"%s\""
+                           (face-attribute 'diff-refine-added :background))
+                  "--minus-emph-style"
+                  ,(format "syntax \"%s\""
+                           (face-attribute 'diff-refine-removed :background))
+                  "--minus-style"
+                  ,(format "normal \"%s\""
+                           (face-attribute 'diff-removed :background)))
+                args))
+    args))
+
+(defun agent-shell-call-delta-and-convert-ansi-escape-sequences ()
+  "Call delta on buffer contents and convert ANSI escape sequences to overlays.
+
+The input buffer contents are expected to be raw git output."
+  (unless (and agent-shell-max-size (> (point-max) agent-shell-max-size))
+    (apply #'call-process-region
+           (point-min) (point-max)
+           agent-shell-delta-executable t t nil (agent-shell--make-delta-args))
+    (let ((buffer-read-only nil))
+      (xterm-color-colorize-buffer 'use-overlays))))
+
+(cl-defun agent-shell-diff (&key old new on-exit title bindings file)
   "Display a diff between OLD and NEW strings in a buffer.
 
 Creates a new buffer showing the differences between OLD and NEW
@@ -68,7 +147,8 @@ Arguments:
             (let ((inhibit-read-only t))
               (erase-buffer)
               (insert "\n")
-              (insert (agent-shell-diff--make-diff old new))
+              (insert (agent-shell-diff--make-diff old new file))
+              (agent-shell-call-delta-and-convert-ansi-escape-sequences)
               ;; Add overlays to hide scary text.
               (save-excursion
                 (goto-char (point-min))
@@ -146,11 +226,12 @@ Arguments:
       (pop-to-buffer diff-buffer '((display-buffer-use-some-window
                                     display-buffer-same-window))))))
 
-(defun agent-shell-diff--make-diff (old new)
+(defun agent-shell-diff--make-diff (old new file)
   "Create a unified diff between OLD and NEW strings.
 Returns the diff output as a string."
-  (let ((old-file (make-temp-file "old"))
-        (new-file (make-temp-file "new")))
+  (let* ((suffix (format ".%s" (file-name-extension file)))
+         (old-file (make-temp-file "old" nil suffix))
+         (new-file (make-temp-file "new" nil suffix)))
     (with-temp-file old-file (insert old))
     (with-temp-file new-file (insert new))
     (with-temp-buffer

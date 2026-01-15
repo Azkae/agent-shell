@@ -3258,6 +3258,7 @@ ACTIONS as per `agent-shell--make-permission-action'."
       (agent-shell-diff
        :old (map-elt diff :old)
        :new (map-elt diff :new)
+       :file (map-elt diff :file)
        :title (file-name-nondirectory (map-elt diff :file))
        :bindings (list (list :key "n"
                              :description "next hunk"
