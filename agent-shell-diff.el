@@ -109,7 +109,6 @@ Arguments:
                   (diff-mode-read-only nil))
               (erase-buffer)
               (agent-shell-diff--insert-diff old new file diff-buffer)
-              (agent-shell-diff-mode) ;; Must happen after inserting diff
               ;; Add overlays to hide scary text.
               (save-excursion
                 (goto-char (point-min))
@@ -197,10 +196,23 @@ Arguments:
   "Insert diff from FILE between OLD and NEW strings in buffer BUF."
   (let* ((suffix (format ".%s" (file-name-extension file)))
          (old-file (make-temp-file "old" nil suffix))
-         (new-file (make-temp-file "new" nil suffix)))
+         (new-file (make-temp-file "new" nil suffix))
+         (overlays))
     (with-temp-file old-file (insert old))
     (with-temp-file new-file (insert new))
-    (diff-no-select old-file new-file "-U3" t buf)))
+    (diff-no-select old-file new-file "-U3" t buf)
+    ;; Preserve overlays before mode switch
+    (font-lock-ensure)
+    (setq overlays (mapcar (lambda (ov)
+                                   (list (overlay-start ov)
+                                         (overlay-end ov)
+                                         (overlay-properties ov)))
+                                 (overlays-in (point-min) (point-max))))
+    (agent-shell-diff-mode)
+    (dolist (ov-data overlays)
+      (let ((ov (make-overlay (nth 0 ov-data) (nth 1 ov-data))))
+        (cl-loop for (prop val) on (nth 2 ov-data) by #'cddr
+                 do (overlay-put ov prop val))))))
 
 (provide 'agent-shell-diff)
 
