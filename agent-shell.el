@@ -2503,7 +2503,8 @@ No-op with no members yet."
             :state state
             :on-finished (lambda ()
                            (shell-maker-finish-output :config shell-maker--config
-                                                      :success t))))
+                                                      :success t)
+                           (agent-shell--process-pending-request))))
           (acp-logging-enabled
            (agent-shell--update-fragment
             :state state
