@@ -1996,6 +1996,8 @@ Flow:
                                  (agent-shell--create-bootstrapping-placeholders (agent-shell--state))
                                  (shell-maker-finish-output :config shell-maker--config
                                                             :success nil)
+                                 ;; Ensure point always starts at prompt upon init.
+                                 (goto-char (point-max))
                                  (agent-shell--emit-event :event 'prompt-ready))
                                (agent-shell--handle :command command :shell-buffer shell-buffer))))
           ;; Send ACP request to set default model (optional)
@@ -4421,7 +4423,9 @@ with GROUP-EXPANDED as the group's initial fold state."
     (let* ((buffer-undo-list t)
            (window (get-buffer-window (current-buffer)))
            (auto-scroll (eobp))
-           (saved-point (point))
+           ;; Use a marker to ensure point restoration
+           ;; lands point after the inserted text.
+           (saved-point (copy-marker (point)))
            (saved-mark (mark t))
            (saved-mark-active mark-active)
            (saved-window-start (and window (window-start window)))
@@ -4525,7 +4529,8 @@ with GROUP-EXPANDED as the group's initial fold state."
           (set-marker (mark-marker) saved-mark))
         (setq mark-active saved-mark-active)
         (when window
-          (set-window-start window saved-window-start t))))))
+          (set-window-start window saved-window-start t)))
+      (set-marker saved-point nil))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
   "Update plain text entry in the shell buffer.
