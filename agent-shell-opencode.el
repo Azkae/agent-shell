@@ -131,6 +131,7 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
    :default-session-mode-id (lambda () agent-shell-opencode-default-session-mode-id)
    :install-instructions "See https://opencode.ai/docs for installation."))
 
+;;;###autoload
 (defun agent-shell-opencode-start-agent ()
   "Start an interactive OpenCode agent shell."
   (interactive)

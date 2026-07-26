@@ -90,6 +90,7 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
    :default-session-mode-id (lambda () agent-shell-kiro-default-session-mode-id)
    :install-instructions "See https://kiro.dev/docs/cli/acp/ for installation."))
 
+;;;###autoload
 (defun agent-shell-kiro-start-agent ()
   "Start an interactive Kiro agent shell."
   (interactive)

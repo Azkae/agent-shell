@@ -90,6 +90,7 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
    :default-session-mode-id (lambda () agent-shell-kimi-default-session-mode-id)
    :install-instructions "See https://www.kimi.com/code for installation."))
 
+;;;###autoload
 (defun agent-shell-kimi-start-agent ()
   "Start an interactive Kimi Code agent shell."
   (interactive)
