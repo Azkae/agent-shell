@@ -71,6 +71,8 @@ in progress), the request is immediately rejected with an error."
                 (cons request (map-elt state :active-requests))))
     ;; Remove trailing empty shell prompt before push notifications render.
     (agent-shell-experimental--remove-trailing-prompt)
+    ;; Mark busy so requests are queued rather than sent mid-push.
+    ;; Cleared on session_push_end via `shell-maker-finish-output'.
     (setq shell-maker--busy t)
     (when agent-shell-show-busy-indicator
       (agent-shell-heartbeat-start
