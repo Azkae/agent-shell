@@ -145,9 +145,14 @@
 _not italic_
 ```
 after **b2**"))
+                 ;; The block is framed by a blank line on each side (it
+                 ;; butts against "before **b**" above and "after **b2**"
+                 ;; below); those untinted `\\n's merge into the plain
+                 ;; runs bracketing the block.
                  '(("before " nil)
                    ("b" (agent-shell-markdown-bold))
                    ("
+
 " nil)
                    ("
 " (agent-shell-markdown-source-block))
@@ -158,7 +163,8 @@ after **b2**"))
 _not italic_
 
 " (agent-shell-markdown-source-block))
-                   ("after " nil)
+                   ("
+after " nil)
                    ("b2" (agent-shell-markdown-bold))))))
 
 (ert-deftest agent-shell-markdown-convert-open-fence-protects-rest ()
@@ -355,9 +361,12 @@ streaming **not bold**" nil)))))
 [b](v)
 ```
 after [c](w)"))
+                 ;; Panel framed by a blank line on each side (see
+                 ;; `agent-shell-markdown--pad-source-blocks').
                  '(("before " nil)
                    ("a" (agent-shell-markdown-link))
                    ("
+
 " nil)
                    ("
 " (agent-shell-markdown-source-block))
@@ -367,7 +376,8 @@ after [c](w)"))
 [b](v)
 
 " (agent-shell-markdown-source-block))
-                   ("after " nil)
+                   ("
+after " nil)
                    ("c" (agent-shell-markdown-link))))))
 
 (ert-deftest agent-shell-markdown-convert-source-block-no-language ()
@@ -559,6 +569,110 @@ raise SystemExit
                      ("
 " nil)
                      ("real bold" (agent-shell-markdown-bold)))))))
+
+(ert-deftest agent-shell-markdown-source-block-framed-when-flush-against-prose ()
+  ;; A source block that butts directly against surrounding prose (the
+  ;; agent emitted no blank line) gains one blank line on each side so it
+  ;; doesn't read as cramped.  A well-formed input that already had the
+  ;; blank lines renders identically (the gap is normalised, not
+  ;; doubled).  See `agent-shell-markdown--pad-source-blocks'.
+  (let ((framed "intro
+
+
+snippet ⧉
+
+x
+
+
+outro"))
+    (should (equal (substring-no-properties
+                    (agent-shell-markdown-convert "intro\n```\nx\n```\noutro"))
+                   framed))
+    (should (equal (substring-no-properties
+                    (agent-shell-markdown-convert "intro\n\n```\nx\n```\n\noutro"))
+                   framed))))
+
+(ert-deftest agent-shell-markdown-source-block-top-framing-gap-is-untinted ()
+  ;; Regression: the top framing blank line is inserted on the block's
+  ;; tinted first line, so it must not inherit that line's box chrome
+  ;; (`face' / `font-lock-face', the `line-prefix' / `wrap-prefix' gutter
+  ;; and the rendered tag), else it renders tinted and visually extends
+  ;; the box upward instead of separating the block from the text above.
+  (with-temp-buffer
+    (insert "intro\n```\nx\n```\noutro")
+    (agent-shell-markdown-replace-markup)
+    ;; The gap is the blank line right after "intro\n", before the
+    ;; block's tinted top line.
+    (goto-char (point-min))
+    (forward-line 1)
+    (should (eq (char-after) ?\n))
+    (should (null (get-text-property (point) 'face)))
+    (should (null (get-text-property (point) 'font-lock-face)))
+    (should (null (get-text-property (point) 'line-prefix)))
+    (should (null (get-text-property (point) 'wrap-prefix)))
+    (should (null (get-text-property
+                   (point) 'agent-shell-markdown-source-block-rendered)))
+    ;; The block's own tinted top line follows and does carry the face.
+    (should (eq (get-text-property (1+ (point)) 'face)
+                'agent-shell-markdown-source-block))))
+
+(ert-deftest agent-shell-markdown-source-block-not-framed-when-alone ()
+  ;; A source block that owns the whole buffer has no neighbouring prose,
+  ;; so no framing blank line is added at the buffer edges.
+  (should (equal (substring-no-properties
+                  (agent-shell-markdown-convert "```\nx\n```"))
+                 "
+snippet ⧉
+
+x
+
+")))
+
+(ert-deftest agent-shell-markdown-source-block-below-gap-deferred-until-successor ()
+  ;; While a source block is the last content there is nothing below to
+  ;; separate from, so no framing blank line is appended.  Once
+  ;; non-blank text streams in after it, the gap appears; and
+  ;; re-rendering does not stack a second one.
+  (with-temp-buffer
+    (insert "intro\n```\nx\n```\n")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (substring-no-properties (buffer-string))
+                   "intro
+
+
+snippet ⧉
+
+x
+
+"))
+    (goto-char (point-max))
+    (insert "outro")
+    (agent-shell-markdown-replace-markup)
+    (let ((framed "intro
+
+
+snippet ⧉
+
+x
+
+
+outro"))
+      (should (equal (substring-no-properties (buffer-string)) framed))
+      ;; Idempotent: a redundant re-render leaves the framing intact.
+      (agent-shell-markdown-replace-markup)
+      (should (equal (substring-no-properties (buffer-string)) framed)))))
+
+(ert-deftest agent-shell-markdown-source-block-framing-gap-reconstructs-as-blank-line ()
+  ;; The inserted framing `\\n' carries `agent-shell-markdown-source'
+  ;; `\"\\n\"', so `agent-shell-copy-as-markdown' recovers it as the
+  ;; standard blank line separating block-level elements.  A cramped
+  ;; input therefore round-trips to well-formed markdown (the blank
+  ;; lines materialise), and a well-formed input round-trips unchanged.
+  (let ((wellformed "a\n\n```\nx\n```\n\nb"))
+    (should (equal (agent-shell-markdown-tests--roundtrip "a\n```\nx\n```\nb")
+                   wellformed))
+    (should (equal (agent-shell-markdown-tests--roundtrip wellformed)
+                   wellformed))))
 
 (ert-deftest agent-shell-markdown-inline-code-body-protected-across-calls ()
   ;; Streaming counterpart for inline code: after the backticks
@@ -1839,12 +1953,16 @@ $$E = mc^2$$
       ;; Every math form rendered with its LaTeX in brackets; the $$ inside
       ;; the python block stayed literal (its language kept it out of
       ;; reach), and the \(z\) inside the inline `code` span stayed literal
-      ;; too (`:inline-code-ranges' kept it out of reach).
+      ;; too (`:inline-code-ranges' kept it out of reach).  The blank line
+      ;; between the python block and "inline [a+b] here" is the framing
+      ;; gap `--pad-source-blocks' adds below a block that butts
+      ;; against following prose.
       (should (equal (buffer-substring-no-properties (point-min) (point-max))
                      "
 python ⧉
 
 q = \"$$not math$$\"
+
 
 inline [a+b] here
 verbatim \\(z\\) code
