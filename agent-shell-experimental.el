@@ -41,6 +41,7 @@
 (declare-function agent-shell-heartbeat-stop "agent-shell-heartbeat")
 
 (defvar agent-shell-show-busy-indicator)
+(defvar shell-maker--busy)
 
 (cl-defun agent-shell-experimental--on-session-push-request (&key state acp-request)
   "Handle an incoming session/push ACP-REQUEST with STATE.
@@ -70,6 +71,7 @@ in progress), the request is immediately rejected with an error."
                 (cons request (map-elt state :active-requests))))
     ;; Remove trailing empty shell prompt before push notifications render.
     (agent-shell-experimental--remove-trailing-prompt)
+    (setq shell-maker--busy t)
     (when agent-shell-show-busy-indicator
       (agent-shell-heartbeat-start
        :heartbeat (map-elt state :heartbeat)))
