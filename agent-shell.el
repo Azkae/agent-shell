@@ -3402,7 +3402,15 @@ rawInput variants to that shape."
         (list `((oldText . ,(car parsed))
                 (newText . ,(cdr parsed))
                 (path . ,(or (map-elt raw-input 'fileName)
-                             (map-elt raw-input 'path))))))))))
+                             (map-elt raw-input 'path)))))))
+     ;; Attempt to diff from rawInput (goose)
+     ((and raw-input (map-elt raw-input 'before))
+      (let ((old-text (or (map-elt raw-input 'before) ""))
+            (new-text (map-elt raw-input 'after))
+            (path (map-elt raw-input 'path)))
+        (list `((oldText . ,old-text)
+                (newText . ,new-text)
+                (path . ,path))))))))
 
 (cl-defun agent-shell--make-diff-info (&key acp-diff-item locations)
   "Convert a single ACP-DIFF-ITEM to a diff info alist.
