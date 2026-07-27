@@ -1178,7 +1178,14 @@ the window.  An empty draft signals an error."
                                                (newText . "b")
                                                (path . "foo.el")))
                                    (locations . [((path . "other.el") (line . 42))])))
-                 '(((:old . "a") (:new . "b") (:file . "foo.el"))))))
+                 '(((:old . "a") (:new . "b") (:file . "foo.el")))))
+
+  ;; Test a diff from goose's before/after rawInput (issue #569)
+  (should (equal (agent-shell--make-diff-infos
+                  :acp-tool-call '((rawInput . ((path . "/tmp/test.txt")
+                                                (before . "")
+                                                (after . "Test")))))
+                 '(((:old . "") (:new . "Test") (:file . "/tmp/test.txt"))))))
 
 (ert-deftest agent-shell--diffs-line-stats-test ()
   "Test `agent-shell--diffs-line-stats' aggregates across diffs."

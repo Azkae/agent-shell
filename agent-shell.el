@@ -3370,7 +3370,8 @@ oldText/newText/path fields:
   https://agentclientprotocol.com/protocol/schema#toolcallcontent
 
 or, for some agents, in rawInput (eg.  Copilot sends old_str/new_str/path;
-see https://github.com/xenodium/agent-shell/issues/217).
+see https://github.com/xenodium/agent-shell/issues/217, while goose sends
+before/after/path; see https://github.com/xenodium/agent-shell/issues/569).
 
 Returns a list of alists with oldText/newText/path keys, normalizing
 rawInput variants to that shape."
@@ -3403,14 +3404,11 @@ rawInput variants to that shape."
                 (newText . ,(cdr parsed))
                 (path . ,(or (map-elt raw-input 'fileName)
                              (map-elt raw-input 'path)))))))
-     ;; Attempt to diff from rawInput (goose)
+     ;; Attempt diff from rawInput (eg. goose).
      ((and raw-input (map-elt raw-input 'before))
-      (let ((old-text (or (map-elt raw-input 'before) ""))
-            (new-text (map-elt raw-input 'after))
-            (path (map-elt raw-input 'path)))
-        (list `((oldText . ,old-text)
-                (newText . ,new-text)
-                (path . ,path))))))))
+      (list `((oldText . ,(or (map-elt raw-input 'before) ""))
+              (newText . ,(map-elt raw-input 'after))
+              (path . ,(map-elt raw-input 'path))))))))
 
 (cl-defun agent-shell--make-diff-info (&key acp-diff-item locations)
   "Convert a single ACP-DIFF-ITEM to a diff info alist.
