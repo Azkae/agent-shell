@@ -4,10 +4,10 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/agent-shell
-;; Version: 0.63.6
-;; Package-Requires: ((emacs "29.1") (shell-maker "0.93.5") (acp "0.13.1"))
+;; Version: 0.64.1
+;; Package-Requires: ((emacs "29.1") (shell-maker "0.94.1") (acp "0.13.1"))
 
-(defconst agent-shell--version "0.63.6")
+(defconst agent-shell--version "0.64.1")
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -1114,24 +1114,41 @@ With \\[universal-argument] \\[universal-argument] prefix ARG, prompt to pick an
    (t
     (agent-shell--dwim))))
 
-(defun agent-shell--display-and-insert-context (shell-buffer text)
-  "Display SHELL-BUFFER and insert TEXT into it.
+(defun agent-shell-submit ()
+  "Submit the current input to the agent.
 
-When SHELL-BUFFER uses the `prompt' session strategy and has no session id
-yet, defer displaying and inserting until the `session-selected' event;
-otherwise do so immediately.  TEXT may be nil, in which case nothing is
-inserted."
+The prompt is shown early (before the ACP session is ready) so users
+can type while the agent initializes.  Gate the actual send on the
+session being ready: when it is not, error with `Busy, please wait'
+before the input is committed, so the typed text stays editable
+instead of being echoed into the transcript and rejected later.
+
+This owns the `agent-shell-submit' name because shell-maker's
+per-start aliasing is disabled (see the `:alias-commands nil' call in
+`agent-shell--start')."
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in an agent shell"))
+  (unless (or (map-nested-elt agent-shell--state '(:session :id))
+              (eq agent-shell-session-strategy 'new-deferred))
+    (user-error "Busy, please wait"))
+  (shell-maker-submit))
+
+(defun agent-shell--display-and-insert-context (shell-buffer text)
+  "Display SHELL-BUFFER and insert TEXT into it."
   (if (and (eq (buffer-local-value 'agent-shell-session-strategy shell-buffer) 'prompt)
            (not (map-nested-elt (buffer-local-value 'agent-shell--state shell-buffer)
                                 '(:session :id))))
-      (agent-shell-subscribe-to
-       :shell-buffer shell-buffer
-       :event 'session-selected
-       :on-event (lambda (_event)
-                   (agent-shell--display-buffer shell-buffer)
-                   (when text
-                     (agent-shell--insert-to-shell-buffer :text text
-                                                          :shell-buffer shell-buffer))))
+      (progn
+        (when text
+          (agent-shell--insert-to-shell-buffer :text text
+                                               :shell-buffer shell-buffer
+                                               :no-focus t))
+        (agent-shell-subscribe-to
+         :shell-buffer shell-buffer
+         :event 'session-selected
+         :on-event (lambda (_event)
+                     (agent-shell--display-buffer shell-buffer))))
     (agent-shell--display-buffer shell-buffer)
     (when text
       (agent-shell--insert-to-shell-buffer :text text
@@ -1908,7 +1925,8 @@ copy depending on selection direction."
   "C-c C-t" #'agent-shell-set-session-thought-level
   "C-c C-o" #'agent-shell-other-buffer
   "C-c C-s" #'agent-shell-set-session-config-option
-  "<remap> <yank>" #'agent-shell-yank-dwim)
+  "<remap> <yank>" #'agent-shell-yank-dwim
+  "<remap> <comint-send-input>" #'agent-shell-submit)
 
 (shell-maker-define-major-mode (agent-shell--make-shell-maker-config) agent-shell-mode-map)
 
@@ -1994,10 +2012,15 @@ Flow:
                                  ;; that late-arriving notifications/responses update
                                  ;; them in place instead of inserting past the prompt.
                                  (agent-shell--create-bootstrapping-placeholders (agent-shell--state))
-                                 (shell-maker-finish-output :config shell-maker--config
-                                                            :success nil)
-                                 ;; Ensure point always starts at prompt upon init.
-                                 (goto-char (point-max))
+                                 ;; The prompt is normally shown early (at shell
+                                 ;; creation) to enable typing ASAP.
+                                 ;;
+                                 ;; If there's no prompt already, add one now
+                                 ;; that initialization is complete.
+                                 (unless comint-last-prompt
+                                   (shell-maker-finish-output :config shell-maker--config
+                                                              :success nil)
+                                   (goto-char (point-max)))
                                  (agent-shell--emit-event :event 'prompt-ready))
                                (agent-shell--handle :command command :shell-buffer shell-buffer))))
           ;; Send ACP request to set default model (optional)
@@ -2886,9 +2909,8 @@ No-op while that function has nothing to summarize (an empty group)."
                (map-put! state :last-entry-type "tool_call_update"))))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "available_commands_update")
            (map-put! state :available-commands (map-nested-elt acp-notification '(params update availableCommands)))
-           (agent-shell--update-fragment
+           (agent-shell--update-bootstrapping-fragment
             :state state
-            :namespace-id "bootstrapping"
             :block-id "available_commands_update"
             :label-left (propertize "Available /commands" 'font-lock-face 'agent-shell-section-heading)
             :body (agent-shell--format-available-commands (map-nested-elt acp-notification '(params update availableCommands))))
@@ -4103,12 +4125,17 @@ variable (see makunbound)"))
           ;;
           ;; Fire it below once state is fully initialised.
           (let ((agent-shell-mode-hook nil))
-            (shell-maker-start agent-shell--shell-maker-config
-                               t  ;; Always use no-focus, handle display below
-                               nil ;; Defer showing welcome text
-                               new-session
-                               (agent-shell--format-buffer-name (map-elt config :buffer-name) (agent-shell--project-name))
-                               (map-elt config :mode-line-name)))))
+            (shell-maker-start-v2
+             :config agent-shell--shell-maker-config
+             :no-focus t  ;; Always use no-focus, handle display below
+             :welcome-function nil ;; Defer showing welcome text
+             :new-session new-session
+             :buffer-name (agent-shell--format-buffer-name (map-elt config :buffer-name) (agent-shell--project-name))
+             :mode-line-name (map-elt config :mode-line-name)
+             ;; Skip shell-maker's per-start command aliasing so it does not
+             ;; alias `agent-shell-submit' internally.  We alias
+             ;; agent-shell.el defines its own `agent-shell-submit'.
+             :alias-commands nil))))
     ;; While sending the first prompt request would already validate
     ;; finding the ACP agent executable, users have to wait until they
     ;; type a prompt and send it, only to find out that they are missing
@@ -4174,16 +4201,22 @@ variable (see makunbound)"))
         (agent-shell-completion-mode +1))
       (agent-shell--setup-modeline)
       (setq-local agent-shell--transcript-file (agent-shell--transcript-file-path))
-      ;; agent-shell does not support restoring sessions from transcript
-      ;; via shell-maker. Unalias this functionality so it's not
-      ;; misleading to users or appear via M-x.
-      (fmakunbound 'agent-shell-restore-session-from-transcript)
-      (when agent-shell--transcript-file
-        ;; Prefer agent-shell--transcript-file over shell-maker's
-        ;; transcript capabilities. Unalias to hide this in favor
-        ;; of agent-shell's agent-shell--transcript-file usage.
-        (fmakunbound 'agent-shell-save-session-transcript)
-        (setq-local shell-maker-prompt-before-killing-buffer nil))
+      ;; We disabled aliasing comint/shell-maker commands
+      ;; See `shell-maker-start-v2' above with :alias-commands nil
+      ;; Manually alias as needed.
+      (defalias 'agent-shell-clear-buffer #'shell-maker-clear-buffer)
+      (defalias 'agent-shell-previous-input #'comint-previous-input)
+      (defalias 'agent-shell-next-input #'comint-next-input)
+      (defalias 'agent-shell-search-history #'shell-maker-search-history)
+      (defalias 'agent-shell-newline #'newline)
+      (defalias 'agent-shell-rename-buffer #'shell-maker-rename-buffer)
+      (defalias 'agent-shell-delete-interaction-at-point #'shell-maker-delete-interaction-at-point)
+      (if agent-shell--transcript-file
+          ;; Prefer agent-shell--transcript-file over shell-maker's own
+          ;; transcript capability, so don't prompt to save on kill.
+          (setq-local shell-maker-prompt-before-killing-buffer nil)
+        ;; Fall back to shell-maker's transcript.
+        (defalias 'agent-shell-save-session-transcript #'shell-maker-save-session-transcript))
       (when session-id
         (map-put! agent-shell--state :resume-session-id session-id))
       (when fork-session-id
@@ -4213,12 +4246,15 @@ variable (see makunbound)"))
       ;; the `session-strategy' check in `agent-shell--start-acp-session',
       ;; the `prompt'/`new'/`latest' subscriptions below, and
       ;; `agent-shell--insert-to-shell-buffer'.
-      (if (eq agent-shell-session-strategy 'new-deferred)
-          ;; Show prompt now (unbootstrapped).
-          (shell-maker-finish-output
-           :config shell-maker--config
-           :success nil)
-        ;; Kick off ACP session bootstrapping.
+      ;; Show the prompt immediately, before bootstrapping, so shell
+      ;; always has a prompt to type into regardless of strategy.
+      (shell-maker-finish-output :config shell-maker--config :success nil)
+      ;; Land point on the freshly shown prompt (see #668).  Later context
+      ;; insertion / user edits move it from here; bootstrapping does not.
+      (goto-char (point-max))
+      ;; Kick off ACP session bootstrapping.  `new-deferred' (deprecated)
+      ;; defers this until the first prompt is sent.
+      (unless (eq agent-shell-session-strategy 'new-deferred)
         (agent-shell--handle :shell-buffer shell-buffer))
       ;; State should be available after kicking off
       ;; `agent-shell--handle'.  Fire mode hook so initial
@@ -4318,6 +4354,18 @@ prompt).  Output carries a `field' of `output'; typed input does not."
   (let ((end (marker-position (cdr prompt))))
     (or (= end (point-max))
         (not (text-property-any end (point-max) 'field 'output)))))
+
+(cl-defun agent-shell--update-bootstrapping-fragment (&rest args)
+  "Update a `bootstrapping'-namespace fragment above the shell prompt.
+
+Forwards ARGS to `agent-shell--update-fragment', pinning the fragment
+to the `bootstrapping' namespace and landing it above the live prompt.
+Keeps session-initialization status above the prompt so it does not
+disturb any type-ahead the user entered while the shell bootstraps."
+  (apply #'agent-shell--update-fragment
+         :namespace-id "bootstrapping"
+         :above-last-prompt t
+         args))
 
 (cl-defun agent-shell--update-fragment (&key state namespace-id block-id label-left label-right
                                              body append create-new navigation expanded
@@ -5566,9 +5614,8 @@ the original EVENT as :idle-event."
 
 (cl-defun agent-shell--initialize-client ()
   "Initialize ACP client."
-  (agent-shell--update-fragment
+  (agent-shell--update-bootstrapping-fragment
    :state (agent-shell--state)
-   :namespace-id "bootstrapping"
    :block-id "starting"
    :label-left (format "%s %s"
                        (agent-shell--make-status-kind-label :status "in_progress")
@@ -5590,9 +5637,8 @@ the original EVENT as :idle-event."
 
 (cl-defun agent-shell--initialize-subscriptions ()
   "Initialize ACP client subscriptions."
-  (agent-shell--update-fragment
+  (agent-shell--update-bootstrapping-fragment
    :state agent-shell--state
-   :namespace-id "bootstrapping"
    :block-id "starting"
    :label-left (format "%s %s"
                        (agent-shell--make-status-kind-label :status "in_progress")
@@ -5651,9 +5697,8 @@ Must provide ON-INITIATED (lambda ())."
   (unless on-initiated
     (error "Missing required argument: :on-initiated"))
   (with-current-buffer (map-elt agent-shell--state :buffer)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state agent-shell--state
-     :namespace-id "bootstrapping"
      :block-id "starting"
      :body "\n\nInitializing..."
      :append t))
@@ -5701,9 +5746,8 @@ Must provide ON-INITIATED (lambda ())."
                    (when-let* ((agent-capabilities (map-elt acp-response 'agentCapabilities)))
                      (map-put! agent-shell--state :supports-session-load
                                (eq (map-elt agent-capabilities 'loadSession) t))
-                     (agent-shell--update-fragment
+                     (agent-shell--update-bootstrapping-fragment
                       :state agent-shell--state
-                      :namespace-id "bootstrapping"
                       :block-id "agent_capabilities"
                       :label-left (propertize "Agent capabilities" 'font-lock-face 'agent-shell-section-heading)
                       :body (agent-shell--format-agent-capabilities agent-capabilities)))
@@ -5717,9 +5761,8 @@ Must provide ON-INITIATED (lambda ())."
 
 Must provide ON-AUTHENTICATED (lambda ())."
   (with-current-buffer (map-elt agent-shell--state :buffer)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state (agent-shell--state)
-     :namespace-id "bootstrapping"
      :block-id "starting"
      :body "\n\nAuthenticating..."
      :append t))
@@ -5863,18 +5906,16 @@ Call ON-SUCCESS on success, or ON-FAILURE on error."
 Call ON-MODEL-CHANGED on success."
   (when (map-nested-elt (agent-shell--state) '(:session :id))
     (with-current-buffer (map-elt agent-shell--state :buffer)
-      (agent-shell--update-fragment
+      (agent-shell--update-bootstrapping-fragment
        :state (agent-shell--state)
-       :namespace-id "bootstrapping"
        :block-id "set-model"
        :label-left (propertize "Setting model" 'font-lock-face 'agent-shell-section-heading)
        :body (format "Requesting %s..." model-id)))
     (agent-shell--config-option-set-model-id
      :model-id model-id
      :on-success (lambda ()
-                   (agent-shell--update-fragment
+                   (agent-shell--update-bootstrapping-fragment
                     :state (agent-shell--state)
-                    :namespace-id "bootstrapping"
                     :block-id "set-model"
                     :body "\n\nDone"
                     :append t)
@@ -5889,18 +5930,16 @@ Call ON-MODEL-CHANGED on success."
 Call ON-MODE-CHANGED on success."
   (when (map-nested-elt (agent-shell--state) '(:session :id))
     (with-current-buffer (map-elt agent-shell--state :buffer)
-      (agent-shell--update-fragment
+      (agent-shell--update-bootstrapping-fragment
        :state (agent-shell--state)
-       :namespace-id "bootstrapping"
        :block-id "set-session-mode"
        :label-left (propertize "Setting session mode" 'font-lock-face 'agent-shell-section-heading)
        :body (format "Requesting %s..." mode-id)))
     (agent-shell--config-option-set-mode-id
      :mode-id mode-id
      :on-success (lambda ()
-                   (agent-shell--update-fragment
+                   (agent-shell--update-bootstrapping-fragment
                     :state (agent-shell--state)
-                    :namespace-id "bootstrapping"
                     :block-id "set-session-mode"
                     :body "\n\nDone"
                     :append t)
@@ -5917,9 +5956,8 @@ Must provide ON-SESSION-INIT (lambda ())."
   (unless on-session-init
     (error "Missing required argument: :on-session-init"))
   (with-current-buffer (map-elt (agent-shell--state) :buffer)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state (agent-shell--state)
-     :namespace-id "bootstrapping"
      :block-id "starting"
      :body "\n\nCreating session..."
      :append t))
@@ -6211,18 +6249,16 @@ rather than inserting new ones at point-max.
 Idempotent: re-calling with the same STATE either skips or
 overwrites an existing fragment with equivalent content."
   (when (seq-empty-p (map-elt state :available-commands))
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state state
-     :namespace-id "bootstrapping"
      :block-id "available_commands_update"
      :label-left (propertize "Available /commands"
                              'font-lock-face 'agent-shell-section-heading)))
   (when-let* ((id-fn (map-nested-elt state '(:agent-config :default-model-id)))
               (model-id (funcall id-fn))
               ((not (map-elt state :set-model))))
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state state
-     :namespace-id "bootstrapping"
      :block-id "set-model"
      :label-left (propertize "Setting model"
                              'font-lock-face 'agent-shell-section-heading)
@@ -6230,9 +6266,8 @@ overwrites an existing fragment with equivalent content."
   (when-let* ((id-fn (map-nested-elt state '(:agent-config :default-session-mode-id)))
               (mode-id (funcall id-fn))
               ((not (map-elt state :set-session-mode))))
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state state
-     :namespace-id "bootstrapping"
      :block-id "set-session-mode"
      :label-left (propertize "Setting session mode"
                              'font-lock-face 'agent-shell-section-heading)
@@ -6241,25 +6276,22 @@ overwrites an existing fragment with equivalent content."
 (defun agent-shell--display-session-options ()
   "Display available session options during bootstrapping."
   (when (agent-shell--config-options agent-shell--state)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state agent-shell--state
-     :namespace-id "bootstrapping"
      :block-id "available_config_options"
      :label-left (propertize "Available config options" 'font-lock-face 'agent-shell-section-heading)
      :body (agent-shell--format-available-config-options
             (agent-shell--config-options agent-shell--state))))
   (when (agent-shell--get-available-models agent-shell--state)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state agent-shell--state
-     :namespace-id "bootstrapping"
      :block-id "available_models"
      :label-left (propertize "Available models" 'font-lock-face 'agent-shell-section-heading)
      :body (agent-shell--format-available-models
             (agent-shell--get-available-models agent-shell--state))))
   (when (agent-shell--get-available-modes agent-shell--state)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state agent-shell--state
-     :namespace-id "bootstrapping"
      :block-id "available_modes"
      :label-left (propertize "Available modes" 'font-lock-face 'agent-shell-section-heading)
      :body (agent-shell--format-available-modes
@@ -6267,14 +6299,13 @@ overwrites an existing fragment with equivalent content."
 
 (cl-defun agent-shell--finalize-session-init (&key on-session-init)
   "Finalize session initialization and invoke ON-SESSION-INIT."
-  (agent-shell--update-fragment
+  (agent-shell--update-bootstrapping-fragment
    :state agent-shell--state
    :block-id "starting"
    :label-left (format "%s %s"
                        (agent-shell--make-status-kind-label :status "completed")
                        (propertize "Starting agent" 'font-lock-face 'agent-shell-section-heading))
    :body "\n\nReady"
-   :namespace-id "bootstrapping"
    :append t)
   (agent-shell--update-header-and-mode-line)
   (agent-shell--display-session-options)
@@ -6300,14 +6331,13 @@ overwrites an existing fragment with equivalent content."
                  (agent-shell--save-config-options
                   :state agent-shell--state
                   :acp-config-options (map-elt acp-response 'configOptions))
-                 (agent-shell--update-fragment
+                 (agent-shell--update-bootstrapping-fragment
                   :state agent-shell--state
                   :block-id "starting"
                   :label-left (format "%s %s"
                                       (agent-shell--make-status-kind-label :status "completed")
                                       (propertize "Starting agent" 'font-lock-face 'agent-shell-section-heading))
                   :body "\n\nReady"
-                  :namespace-id "bootstrapping"
                   :append t)
                  (agent-shell--update-header-and-mode-line)
                  (agent-shell--display-session-options)
@@ -6462,44 +6492,51 @@ pending-restore state once replay completes."
       (map-put! state :active-requests
                 (cons (list (cons :method "session/load")) saved-active-requests))
       (unwind-protect
-          (pcase (agent-shell--effective-restore-verbosity state)
-            ('last
-             (when (> count 1)
-               (agent-shell--update-fragment
-                :state state
-                :namespace-id "bootstrapping"
-                :block-id "restore_truncated_history"
-                :body (agent-shell--make-boxed-message
-                       :text "Note: truncated history (last only)")))
-             (agent-shell--replay-turn state (car (last prompt-turns))))
-            ('first-last
-             (agent-shell--replay-turn state (car prompt-turns))
-             (when (> count 2)
-               (agent-shell--update-fragment
-                :state state
-                :namespace-id "bootstrapping"
-                :block-id "restore_truncated_history"
-                :body (agent-shell--make-boxed-message
-                       :text "Note: truncated history (first and last only)")))
-             (when (> count 1)
-               (agent-shell--replay-turn state (car (last prompt-turns))))))
+          (let ((prompt-start (and comint-last-prompt
+                                   (marker-position (car comint-last-prompt))
+                                   (agent-shell--live-input-prompt-p comint-last-prompt)
+                                   (car comint-last-prompt))))
+            (when prompt-start
+              (set-marker-insertion-type prompt-start t))
+            (save-restriction
+              (when prompt-start
+                ;; Narrowing to exclude early prompt so all replayed
+                ;; history is rendered above/before the live prompt.
+                (narrow-to-region (point-min) (marker-position prompt-start)))
+              (pcase (agent-shell--effective-restore-verbosity state)
+                ('last
+                 (when (> count 1)
+                   (agent-shell--update-bootstrapping-fragment
+                    :state state
+                    :block-id "restore_truncated_history"
+                    :body (agent-shell--make-boxed-message
+                           :text "Note: truncated history (last only)")))
+                 (agent-shell--replay-turn state (car (last prompt-turns))))
+                ('first-last
+                 (agent-shell--replay-turn state (car prompt-turns))
+                 (when (> count 2)
+                   (agent-shell--update-bootstrapping-fragment
+                    :state state
+                    :block-id "restore_truncated_history"
+                    :body (agent-shell--make-boxed-message
+                           :text "Note: truncated history (first and last only)")))
+                 (when (> count 1)
+                   (agent-shell--replay-turn state (car (last prompt-turns))))))))
         (map-put! state :active-requests saved-active-requests)))))
 
 (cl-defun agent-shell--initiate-session-resume-by-id (&key session-id session-title shell-buffer on-session-init)
   "Resume or load session SESSION-ID with SHELL-BUFFER and ON-SESSION-INIT.
 
 SESSION-TITLE is an optional display title for the resumed session."
-  (agent-shell--update-fragment
+  (agent-shell--update-bootstrapping-fragment
    :state (agent-shell--state)
-   :namespace-id "bootstrapping"
    :block-id "starting"
    :body (format "\n\nLoading session %s..." session-id)
    :append t)
   (unless (eq (agent-shell--effective-restore-verbosity (agent-shell--state))
               agent-shell-session-restore-verbosity)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state (agent-shell--state)
-     :namespace-id "bootstrapping"
      :block-id "restore_fallback"
      :body (agent-shell--make-boxed-message
             :text (format "Warning: %s unsupported. Using %s loading"
@@ -6530,9 +6567,8 @@ SESSION-TITLE is an optional display title for the resumed session."
                    (agent-shell--set-session-from-response
                     :acp-response acp-load-response
                     :acp-session-id session-id)
-                   (agent-shell--update-fragment
+                   (agent-shell--update-bootstrapping-fragment
                     :state (agent-shell--state)
-                    :namespace-id "bootstrapping"
                     :block-id "resumed_session"
                     :label-left (format "%s %s"
                                         (agent-shell--make-status-kind-label :status "completed")
@@ -6548,9 +6584,8 @@ SESSION-TITLE is an optional display title for the resumed session."
      :on-failure (lambda (_acp-error _raw-message)
                    (map-put! (agent-shell--state) :pending-restore nil)
                    (message "Couldn't resume session. Starting a new one.")
-                   (agent-shell--update-fragment
+                   (agent-shell--update-bootstrapping-fragment
                     :state (agent-shell--state)
-                    :namespace-id "bootstrapping"
                     :block-id "starting"
                     :body "\n\nCouldn't resume session."
                     :append t)
@@ -6560,9 +6595,8 @@ SESSION-TITLE is an optional display title for the resumed session."
 
 (cl-defun agent-shell--initiate-session-fork-by-id (&key session-id shell-buffer on-session-init)
   "Fork session SESSION-ID with SHELL-BUFFER and ON-SESSION-INIT."
-  (agent-shell--update-fragment
+  (agent-shell--update-bootstrapping-fragment
    :state (agent-shell--state)
-   :namespace-id "bootstrapping"
    :block-id "starting"
    :body (format "\n\nForking session %s..." session-id)
    :append t)
@@ -6585,9 +6619,8 @@ SESSION-TITLE is an optional display title for the resumed session."
                    (agent-shell--set-session-from-response
                     :acp-response acp-fork-response
                     :acp-session-id new-session-id)
-                   (agent-shell--update-fragment
+                   (agent-shell--update-bootstrapping-fragment
                     :state (agent-shell--state)
-                    :namespace-id "bootstrapping"
                     :block-id "forked_session"
                     :label-left (format "%s %s"
                                         (agent-shell--make-status-kind-label :status "completed")
@@ -6601,9 +6634,8 @@ SESSION-TITLE is an optional display title for the resumed session."
 (cl-defun agent-shell--initiate-session-list-and-load (&key shell-buffer on-session-init)
   "Try loading latest existing session with SHELL-BUFFER and ON-SESSION-INIT."
   (with-current-buffer (map-elt (agent-shell--state) :buffer)
-    (agent-shell--update-fragment
+    (agent-shell--update-bootstrapping-fragment
      :state (agent-shell--state)
-     :namespace-id "bootstrapping"
      :block-id "starting"
      :body "\n\nLooking for existing sessions..."
      :append t))
@@ -6635,17 +6667,15 @@ SESSION-TITLE is an optional display title for the resumed session."
                               :data (list (cons :session-id acp-session-id)))
                              (if acp-session-id
                                  (let ((use-load (agent-shell--use-session-load-p (agent-shell--state))))
-                                   (agent-shell--update-fragment
+                                   (agent-shell--update-bootstrapping-fragment
                                     :state (agent-shell--state)
-                                    :namespace-id "bootstrapping"
                                     :block-id "starting"
                                     :body (format "\n\nLoading session %s..." acp-session-id)
                                     :append t)
                                    (unless (eq (agent-shell--effective-restore-verbosity (agent-shell--state))
                                                agent-shell-session-restore-verbosity)
-                                     (agent-shell--update-fragment
+                                     (agent-shell--update-bootstrapping-fragment
                                       :state (agent-shell--state)
-                                      :namespace-id "bootstrapping"
                                       :block-id "restore_fallback"
                                       :body (agent-shell--make-boxed-message
                                              :text (format "Warning: %s unsupported. Using %s loading"
@@ -6676,9 +6706,8 @@ SESSION-TITLE is an optional display title for the resumed session."
                                                   (agent-shell--set-session-from-response
                                                    :acp-response acp-load-response
                                                    :acp-session-id acp-session-id)
-                                                  (agent-shell--update-fragment
+                                                  (agent-shell--update-bootstrapping-fragment
                                                    :state (agent-shell--state)
-                                                   :namespace-id "bootstrapping"
                                                    :block-id "resumed_session"
                                                    :label-left (format "%s %s"
                                                                        (agent-shell--make-status-kind-label :status "completed")
@@ -6694,9 +6723,8 @@ SESSION-TITLE is an optional display title for the resumed session."
                                                                       (funcall on-session-init))))
                                     :on-failure (lambda (_acp-error _raw-message)
                                                   (map-put! (agent-shell--state) :pending-restore nil)
-                                                  (agent-shell--update-fragment
+                                                  (agent-shell--update-bootstrapping-fragment
                                                    :state (agent-shell--state)
-                                                   :namespace-id "bootstrapping"
                                                    :block-id "restore_fallback"
                                                    :body (agent-shell--make-boxed-message
                                                           :text "Warning: Could not load existing session. Starting new"))
@@ -6709,9 +6737,8 @@ SESSION-TITLE is an optional display title for the resumed session."
                      (quit
                       (agent-shell--emit-event :event 'session-selection-cancelled)))))
    :on-failure (lambda (_acp-error _raw-message)
-                 (agent-shell--update-fragment
+                 (agent-shell--update-bootstrapping-fragment
                   :state (agent-shell--state)
-                  :namespace-id "bootstrapping"
                   :block-id "restore_fallback"
                   :body (agent-shell--make-boxed-message
                          :text "Warning: Could not list existing sessions. Starting new"))
@@ -8317,7 +8344,10 @@ Returns an alist with insertion details or nil otherwise:
                            (agent-shell--shell-buffer :no-create t))))
     (if (with-current-buffer shell-buffer
           (or (map-nested-elt agent-shell--state '(:session :id))
-              (eq agent-shell-session-strategy 'new-deferred)))
+              (eq agent-shell-session-strategy 'new-deferred)
+              ;; Inserting text now is also possible if there's
+              ;; a prompt available to insert text into.
+              (and (not submit) comint-last-prompt)))
         ;; Displaying before with-current-buffer below
         ;; ensures window is selected, thus window-point
         ;; is also updated after insertion.

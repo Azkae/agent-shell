@@ -2528,8 +2528,8 @@ so the command must not append a second time."
     (unwind-protect
         (progn
           (add-hook 'agent-shell-mode-hook hook-fn)
-          (cl-letf (((symbol-function 'shell-maker-start)
-                     (lambda (_config &rest _args)
+          (cl-letf (((symbol-function 'shell-maker-start-v2)
+                     (lambda (&rest _args)
                        (setq test-buffer (get-buffer-create "*test-agent-shell*"))
                        (with-current-buffer test-buffer
                          (setq major-mode 'agent-shell-mode)
@@ -2563,8 +2563,8 @@ so the command must not append a second time."
                             (lambda (_buf)
                               (list (cons :command "cat")))))))
     (unwind-protect
-        (cl-letf (((symbol-function 'shell-maker-start)
-                   (lambda (_config &rest _args)
+        (cl-letf (((symbol-function 'shell-maker-start-v2)
+                   (lambda (&rest _args)
                      (setq test-buffer (get-buffer-create "*test-agent-shell*"))
                      (with-current-buffer test-buffer
                        (setq major-mode 'agent-shell-mode))
