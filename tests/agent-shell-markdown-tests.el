@@ -362,7 +362,7 @@ streaming **not bold**" nil)))))
 ```
 after [c](w)"))
                  ;; Panel framed by a blank line on each side (see
-                 ;; `agent-shell-markdown--pad-source-blocks').
+                 ;; `agent-shell-markdown--pad-rendered-blocks').
                  '(("before " nil)
                    ("a" (agent-shell-markdown-link))
                    ("
@@ -575,7 +575,7 @@ raise SystemExit
   ;; agent emitted no blank line) gains one blank line on each side so it
   ;; doesn't read as cramped.  A well-formed input that already had the
   ;; blank lines renders identically (the gap is normalised, not
-  ;; doubled).  See `agent-shell-markdown--pad-source-blocks'.
+  ;; doubled).  See `agent-shell-markdown--pad-rendered-blocks'.
   (let ((framed "intro
 
 
@@ -673,6 +673,83 @@ outro"))
                    wellformed))
     (should (equal (agent-shell-markdown-tests--roundtrip wellformed)
                    wellformed))))
+
+(ert-deftest agent-shell-markdown-table-framed-when-flush-against-prose ()
+  ;; A rendered table butting against prose gains a blank line on each
+  ;; side, the same guarantee as source blocks.
+  (with-temp-buffer
+    (insert "Intro\n| a | b |\n|---|---|\n| 1 | 2 |\nOutro")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (substring-no-properties (buffer-string))
+                   "Intro
+
+│ a │ b │
+├───┼───┤
+│ 1 │ 2 │
+
+Outro"))))
+
+(ert-deftest agent-shell-markdown-table-not-framed-when-alone ()
+  ;; A table that owns the whole buffer has no neighbouring prose, so
+  ;; no framing blank line is added at the buffer edges.
+  (with-temp-buffer
+    (insert "| a | b |\n|---|---|\n| 1 | 2 |")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (substring-no-properties (buffer-string))
+                   "│ a │ b │
+├───┼───┤
+│ 1 │ 2 │"))))
+
+(ert-deftest agent-shell-markdown-table-framing-preserves-row-folding ()
+  ;; Regression: a row that streams in right after a rendered table
+  ;; must still fold into it.  Framing must not drop a blank line
+  ;; between the table and the new row (that would split the table).
+  (with-temp-buffer
+    (insert "Intro\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-max))
+    (insert "| 3 | 4 |\n")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (substring-no-properties (buffer-string))
+                   "Intro
+
+│ a │ b │
+├───┼───┤
+│ 1 │ 2 │
+│ 3 │ 4 │
+"))))
+
+(ert-deftest agent-shell-markdown-table-below-gap-held-back-for-pending-row ()
+  ;; While a partial row (no closing `|' yet) sits after a rendered
+  ;; table, no bottom gap is inserted (it would split the table once
+  ;; the row completes and folds in).  The row is left raw until it
+  ;; completes, then folds into the same table.
+  (with-temp-buffer
+    (insert "Intro\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-max))
+    (insert "| 3 | 4")
+    (agent-shell-markdown-replace-markup)
+    ;; No blank line between the table and the pending raw row.
+    (should (equal (substring-no-properties (buffer-string))
+                   "Intro
+
+│ a │ b │
+├───┼───┤
+│ 1 │ 2 │
+| 3 | 4"))
+    ;; Completing the row folds it into the one table.
+    (goto-char (point-max))
+    (insert " |\n")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (substring-no-properties (buffer-string))
+                   "Intro
+
+│ a │ b │
+├───┼───┤
+│ 1 │ 2 │
+│ 3 │ 4 │
+"))))
 
 (ert-deftest agent-shell-markdown-inline-code-body-protected-across-calls ()
   ;; Streaming counterpart for inline code: after the backticks
@@ -1955,7 +2032,7 @@ $$E = mc^2$$
       ;; reach), and the \(z\) inside the inline `code` span stayed literal
       ;; too (`:inline-code-ranges' kept it out of reach).  The blank line
       ;; between the python block and "inline [a+b] here" is the framing
-      ;; gap `--pad-source-blocks' adds below a block that butts
+      ;; gap `--pad-rendered-blocks' adds below a block that butts
       ;; against following prose.
       (should (equal (buffer-substring-no-properties (point-min) (point-max))
                      "
