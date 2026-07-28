@@ -869,7 +869,7 @@ Defaults to 30 seconds when nil or when an event has no entry.")
 
 (cl-defun agent-shell-idle-timeout (&key event)
   "Resolve idle timeout in seconds.
-When EVENT is non-nil, look it up in `agent-shell-idle-timeout'
+When EVENT is non-nil, look it up in variable `agent-shell-idle-timeout'
 if it is an alist.  Falls back to 30 seconds."
   (or (if (listp agent-shell-idle-timeout)
           (map-elt agent-shell-idle-timeout event)
@@ -1648,10 +1648,16 @@ viewport's compose buffer instead (carrying an unsent draft, or empty)."
    (t
     (user-error "Not in an agent-shell buffer"))))
 
-(cl-defun agent-shell--read-shell-buffer (&key prompt buffers)
+(cl-defun agent-shell--read-shell-buffer (&key prompt buffers force-short-names)
   "Read an `agent-shell-mode' buffer via `completing-read'.
 Each candidate shows the agent icon, buffer name, status, and
 session title in aligned columns.
+
+The agent-name prefix each buffer name carries (for example
+\"Claude Agent @ \") is stripped from the displayed names to reduce
+clutter when every candidate belongs to the same agent type, or
+when FORCE-SHORT-NAMES is non-nil (which strips each candidate's own prefix
+regardless of whether the candidates share an agent type).
 
 PROMPT is the prompt string (defaults to \"Agent shell buffer: \").
 BUFFERS is the list of buffers to choose from, defaulting to
@@ -1668,6 +1674,16 @@ buffers are available or nothing was selected."
                                             :config (map-elt agent-shell--state
                                                              :agent-config))))
                              (cons :name (buffer-name buffer))
+                             (cons :agent-identifier
+                                   (map-nested-elt agent-shell--state
+                                                   '(:agent-config :identifier)))
+                             ;; The config's `:buffer-name' is the agent's
+                             ;; display name (e.g. "Claude"), the same value
+                             ;; `agent-shell--format-buffer-name' builds from.
+                             (cons :buffer-name-prefix
+                                   (agent-shell--buffer-name-prefix
+                                    (map-nested-elt agent-shell--state
+                                                    '(:agent-config :buffer-name))))
                              (cons :status (symbol-name (agent-shell-status)))
                              (cons :title (let ((title (string-trim
                                                         (or (map-nested-elt agent-shell--state
@@ -1679,9 +1695,27 @@ buffers are available or nothing was selected."
                    (or buffers
                        (agent-shell-buffers)
                        (user-error "No agent-shell buffers"))))
-         (name-width (apply #'max (mapcar (lambda (e) (length (map-elt e :name)))
+         ;; Strip each candidate's agent-name prefix (e.g. "Claude Agent @ ")
+         ;; from the displayed buffer name when SHORTENED is requested or every
+         ;; candidate is the same agent type, so only the distinguishing part
+         ;; remains.
+         (agent-identifiers (mapcar (lambda (e)
+                                      (map-elt e :agent-identifier))
+                                    entries))
+         (homogeneous (seq-every-p (lambda (id)
+                                     (eq id (seq-first agent-identifiers)))
+                                   agent-identifiers))
+         (display-name (lambda (e)
+                         (if (and (or force-short-names homogeneous)
+                                  (map-elt e :buffer-name-prefix))
+                             (string-remove-prefix (map-elt e :buffer-name-prefix)
+                                                   (map-elt e :name))
+                           (map-elt e :name))))
+         (name-width (apply #'max (mapcar (lambda (e)
+                                            (length (funcall display-name e)))
                                           entries)))
-         (status-width (apply #'max (mapcar (lambda (e) (length (map-elt e :status)))
+         (status-width (apply #'max (mapcar (lambda (e)
+                                              (length (map-elt e :status)))
                                             entries)))
          ;; Stash the icon as a text property so it can be supplied as an
          ;; affixation prefix later; this keeps the icon out of the candidate
@@ -1690,7 +1724,7 @@ buffers are available or nothing was selected."
                    (lambda (e)
                      (cons (propertize
                             (concat
-                             (string-pad (propertize (map-elt e :name)
+                             (string-pad (propertize (funcall display-name e)
                                                      'face 'agent-shell-buffer-name)
                                          (1+ name-width))
                              (string-pad (propertize (map-elt e :status)
@@ -3235,7 +3269,7 @@ function before returning."
   (funcall (or agent-shell-path-resolver-function #'identity) path))
 
 (defun agent-shell-cache-dir (&rest components)
-  "Return the agent-shell cache directory, creating it if needed.
+  "Return the `agent-shell' cache directory, creating it if needed.
 
 The base location is system-dependent and honors `XDG_CACHE_HOME'
 when set.  COMPONENTS, if given, name a subdirectory beneath the
@@ -3812,7 +3846,7 @@ later removed from .gitignore it will not be re-added."
     dir))
 
 (defun agent-shell--dot-subdir-in-repo-p (dir)
-  "Return non-nil when DIR is under the project .agent-shell directory.
+  "Return non-nil when DIR is under project's `agent-shell' dot directory.
 
 For example:
 
@@ -4073,19 +4107,32 @@ PROPERTIES should be a plist of property-value pairs."
         (setq properties (cddr properties))))
     str))
 
-(defun agent-shell--format-buffer-name (agent-name project-name)
-  "Format `agent-shell' buffer name using AGENT-NAME and PROJECT-NAME."
+(defun agent-shell--buffer-name-prefix (agent-name)
+  "Return the prefix a buffer name for AGENT-NAME places before the project.
+Returns nil when `agent-shell-buffer-name-format' is a custom
+function, whose output cannot be decomposed into a prefix and a
+project name.
+
+For example, with the default format:
+
+  (agent-shell--buffer-name-prefix \"Claude\") => \"Claude Agent @ \""
   (pcase agent-shell-buffer-name-format
-    ((pred functionp)
-     (funcall agent-shell-buffer-name-format agent-name project-name))
     ('kebab-case
-     (format "%s-agent @ %s"
-             (downcase (replace-regexp-in-string " " "-" agent-name))
-             project-name))
+     (format "%s-agent @ "
+             (downcase (replace-regexp-in-string " " "-" agent-name))))
     ('default
-     (format "%s Agent @ %s"
-             agent-name
-             project-name))))
+     (format "%s Agent @ " agent-name))))
+
+(defun agent-shell--format-buffer-name (agent-name project-name)
+  "Format `agent-shell' buffer name using AGENT-NAME and PROJECT-NAME.
+
+For example, with the default format:
+
+  (agent-shell--format-buffer-name \"Claude\" \"agent-shell\")
+    => \"Claude Agent @ agent-shell\""
+  (if (functionp agent-shell-buffer-name-format)
+      (funcall agent-shell-buffer-name-format agent-name project-name)
+    (concat (agent-shell--buffer-name-prefix agent-name) project-name)))
 
 (cl-defun agent-shell--apply (&key function alist)
   "Apply keyword ALIST to FUNCTION.
@@ -5457,7 +5504,7 @@ Session events:
   `session-title-changed' - Session title updated
     :data contains :title
   `input-submitted'       - User submitted input to the agent
-  `idle'                  - Agent idle for `agent-shell-idle-timeout' seconds
+  `idle'                  - Agent idle for variable `agent-shell-idle-timeout' seconds
     :data contains :idle-event and :buffer
 
 General events:
@@ -5598,7 +5645,7 @@ DATA is an optional alist of event-specific data."
 (cl-defun agent-shell--start-idle-timer (&key event data)
   "Start the idle timer for EVENT with DATA.
 Cancels any existing idle timer first.  After
-`agent-shell-idle-timeout' seconds, emits an `idle' event with
+variable `agent-shell-idle-timeout' seconds, emits an `idle' event with
 the original EVENT as :idle-event."
   (agent-shell--cancel-idle-timer)
   (when-let* ((buffer (map-elt (agent-shell--state) :buffer)))
@@ -7462,10 +7509,10 @@ Result is of the form ((:prompt . PROMPT) (:response . RESPONSE))."
 
 ;;;###autoload
 (cl-defun agent-shell-shell-buffer (&key viewport-buffer no-error no-create)
-  "Return an agent-shell buffer for the current context.
+  "Return an `agent-shell' buffer for the current context.
 
 A stable public API wrapping the internal resolver, intended for
-packages that integrate with agent-shell programmatically.
+packages that integrate with `agent-shell' programmatically.
 
 Resolution order: viewport → current buffer → project buffers → prompt user.
 

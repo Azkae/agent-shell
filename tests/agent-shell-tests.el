@@ -4641,5 +4641,31 @@ think-kind calls into Thinking."
                     :acp-notification '((some-key . "some-value")))
                   '((adapted . t) (some-key . "some-value"))))))
 
+(ert-deftest agent-shell--buffer-name-prefix-test ()
+  "Test `agent-shell--buffer-name-prefix' across formats."
+  (let ((agent-shell-buffer-name-format 'default))
+    (should (equal (agent-shell--buffer-name-prefix "Claude")
+                   "Claude Agent @ ")))
+  (let ((agent-shell-buffer-name-format 'kebab-case))
+    (should (equal (agent-shell--buffer-name-prefix "Claude Code")
+                   "claude-code-agent @ ")))
+  ;; A custom formatter cannot be decomposed into a prefix.
+  (let ((agent-shell-buffer-name-format (lambda (agent-name project-name)
+                                          (format "%s: %s" agent-name project-name))))
+    (should (equal (agent-shell--buffer-name-prefix "Claude") nil))))
+
+(ert-deftest agent-shell--format-buffer-name-test ()
+  "Test `agent-shell--format-buffer-name' across formats."
+  (let ((agent-shell-buffer-name-format 'default))
+    (should (equal (agent-shell--format-buffer-name "Claude" "agent-shell")
+                   "Claude Agent @ agent-shell")))
+  (let ((agent-shell-buffer-name-format 'kebab-case))
+    (should (equal (agent-shell--format-buffer-name "Claude Code" "agent-shell")
+                   "claude-code-agent @ agent-shell")))
+  (let ((agent-shell-buffer-name-format (lambda (agent-name project-name)
+                                          (format "%s: %s" agent-name project-name))))
+    (should (equal (agent-shell--format-buffer-name "Claude" "agent-shell")
+                   "Claude: agent-shell"))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
