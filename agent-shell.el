@@ -2815,7 +2815,8 @@ No-op while that function has nothing to summarize (an empty group)."
                        :client (map-elt state :client)
                        :state state))
               :expanded t
-              :navigation 'never))
+              :navigation 'never
+              :above-last-prompt (not (agent-shell--active-requests-p state))))
            (agent-shell--cancel-idle-timer)
            (agent-shell--emit-event
             :event 'tool-call-update
@@ -3021,7 +3022,8 @@ No-op while that function has nothing to summarize (an empty group)."
                 :block-id (concat tool-call-id "-plan")
                 :label-left (propertize "Proposed plan" 'font-lock-face 'agent-shell-section-heading)
                 :body (agent-shell--format-plan (map-nested-elt acp-request '(params toolCall rawInput plan)))
-                :expanded t))
+                :expanded t
+                :above-last-prompt (not (agent-shell--active-requests-p state))))
              ;; block-id must be the same as the one used
              ;; in agent-shell--delete-fragment param.
              (agent-shell--update-fragment
@@ -3034,7 +3036,8 @@ No-op while that function has nothing to summarize (an empty group)."
                        :client (map-elt state :client)
                        :state state))
               :expanded t
-              :navigation 'never)
+              :navigation 'never
+              :above-last-prompt (not (agent-shell--active-requests-p state)))
              (agent-shell-jump-to-latest-permission-button-row)
              (when-let* (((map-elt state :buffer))
                          (viewport-buffer (agent-shell-viewport--buffer
@@ -3069,7 +3072,8 @@ No-op while that function has nothing to summarize (an empty group)."
             :block-id "Unhandled Incoming Request"
             :body (format "⚠ Unhandled incoming request: \"%s\"" method)
             :create-new t
-            :navigation 'never)
+            :navigation 'never
+            :above-last-prompt (not (agent-shell--active-requests-p state)))
            ;; Send error response to prevent client from hanging.
            (acp-send-response
             :client (map-elt state :client)
@@ -3649,7 +3653,8 @@ DIFFS is a list of diff infos as returned by
               :code (map-elt acp-error 'code)
               :message (map-elt acp-error 'message)
               :raw-message raw-message)
-       :create-new t))
+       :create-new t
+       :above-last-prompt (not (agent-shell--active-requests-p (agent-shell--state)))))
     ;; TODO: Mark buffer command with shell failure.
     (with-current-buffer shell-buffer
       (agent-shell--emit-event :event 'error
