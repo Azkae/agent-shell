@@ -9722,14 +9722,78 @@ Remove: M-x agent-shell-remove-pending-request
                     "\n"))
      :create-new t)))
 
+(defun agent-shell--echo (format-string &rest args)
+  "Echo FORMAT-STRING and ARGS to the echo area without logging.
+
+Like `message', but binds `message-log-max' to nil so the text is shown
+transiently and not recorded in the *Messages* buffer.  Useful for
+ephemeral status such as the pending request queue."
+  (let ((message-log-max nil))
+    (apply #'message format-string args)))
+
+(cl-defun agent-shell--view-pending-prompts (&key active-prompt pending-prompts)
+  "Message the in-progress prompt and PENDING-PROMPTS to the echo area.
+
+ACTIVE-PROMPT is the prompt currently running, or nil if none.
+
+PENDING-PROMPTS is a list of pending prompt strings, in the same form as
+\(map-elt agent-shell--state :pending-requests).
+
+Each prompt is shown on a single line, prefixed by a status column
+\(\"active\" or \"queued\"), and truncated to fit the frame width so it
+never wraps.
+
+For example, given:
+
+  :active-prompt \"Find that nasty bug\"
+  :pending-prompts (\"Next prompt text\" \"Second prompt\")
+
+messages:
+
+  active  Find that nasty bug
+  queued  Next prompt text
+  queued  Second prompt"
+  (if (and (not active-prompt) (seq-empty-p pending-prompts))
+      (agent-shell--echo "No pending prompts")
+    (let ((available (- (frame-width) 8)))
+      (agent-shell--echo
+       "%s"
+       (mapconcat
+        (lambda (row)
+          (concat
+           (propertize (string-pad (map-elt row :status) 6)
+                       'face (map-elt row :face))
+           "  "
+           (truncate-string-to-width
+            (or (car (split-string (map-elt row :prompt) "\n" t)) "")
+            available nil nil t)))
+        (append
+         (when active-prompt
+           (list `((:status . "active")
+                   (:face . success)
+                   (:prompt . ,active-prompt))))
+         (seq-map (lambda (prompt)
+                    `((:status . "queued")
+                      (:face . agent-shell-secondary)
+                      (:prompt . ,prompt)))
+                  pending-prompts))
+        "\n")))))
+
 (cl-defun agent-shell--enqueue-request (&key prompt)
-  "Add PROMPT to the pending requests queue."
+  "Add PROMPT to the pending requests queue and echo the resulting queue.
+
+The running request (the most recent `comint-input-ring' entry) is shown
+as \"active\" and the queued requests, PROMPT included, as \"queued\"."
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
-  (let ((pending (map-elt agent-shell--state :pending-requests)))
-    (map-put! agent-shell--state :pending-requests
-              (append pending (list prompt)))
-    (message "Request queued (%d pending)" (length (map-elt agent-shell--state :pending-requests)))))
+  (map-put! agent-shell--state :pending-requests
+            (append (map-elt agent-shell--state :pending-requests)
+                    (list prompt)))
+  (agent-shell--view-pending-prompts
+   :active-prompt (when (and (bound-and-true-p comint-input-ring)
+                             (not (ring-empty-p comint-input-ring)))
+                    (ring-ref comint-input-ring 0))
+   :pending-prompts (map-elt agent-shell--state :pending-requests)))
 
 (cl-defun agent-shell--read-queue-prompt (&key initial)
   "Read a queue-request prompt from the minibuffer.

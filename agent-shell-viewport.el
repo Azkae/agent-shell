@@ -51,6 +51,7 @@
 (declare-function agent-shell--context "agent-shell")
 (declare-function agent-shell--shell-buffer "agent-shell")
 (declare-function agent-shell--state "agent-shell")
+(declare-function agent-shell--view-pending-prompts "agent-shell")
 (declare-function agent-shell--filter-buffer-substring "agent-shell")
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell-goto-last-interaction "agent-shell")
@@ -247,14 +248,23 @@ queued right away, regardless of `agent-shell-viewport-dismiss-on-send'."
 
 The prompt is queued when the shell is busy and submitted otherwise, so
 prompts can be fired in a row.  Signals a `user-error' when the draft is
-empty.  Leaves the compose buffer open in edit mode, cleared."
+empty.  Leaves the compose buffer open in edit mode, cleared.
+
+When the prompt is submitted immediately (not queued), it is echoed to
+the minibuffer as the active request, since the cleared compose buffer
+does not itself show the submitted request.  When it is queued instead,
+`queue-request' already echoes the resulting queue."
   (let ((shell-buffer (agent-shell-viewport--shell-buffer))
-        (prompt (string-trim (buffer-string))))
+        (prompt (string-trim (buffer-string)))
+        ;; Sample busy state before `queue-request' below submits or queues.
+        (queued (agent-shell-viewport--busy-p)))
     (when (string-empty-p prompt)
       (user-error "Nothing to send"))
     (with-current-buffer shell-buffer
       (agent-shell-queue-request prompt))
-    (agent-shell-viewport--initialize)))
+    (agent-shell-viewport--initialize)
+    (unless queued
+      (agent-shell--view-pending-prompts :active-prompt prompt))))
 
 (defun agent-shell-viewport-compose-send-and-dismiss ()
   "Queue or send the composed prompt, then dismiss the compose window.
