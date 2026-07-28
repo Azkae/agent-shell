@@ -51,7 +51,7 @@
 (declare-function agent-shell--context "agent-shell")
 (declare-function agent-shell--shell-buffer "agent-shell")
 (declare-function agent-shell--state "agent-shell")
-(declare-function agent-shell--prompt-queue-echo "agent-shell")
+(declare-function agent-shell--prompt-queue-echo "agent-shell-prompt-queue")
 (declare-function agent-shell--filter-buffer-substring "agent-shell")
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell-goto-last-interaction "agent-shell")
@@ -61,9 +61,9 @@
 (declare-function agent-shell-interrupt "agent-shell")
 (declare-function agent-shell-interrupt-confirmed-p "agent-shell")
 (declare-function agent-shell-open-transcript "agent-shell")
-(declare-function agent-shell-prompt-queue "agent-shell")
-(declare-function agent-shell-prompt-queue-remove "agent-shell")
-(declare-function agent-shell-prompt-queue-resume "agent-shell")
+(declare-function agent-shell-prompt-queue "agent-shell-prompt-queue")
+(declare-function agent-shell-prompt-queue-remove "agent-shell-prompt-queue")
+(declare-function agent-shell-prompt-queue-resume "agent-shell-prompt-queue")
 (declare-function agent-shell-view-acp-logs "agent-shell")
 (declare-function agent-shell-view-traffic "agent-shell")
 (declare-function agent-shell-next-permission-button "agent-shell")
@@ -107,7 +107,7 @@ restored while the peeked interaction is the same one.")
 ;; Survives mode switches (edit <-> view) which clear buffer-local vars.
 (put 'agent-shell-viewport--ring-index 'permanent-local t)
 
-(cl-defun agent-shell-viewport--show-buffer (&key append override submit no-focus shell-buffer)
+(cl-defun agent-shell-viewport--show-buffer (&key append override submit no-focus shell-buffer edit)
   "Show a viewport compose buffer for the agent shell.
 
 APPEND is appended to the viewport compose buffer.
@@ -115,6 +115,8 @@ OVERRIDE, when non-nil, replaces content verbatim (no trimming).
 SUBMIT, when non-nil, submits after insertion.
 NO-FOCUS, when non-nil, avoids focusing the viewport compose buffer.
 SHELL-BUFFER, when non-nil, prefer this shell buffer.
+EDIT, when non-nil, open in edit mode even while the shell is busy, so
+the user can compose a prompt to queue (rather than staying in view mode).
 NEW-SHELL, create a new shell (no history).
 
 Returns an alist with insertion details or nil otherwise:
@@ -154,9 +156,11 @@ Returns an alist with insertion details or nil otherwise:
       ;; first time on an ongoing/busy shell session?
       (cond
        ;; Busy with no text/override to drop in -> stay in view mode.
-       ;; When text/override is present, fall through to edit mode so the
-       ;; user can compose; `compose-send-*' will queue on submit.
-       ((and (agent-shell-viewport--busy-p)
+       ;; When text/override is present, or EDIT is requested, fall through
+       ;; to edit mode so the user can compose; `compose-send-*' will queue
+       ;; on submit.
+       ((and (not edit)
+             (agent-shell-viewport--busy-p)
              (string-empty-p (string-trim text))
              (or (not override) (string-empty-p (string-trim override))))
         (agent-shell-viewport-view-mode))
