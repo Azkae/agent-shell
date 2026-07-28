@@ -51,7 +51,7 @@
 (declare-function agent-shell--context "agent-shell")
 (declare-function agent-shell--shell-buffer "agent-shell")
 (declare-function agent-shell--state "agent-shell")
-(declare-function agent-shell--view-pending-prompts "agent-shell")
+(declare-function agent-shell--prompt-queue-echo "agent-shell")
 (declare-function agent-shell--filter-buffer-substring "agent-shell")
 (declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell-goto-last-interaction "agent-shell")
@@ -61,9 +61,9 @@
 (declare-function agent-shell-interrupt "agent-shell")
 (declare-function agent-shell-interrupt-confirmed-p "agent-shell")
 (declare-function agent-shell-open-transcript "agent-shell")
-(declare-function agent-shell-queue-request "agent-shell")
-(declare-function agent-shell-remove-pending-request "agent-shell")
-(declare-function agent-shell-resume-pending-requests "agent-shell")
+(declare-function agent-shell-prompt-queue "agent-shell")
+(declare-function agent-shell-prompt-queue-remove "agent-shell")
+(declare-function agent-shell-prompt-queue-resume "agent-shell")
 (declare-function agent-shell-view-acp-logs "agent-shell")
 (declare-function agent-shell-view-traffic "agent-shell")
 (declare-function agent-shell-next-permission-button "agent-shell")
@@ -230,7 +230,7 @@ queued right away, regardless of `agent-shell-viewport-dismiss-on-send'."
         (prompt (string-trim (buffer-string))))
     (with-current-buffer shell-buffer
       (if (agent-shell-viewport--busy-p)
-          (agent-shell-queue-request prompt)
+          (agent-shell-prompt-queue prompt)
         (agent-shell--insert-to-shell-buffer
          :text prompt
          :submit t)))
@@ -251,20 +251,20 @@ prompts can be fired in a row.  Signals a `user-error' when the draft is
 empty.  Leaves the compose buffer open in edit mode, cleared.
 
 When the prompt is submitted immediately (not queued), it is echoed to
-the minibuffer as the active request, since the cleared compose buffer
-does not itself show the submitted request.  When it is queued instead,
-`queue-request' already echoes the resulting queue."
+the minibuffer as the active prompt, since the cleared compose buffer
+does not itself show the submitted prompt.  When it is queued instead,
+`agent-shell-prompt-queue' already echoes the resulting queue."
   (let ((shell-buffer (agent-shell-viewport--shell-buffer))
         (prompt (string-trim (buffer-string)))
-        ;; Sample busy state before `queue-request' below submits or queues.
+        ;; Sample busy state before `agent-shell-prompt-queue' below submits or queues.
         (queued (agent-shell-viewport--busy-p)))
     (when (string-empty-p prompt)
       (user-error "Nothing to send"))
     (with-current-buffer shell-buffer
-      (agent-shell-queue-request prompt))
+      (agent-shell-prompt-queue prompt))
     (agent-shell-viewport--initialize)
     (unless queued
-      (agent-shell--view-pending-prompts :active-prompt prompt))))
+      (agent-shell--prompt-queue-echo :active-prompt prompt))))
 
 (defun agent-shell-viewport-compose-send-and-dismiss ()
   "Queue or send the composed prompt, then dismiss the compose window.
@@ -303,7 +303,7 @@ resolving to its shell on the next invocation."
         (user-error "Nothing to send"))
       (when (agent-shell-viewport--busy-p)
         (with-current-buffer shell-buffer
-          (agent-shell-queue-request prompt))
+          (agent-shell-prompt-queue prompt))
         (with-current-buffer viewport-buffer
           (agent-shell-viewport-view-last))
         (throw 'exit nil))
@@ -1044,19 +1044,19 @@ buffer from the snapshot and switch to edit mode."
     (with-current-buffer shell-buffer
       (agent-shell-view-acp-logs))))
 
-(defun agent-shell-viewport-queue-request ()
-  "Queue or immediately send a request depending on shell busy state."
-  (declare (modes agent-shell-viewport-view-mode
-                  agent-shell-viewport-edit-mode))
-  (interactive)
-  (agent-shell-viewport--ensure-buffer)
-  (let ((shell-buffer (or (agent-shell--current-shell)
-                          (user-error "Not in an agent-shell buffer"))))
-    (with-current-buffer shell-buffer
-      (call-interactively #'agent-shell-queue-request))))
+;; The viewport queueing commands were renamed to the
+;; `agent-shell-viewport-prompt-queue' namespace.  A package upgrade
+;; reloads this file into a running session without unbinding the old
+;; names, leaving them bound to stale definitions.  Unbind them so they
+;; no longer show up in `M-x' or run outdated code.
+;; TODO: Remove after 2026-08-28.
+(dolist (command '(agent-shell-viewport-queue-request
+                   agent-shell-viewport-resume-pending-requests
+                   agent-shell-viewport-remove-pending-request))
+  (fmakunbound command))
 
-(defun agent-shell-viewport-resume-pending-requests ()
-  "Resume processing pending requests in the queue."
+(defun agent-shell-viewport-prompt-queue ()
+  "Queue or immediately send a prompt depending on shell busy state."
   (declare (modes agent-shell-viewport-view-mode
                   agent-shell-viewport-edit-mode))
   (interactive)
@@ -1064,10 +1064,10 @@ buffer from the snapshot and switch to edit mode."
   (let ((shell-buffer (or (agent-shell--current-shell)
                           (user-error "Not in an agent-shell buffer"))))
     (with-current-buffer shell-buffer
-      (agent-shell-resume-pending-requests))))
+      (call-interactively #'agent-shell-prompt-queue))))
 
-(defun agent-shell-viewport-remove-pending-request ()
-  "Remove pending requests."
+(defun agent-shell-viewport-prompt-queue-resume ()
+  "Resume processing pending prompts in the queue."
   (declare (modes agent-shell-viewport-view-mode
                   agent-shell-viewport-edit-mode))
   (interactive)
@@ -1075,7 +1075,18 @@ buffer from the snapshot and switch to edit mode."
   (let ((shell-buffer (or (agent-shell--current-shell)
                           (user-error "Not in an agent-shell buffer"))))
     (with-current-buffer shell-buffer
-      (call-interactively #'agent-shell-remove-pending-request))))
+      (agent-shell-prompt-queue-resume))))
+
+(defun agent-shell-viewport-prompt-queue-remove ()
+  "Remove pending prompts."
+  (declare (modes agent-shell-viewport-view-mode
+                  agent-shell-viewport-edit-mode))
+  (interactive)
+  (agent-shell-viewport--ensure-buffer)
+  (let ((shell-buffer (or (agent-shell--current-shell)
+                          (user-error "Not in an agent-shell buffer"))))
+    (with-current-buffer shell-buffer
+      (call-interactively #'agent-shell-prompt-queue-remove))))
 
 (defun agent-shell-viewport-copy-session-id ()
   "Copy the current session ID to the kill ring."

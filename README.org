@@ -1039,13 +1039,13 @@ always go to Evil modes if you need to with ~C-z~).
 | p or <backtab>  | agent-shell-previous-item                               | Go to previous item.                                                          |
 |                 | agent-shell-previous-permission-button                  | Jump to the previous button.                                                  |
 |                 | agent-shell-prompt-compose                              | Compose an `agent-shell' prompt in a dedicated buffer.                        |
-|                 | agent-shell-queue-request                               | Queue or immediately send a request depending on shell busy state.            |
+|                 | agent-shell-prompt-queue                                | Queue or immediately send a prompt depending on shell busy state.             |
+|                 | agent-shell-prompt-queue-remove                         | Remove all pending prompts or a specific prompt by REMOVE-INDEX.              |
+|                 | agent-shell-prompt-queue-resume                         | Resume processing pending prompts in the queue.                               |
 | r               | agent-shell-quote-region                                | Quote the active region into the shell's latest prompt.                       |
 |                 | agent-shell-qwen-start                                  | Start an interactive Qwen Code CLI agent shell.                               |
-|                 | agent-shell-remove-pending-request                      | Remove all pending requests or a specific request by REMOVE-INDEX.            |
 | C-x x r         | agent-shell-rename-buffer                               | Rename current shell buffer.                                                  |
 |                 | agent-shell-reset-logs                                  | Reset all log buffers.                                                        |
-|                 | agent-shell-resume-pending-requests                     | Resume processing pending requests in the queue.                              |
 |                 | agent-shell-run-all-tests                               | Run all agent-shell tests in batch mode.                                      |
 | M-r             | agent-shell-search-history                              | Search previous input history.                                                |
 |                 | agent-shell-send-current-file                           | Insert a file into `agent-shell'.                                             |

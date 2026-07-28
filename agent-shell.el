@@ -1057,7 +1057,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
         (cons :idle-timer nil)
         (cons :sleep-token nil)
         (cons :active-requests nil)
-        (cons :pending-requests nil)
+        (cons :pending-prompts nil)
         (cons :usage (list (cons :total-tokens 0)
                            (cons :input-tokens 0)
                            (cons :output-tokens 0)
@@ -2992,7 +2992,7 @@ No-op while that function has nothing to summarize (an empty group)."
             :on-finished (lambda ()
                            (shell-maker-finish-output :config shell-maker--config
                                                       :success t)
-                           (agent-shell--process-pending-request))))
+                           (agent-shell--prompt-queue-process-next))))
           (acp-logging-enabled
            (agent-shell--update-fragment
             :state state
@@ -7342,7 +7342,7 @@ Each marked span is replaced by its `agent-shell-region-text' value."
                      (agent-shell-heartbeat-stop
                       :heartbeat (map-elt agent-shell--state :heartbeat))
                      (unless success
-                       (agent-shell--display-pending-requests))
+                       (agent-shell--prompt-queue-display))
                      (shell-maker-finish-output :config shell-maker--config
                                                 :success t)
                      (let ((data (list (cons :stop-reason (map-elt acp-response 'stopReason))
@@ -7358,7 +7358,7 @@ Each marked span is replaced by its `agent-shell-region-text' value."
                        (with-current-buffer viewport-buffer
                          (agent-shell-viewport--update-header)))
                      (when success
-                       (agent-shell--process-pending-request))))
+                       (agent-shell--prompt-queue-process-next))))
      :on-failure (lambda (acp-error raw-message)
                    ;; A failed/interrupted turn may have stopped mid
                    ;; agent_message_chunk, leaving the transcript body
@@ -7368,7 +7368,7 @@ Each marked span is replaced by its `agent-shell-region-text' value."
                     :last-entry-type (map-elt agent-shell--state :last-entry-type)
                     :file-path agent-shell--transcript-file)
                    ;; Display pending requests on failure.
-                   (agent-shell--display-pending-requests)
+                   (agent-shell--prompt-queue-display)
                    (funcall (agent-shell--make-error-handler :state agent-shell--state :shell-buffer shell-buffer)
                             acp-error raw-message)
                    (agent-shell-heartbeat-stop
@@ -7603,8 +7603,8 @@ inserted into the shell buffer prompt."
        (buffer-string)))))
                       (if (with-current-buffer shell-buffer (shell-maker-busy))
                           (with-current-buffer shell-buffer
-                            (agent-shell-queue-request
-                             (agent-shell--read-queue-prompt
+                            (agent-shell-prompt-queue
+                             (agent-shell--prompt-queue-read
                               :initial (concat code-block "\n\n"))))
                         (with-current-buffer destination-buffer
                           (save-excursion
@@ -8489,8 +8489,8 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
                              (agent-shell-cwd)))))
     (if (with-current-buffer shell-buffer (shell-maker-busy))
         (with-current-buffer shell-buffer
-          (agent-shell-queue-request
-           (agent-shell--read-queue-prompt :initial (concat text "\n\n"))))
+          (agent-shell-prompt-queue
+           (agent-shell--prompt-queue-read :initial (concat text "\n\n"))))
       (agent-shell-insert :text text :shell-buffer shell-buffer))))
 
 (defun agent-shell-send-region-to ()
@@ -8518,8 +8518,8 @@ With \\[universal-argument] \\[universal-argument] prefix ARG, prompt to pick an
            (text (agent-shell--context :shell-buffer shell-buffer)))
       (if (with-current-buffer shell-buffer (shell-maker-busy))
           (with-current-buffer shell-buffer
-            (agent-shell-queue-request
-             (agent-shell--read-queue-prompt :initial (concat text "\n\n"))))
+            (agent-shell-prompt-queue
+             (agent-shell--prompt-queue-read :initial (concat text "\n\n"))))
         (agent-shell-insert :text text :shell-buffer shell-buffer))))))
 
 (cl-defun agent-shell--get-region-context (&key deactivate no-error agent-cwd)
@@ -9681,44 +9681,69 @@ Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, PARAMETERS, and OUTPUT."
 
 ;;; Queueing
 
-(cl-defun agent-shell--process-pending-request ()
-  "Process the next pending request from the queue if available."
+;; The queueing commands were renamed to the `agent-shell-prompt-queue'
+;; namespace.  A package upgrade reloads this file into a running session
+;; (see `package--reload-previously-loaded'), which redefines the new
+;; names but leaves the old ones bound to stale definitions.  Unbind them
+;; so they no longer show up in `M-x' or run outdated code.
+;; TODO: Remove after 2026-08-28.
+(dolist (command '(agent-shell-queue-request
+                   agent-shell-resume-pending-requests
+                   agent-shell-remove-pending-request))
+  (fmakunbound command))
+
+(defun agent-shell--prompt-queue-migrate ()
+  "Migrate the obsolete `:pending-requests' state key to `:pending-prompts'.
+
+Preserves queued prompts in live shells created before the key was
+renamed (e.g. across a mid-session package upgrade).
+
+TODO: Remove after 2026-08-28."
+  (when (and (assq :pending-requests agent-shell--state)
+             (not (assq :pending-prompts agent-shell--state)))
+    (nconc agent-shell--state
+           (list (cons :pending-prompts
+                       (map-elt agent-shell--state :pending-requests))))))
+
+(cl-defun agent-shell--prompt-queue-process-next ()
+  "Process the next pending prompt from the queue if available."
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
-  (when-let* ((pending (map-elt agent-shell--state :pending-requests))
-              (next-request (car pending)))
-    (map-put! agent-shell--state :pending-requests (cdr pending))
+  (agent-shell--prompt-queue-migrate)
+  (when-let* ((pending (map-elt agent-shell--state :pending-prompts))
+              (next-prompt (car pending)))
+    (map-put! agent-shell--state :pending-prompts (cdr pending))
     (agent-shell--insert-to-shell-buffer
-     :text next-request
+     :text next-prompt
      :submit t
      :no-focus t)))
 
-(defun agent-shell--display-pending-requests ()
-  "Display pending requests in the shell buffer if queue is not empty."
+(defun agent-shell--prompt-queue-display ()
+  "Display pending prompts in the shell buffer if queue is not empty."
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
-  (unless (seq-empty-p (map-elt agent-shell--state :pending-requests))
+  (agent-shell--prompt-queue-migrate)
+  (unless (seq-empty-p (map-elt agent-shell--state :pending-prompts))
     (agent-shell--update-fragment
      :state (agent-shell--state)
-     :block-id (format "%s-pending-requests"
+     :block-id (format "%s-pending-prompts"
                        (map-elt (agent-shell--state) :request-count))
-     :body (format "Pending requests: %d
+     :body (format "Pending prompts: %d
 
 %s
 
-Resume: M-x agent-shell-resume-pending-requests
-Remove: M-x agent-shell-remove-pending-request
+Resume: M-x agent-shell-prompt-queue-resume
+Remove: M-x agent-shell-prompt-queue-remove
 "
-                   (seq-length (map-elt agent-shell--state :pending-requests))
+                   (seq-length (map-elt agent-shell--state :pending-prompts))
                    (mapconcat
-                    (lambda (idx-req)
-                      (let* ((req (car idx-req))
-                             (idx (cdr idx-req))
-                             (first-line (car (split-string req "\n" t))))
+                    (lambda (idx-prompt)
+                      (let ((idx (cdr idx-prompt))
+                            (first-line (car (split-string (car idx-prompt) "\n" t))))
                         (format "  %d: \"%s\""
                                 (1+ idx)
                                 (truncate-string-to-width first-line 80 nil nil "..."))))
-                    (seq-map-indexed #'cons (map-elt agent-shell--state :pending-requests))
+                    (seq-map-indexed #'cons (map-elt agent-shell--state :pending-prompts))
                     "\n"))
      :create-new t)))
 
@@ -9727,17 +9752,17 @@ Remove: M-x agent-shell-remove-pending-request
 
 Like `message', but binds `message-log-max' to nil so the text is shown
 transiently and not recorded in the *Messages* buffer.  Useful for
-ephemeral status such as the pending request queue."
+ephemeral status such as the pending prompt queue."
   (let ((message-log-max nil))
     (apply #'message format-string args)))
 
-(cl-defun agent-shell--view-pending-prompts (&key active-prompt pending-prompts)
+(cl-defun agent-shell--prompt-queue-echo (&key active-prompt pending-prompts)
   "Message the in-progress prompt and PENDING-PROMPTS to the echo area.
 
 ACTIVE-PROMPT is the prompt currently running, or nil if none.
 
 PENDING-PROMPTS is a list of pending prompt strings, in the same form as
-\(map-elt agent-shell--state :pending-requests).
+\(map-elt agent-shell--state :pending-prompts).
 
 Each prompt is shown on a single line, prefixed by a status column
 \(\"active\" or \"queued\"), and truncated to fit the frame width so it
@@ -9779,24 +9804,25 @@ messages:
                   pending-prompts))
         "\n")))))
 
-(cl-defun agent-shell--enqueue-request (&key prompt)
-  "Add PROMPT to the pending requests queue and echo the resulting queue.
+(cl-defun agent-shell--prompt-queue-enqueue (&key prompt)
+  "Add PROMPT to the pending prompts queue and echo the resulting queue.
 
-The running request (the most recent `comint-input-ring' entry) is shown
-as \"active\" and the queued requests, PROMPT included, as \"queued\"."
+The running prompt (the most recent `comint-input-ring' entry) is shown
+as \"active\" and the queued prompts, PROMPT included, as \"queued\"."
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
-  (map-put! agent-shell--state :pending-requests
-            (append (map-elt agent-shell--state :pending-requests)
+  (agent-shell--prompt-queue-migrate)
+  (map-put! agent-shell--state :pending-prompts
+            (append (map-elt agent-shell--state :pending-prompts)
                     (list prompt)))
-  (agent-shell--view-pending-prompts
+  (agent-shell--prompt-queue-echo
    :active-prompt (when (and (bound-and-true-p comint-input-ring)
                              (not (ring-empty-p comint-input-ring)))
                     (ring-ref comint-input-ring 0))
-   :pending-prompts (map-elt agent-shell--state :pending-requests)))
+   :pending-prompts (map-elt agent-shell--state :pending-prompts)))
 
-(cl-defun agent-shell--read-queue-prompt (&key initial)
-  "Read a queue-request prompt from the minibuffer.
+(cl-defun agent-shell--prompt-queue-read (&key initial)
+  "Read a queue prompt from the minibuffer.
 
 When INITIAL is non-nil, prefill the minibuffer with it and leave
 point at the end (ready to type below the prefill).
@@ -9810,14 +9836,14 @@ agent commands when the agent has reported them."
           (when initial
             (insert initial)))
       (read-string (or (map-nested-elt (agent-shell--state) '(:agent-config :shell-prompt))
-                       "Enqueue request: ")))))
+                       "Enqueue prompt: ")))))
 
-(defun agent-shell-queue-request (prompt)
-  "Queue or immediately send a request depending on shell busy state.
+(defun agent-shell-prompt-queue (prompt)
+  "Queue or immediately send a prompt depending on shell busy state.
 
 Read PROMPT from the minibuffer.  If the shell is busy, add it to the pending
-requests queue.  Otherwise, submit it immediately.  Queued requests will be
-automatically sent when the current request completes.
+prompts queue.  Otherwise, submit it immediately.  Queued prompts will be
+automatically sent when the current prompt completes.
 
 While reading, @ completes project files and / completes available agent
 commands when the agent has reported them."
@@ -9825,9 +9851,9 @@ commands when the agent has reported them."
    (progn
      (unless (derived-mode-p 'agent-shell-mode)
        (error "Not in a shell"))
-     (list (agent-shell--read-queue-prompt))))
+     (list (agent-shell--prompt-queue-read))))
   (if (shell-maker-busy)
-      (agent-shell--enqueue-request :prompt prompt)
+      (agent-shell--prompt-queue-enqueue :prompt prompt)
     (agent-shell--insert-to-shell-buffer :text prompt :submit t :no-focus t)))
 
 (defun agent-shell-narrow-to-block (count)
@@ -9853,8 +9879,8 @@ the originating key) so the user can type `r' as plain input.
 Otherwise, when a region is active, wrap it as a Markdown block quote.
 If the shell is not busy, insert the quote at the latest prompt with
 point left below it, ready to type.  If the shell is busy, read a
-follow-up request in the minibuffer prefilled with the block quote
-and queue it via `agent-shell-queue-request'."
+follow-up prompt in the minibuffer prefilled with the block quote
+and queue it via `agent-shell-prompt-queue'."
   (declare (modes agent-shell-mode))
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
@@ -9874,44 +9900,47 @@ and queue it via `agent-shell-queue-request'."
                    (string-trim
                     (map-elt (agent-shell--get-region :deactivate t) :content)))))
       (if (shell-maker-busy)
-          (agent-shell-queue-request
-           (agent-shell--read-queue-prompt :initial (concat "\n\n" quoted "\n\n")))
+          (agent-shell-prompt-queue
+           (agent-shell--prompt-queue-read :initial (concat "\n\n" quoted "\n\n")))
         (goto-char (point-max))
         (insert "\n\n" quoted "\n\n"))))
    ;; Otherwise: fall back to self-insert.
    (t
     (self-insert-command 1))))
 
-(defun agent-shell-resume-pending-requests ()
-  "Resume processing pending requests in the queue."
+(defun agent-shell-prompt-queue-resume ()
+  "Resume processing pending prompts in the queue."
   (declare (modes agent-shell-mode))
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
-  (when (seq-empty-p (map-elt agent-shell--state :pending-requests))
-    (user-error "No pending requests"))
+  (agent-shell--prompt-queue-migrate)
+  (when (seq-empty-p (map-elt agent-shell--state :pending-prompts))
+    (user-error "No pending prompts"))
   (if (shell-maker-busy)
-      (message "Shell is busy, requests will auto-resume when ready")
-    (agent-shell--process-pending-request)))
+      (message "Shell is busy, prompts will auto-resume when ready")
+    (agent-shell--prompt-queue-process-next)))
 
-(defun agent-shell-remove-pending-request (&optional remove-index)
-  "Remove all pending requests or a specific request by REMOVE-INDEX.
+(defun agent-shell-prompt-queue-remove (&optional remove-index)
+  "Remove all pending prompts or a specific prompt by REMOVE-INDEX.
 
-When called interactively with pending requests, prompt to either remove all
-or select a specific request to remove."
+When called interactively with pending prompts, prompt to either remove all
+or select a specific prompt to remove."
   (declare (modes agent-shell-mode))
   (interactive
-   (let ((pending (map-elt agent-shell--state :pending-requests)))
+   (progn
      (unless (derived-mode-p 'agent-shell-mode)
        (error "Not in a shell"))
-     (when (seq-empty-p pending)
-       (user-error "No pending requests"))
-     (let* ((choices (append
+     (agent-shell--prompt-queue-migrate)
+     (when (seq-empty-p (map-elt agent-shell--state :pending-prompts))
+       (user-error "No pending prompts"))
+     (let* ((pending (map-elt agent-shell--state :pending-prompts))
+            (choices (append
                       '(("Remove all" . remove-all))
                       (seq-map-indexed
-                       (lambda (req idx)
+                       (lambda (prompt idx)
                          (cons (format "%d: %s" (1+ idx)
-                                       (truncate-string-to-width req 60 nil nil "..."))
+                                       (truncate-string-to-width prompt 60 nil nil "..."))
                                idx))
                        pending)))
             (selection (cdr (assoc (completing-read "Remove: " choices nil t) choices))))
@@ -9919,17 +9948,17 @@ or select a specific request to remove."
   (if remove-index
       (when (y-or-n-p (format "Remove \"%s\"?"
                               (nth remove-index
-                                   (map-elt agent-shell--state :pending-requests))))
-        (let* ((pending (map-elt agent-shell--state :pending-requests))
+                                   (map-elt agent-shell--state :pending-prompts))))
+        (let* ((pending (map-elt agent-shell--state :pending-prompts))
                (new-pending (append (seq-take pending remove-index)
                                     (seq-drop pending (1+ remove-index)))))
-          (map-put! agent-shell--state :pending-requests new-pending)
+          (map-put! agent-shell--state :pending-prompts new-pending)
           (message "Removed (%d remaining)"
                    (length new-pending))))
-    (when (y-or-n-p (format "Remove %d pending requests?"
-                            (length (map-elt agent-shell--state :pending-requests))))
-      (map-put! agent-shell--state :pending-requests nil)
-      (message "Removed all pending requests"))))
+    (when (y-or-n-p (format "Remove %d pending prompts?"
+                            (length (map-elt agent-shell--state :pending-prompts))))
+      (map-put! agent-shell--state :pending-prompts nil)
+      (message "Removed all pending prompts"))))
 
 (defun agent-shell-trim (text)
   "Strip surrounding whitespace from TEXT, preserving renderer padding.

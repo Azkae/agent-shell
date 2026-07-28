@@ -155,7 +155,7 @@ change by content."
                                 (line-beginning-position) (line-end-position))
                                "line 21")))
             (when (buffer-live-p buf) (kill-buffer buf))
-            (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))))
+            (when (find-buffer-visiting file) (kill-buffer (find-buffer-visiting file)))))
       (delete-file file))))
 
 (ert-deftest agent-shell-diff-open-file-falls-back-to-new-side-test ()
@@ -182,7 +182,7 @@ fall back to searching the new-side text.  Mirrors the real Claude Code
                                 (line-beginning-position) (line-end-position))
                                "ADDED")))
             (when (buffer-live-p buf) (kill-buffer buf))
-            (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))))
+            (when (find-buffer-visiting file) (kill-buffer (find-buffer-visiting file)))))
       (delete-file file))))
 
 (ert-deftest agent-shell-diff-open-file-disambiguates-with-hint-test ()
@@ -209,7 +209,7 @@ land on the first.  The hint line steers it to the intended occurrence."
                 ;; Second "target" is at line 5, not the first at line 2.
                 (should (equal (line-number-at-pos) 5)))
             (when (buffer-live-p buf) (kill-buffer buf))
-            (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))))
+            (when (find-buffer-visiting file) (kill-buffer (find-buffer-visiting file)))))
       (delete-file file))))
 
 (ert-deftest agent-shell-diff-on-exit-skipped-when-calling-buffer-dead-test ()

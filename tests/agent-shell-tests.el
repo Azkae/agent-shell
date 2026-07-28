@@ -915,7 +915,7 @@ _world_")
                  (setq captured-on-success (plist-get args :on-success))))
               ((symbol-function 'shell-maker-finish-output)
                (lambda (&rest _)))
-              ((symbol-function 'agent-shell--process-pending-request)
+              ((symbol-function 'agent-shell--prompt-queue-process-next)
                (lambda (&rest _))))
       (agent-shell-subscribe-to
        :shell-buffer (current-buffer)
@@ -988,14 +988,14 @@ compose buffer keeps its draft in place and stays in edit mode."
   "Composed prompts are queued, cleared, and dismissed or kept.
 
 `agent-shell-viewport--compose-queue' hands the draft to
-`agent-shell-queue-request' and clears the compose buffer;
+`agent-shell-prompt-queue' and clears the compose buffer;
 `agent-shell-viewport-compose-send-and-dismiss' additionally dismisses
 the window.  An empty draft signals an error."
   (let ((agent-shell-header-style 'graphical)
         queued dismissed)
     (cl-letf (((symbol-function 'agent-shell-viewport--shell-buffer)
                (lambda (&rest _) (current-buffer)))
-              ((symbol-function 'agent-shell-queue-request)
+              ((symbol-function 'agent-shell-prompt-queue)
                (lambda (prompt) (setq queued prompt)))
               ((symbol-function 'agent-shell-viewport--dismiss)
                (lambda (&rest _) (setq dismissed t)))
