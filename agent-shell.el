@@ -6461,18 +6461,21 @@ agent's protocol support requires it:
   "Return non-nil when STATE should buffer notifications during restore.
 
 Only true when the effective verbosity (see
-`agent-shell--effective-restore-verbosity') is `last' or
-`first-last' and the agent supports `session/load' (so the
-buffered prompt turns can be replayed after the load completes)."
-  (and (memq (agent-shell--effective-restore-verbosity state) '(last first-last))
+`agent-shell--effective-restore-verbosity') is `last', `first-last',
+or `full' and the agent supports `session/load' (so the buffered
+prompt turns can be replayed after the load completes).  Buffering
+matters because a live shell prompt is shown early: rendering the
+replay inline would land it on top of that prompt instead of above
+it."
+  (and (memq (agent-shell--effective-restore-verbosity state) '(last first-last full))
        (map-elt state :supports-session-load)))
 
 (defun agent-shell--make-pending-restore ()
   "Return a fresh pending-restore accumulator.
 
 Buffers `session/update' notifications grouped by prompt turn so
-the first and last turns can be replayed once `session/load'
-completes."
+the turns selected by `agent-shell-session-restore-verbosity' can
+be replayed once `session/load' completes."
   (list (cons :prompt-turns (list nil))
         (cons :in-agent-response nil)))
 
@@ -6541,6 +6544,8 @@ Honors `agent-shell-session-restore-verbosity':
           more than two turns exist, then the last turn (when
           distinct from the first).
 
+  `full': replays every buffered turn in chronological order.
+
 Notifications are dispatched through `agent-shell--on-notification'
 so they render as they would during a live turn.  Clears the
 pending-restore state once replay completes."
@@ -6588,8 +6593,15 @@ pending-restore state once replay completes."
                     :body (agent-shell--make-boxed-message
                            :text "Note: truncated history (first and last only)")))
                  (when (> count 1)
-                   (agent-shell--replay-turn state (car (last prompt-turns))))))))
-        (map-put! state :active-requests saved-active-requests)))))
+                   (agent-shell--replay-turn state (car (last prompt-turns)))))
+                ('full
+                 (dolist (turn prompt-turns)
+                   (agent-shell--replay-turn state turn))))))
+        (map-put! state :active-requests saved-active-requests))
+      ;; Point followed the narrowed history insertions up above the live
+      ;; prompt.  Return it to the input area so the cursor lands where the
+      ;; user types (matching pre-early-prompt restore behavior).
+      (goto-char (point-max)))))
 
 (cl-defun agent-shell--initiate-session-resume-by-id (&key session-id session-title shell-buffer on-session-init)
   "Resume or load session SESSION-ID with SHELL-BUFFER and ON-SESSION-INIT.
