@@ -8350,6 +8350,13 @@ Returns nil if the ACP-OPTION kind is not recognized."
 (defun agent-shell-jump-to-latest-permission-button-row ()
   "Jump to the latest permission button row.
 
+Moves point to the first button of the latest permission row and syncs
+that position into every window showing the buffer, across frames.  The
+row is thus revealed even when the shell window is not the selected one
+\(for example when a prompt bar has focus); a bare `goto-char' would only
+move point in the selected window.  When the buffer is not displayed,
+only its point moves, so a later display still shows the row.
+
 Returns non-nil if a permission button was found, nil otherwise."
   (declare (modes agent-shell-mode))
   (interactive)
@@ -8357,17 +8364,14 @@ Returns non-nil if a permission button was found, nil otherwise."
                        (goto-char (point-max))
                        (agent-shell-previous-permission-button))))
     (deactivate-mark)
-    ;; Unless buffer is in window, cursor is not moved.
-    ;; Make sure the cursor is moved even if buffer is in background.
-    (when-let* ((window (or (get-buffer-window (current-buffer))
-                            (seq-first (window-list)))))
-      (save-window-excursion
-        (set-window-buffer window (current-buffer))
-        (with-selected-window window
-          (goto-char found)
-          (beginning-of-line)
-          (agent-shell-next-permission-button)
-          (set-window-point window (point)))))
+    (let ((target (save-excursion
+                    (goto-char found)
+                    (beginning-of-line)
+                    (agent-shell-next-permission-button)
+                    (point))))
+      (goto-char target)
+      (dolist (window (get-buffer-window-list (current-buffer) nil t))
+        (set-window-point window target)))
     t))
 
 (defun agent-shell-next-permission-button ()
