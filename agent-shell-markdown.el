@@ -1343,10 +1343,18 @@ item could still stream in below it.")
            (mod depth (length agent-shell-markdown-list-bullets))))
 
 (defun agent-shell-markdown--replace-list-marker (start end glyph)
-  "Replace buffer text [START, END) with GLYPH, faced as a list marker."
-  (delete-region start end)
-  (goto-char start)
-  (insert (propertize glyph 'face 'agent-shell-markdown-list-marker)))
+  "Replace buffer text [START, END) with GLYPH, faced as a list marker.
+The replaced text's application-level properties (agent-shell block
+ids and `agent-shell-ui-state', `read-only', `field') are carried
+onto GLYPH so it stays part of the surrounding output block; a bare
+insert would split that block and make navigation stop on the
+glyph."
+  (let ((carried (agent-shell-markdown--carry-properties start)))
+    (delete-region start end)
+    (goto-char start)
+    (insert (propertize glyph 'face 'agent-shell-markdown-list-marker))
+    (when carried
+      (add-text-properties start (point) carried))))
 
 (cl-defun agent-shell-markdown--render-list-line
     (&key line-start line-end indent-width marker-start marker-end

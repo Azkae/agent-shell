@@ -876,6 +876,20 @@ Outro"))))
                    (point-min) (point-max)
                    'agent-shell-markdown-list-rendered nil)))))
 
+(ert-deftest agent-shell-markdown-list-glyph-keeps-surrounding-block ()
+  ;; Regression: replacing a marker with a glyph must carry the
+  ;; surrounding output's properties (e.g. `agent-shell-ui-state'), or
+  ;; the glyph splits the navigatable block and item navigation stops on
+  ;; every bullet.
+  (let ((agent-shell-markdown-list-bullets '("•"))
+        (state (list (cons :navigatable t))))
+    (with-temp-buffer
+      (insert (propertize "- One\n- [x] Two\n" 'agent-shell-ui-state state))
+      (agent-shell-markdown-replace-markup)
+      ;; No rendered char (glyphs included) drops the block state.
+      (should-not (text-property-not-all (point-min) (point-max)
+                                         'agent-shell-ui-state state)))))
+
 (ert-deftest agent-shell-markdown-inline-code-body-protected-across-calls ()
   ;; Streaming counterpart for inline code: after the backticks
   ;; are gone, body chars must not be re-bolded on a second pass.
