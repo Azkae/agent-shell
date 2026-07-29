@@ -751,6 +751,131 @@ Outro"))))
 │ 3 │ 4 │
 "))))
 
+(ert-deftest agent-shell-markdown-list-unordered-renders-bullet-as-text ()
+  ;; The marker is replaced with the bullet as real buffer text (so a
+  ;; plain copy yields the glyph); the markdown is stashed on
+  ;; `agent-shell-markdown-source' for copy-as-markdown.  The line gets a
+  ;; display-only base indent and is tagged so `--pad-rendered-blocks'
+  ;; frames it.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "- Item\n")
+      (agent-shell-markdown-replace-markup)
+      (should (equal (buffer-substring-no-properties (point-min) (1+ (point-min)))
+                     "•"))
+      (should (null (get-text-property (point-min) 'display)))
+      (should (equal (get-text-property (point-min) 'agent-shell-markdown-source)
+                     "- Item"))
+      (should (equal (get-text-property (point-min) 'line-prefix)
+                     agent-shell-markdown--list-line-prefix))
+      (should (get-text-property (point-min)
+                                 'agent-shell-markdown-list-rendered))
+      (should (get-text-property (point-min) 'agent-shell-markdown-frozen)))))
+
+(ert-deftest agent-shell-markdown-list-bullets-cycle-by-depth ()
+  ;; Two-space nesting steps one glyph per level.  Bind a multi-glyph
+  ;; set so the test doesn't depend on the configured default.
+  (let ((agent-shell-markdown-list-bullets '("A" "B")))
+    (with-temp-buffer
+      (insert "- Top\n  - Nested\n")
+      (agent-shell-markdown-replace-markup)
+      (goto-char (point-min))
+      (should (equal (char-to-string (char-after)) "A"))
+      (forward-line 1)
+      (skip-chars-forward " ")
+      (should (equal (char-to-string (char-after)) "B")))))
+
+(ert-deftest agent-shell-markdown-list-task-checkboxes ()
+  ;; `- [ ]' / `- [x]' swap to matching box glyphs; a checked item's
+  ;; text carries `agent-shell-markdown-list-done', an unchecked one
+  ;; does not.
+  (with-temp-buffer
+    (insert "- [ ] Todo\n- [x] Done\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    (should (equal (buffer-substring-no-properties
+                    (point)
+                    (+ (point) (length agent-shell-markdown-list-checkbox-unchecked)))
+                   agent-shell-markdown-list-checkbox-unchecked))
+    (save-excursion
+      (search-forward "Todo")
+      (should (null (get-text-property (1- (point)) 'face))))
+    (forward-line 1)
+    (should (equal (buffer-substring-no-properties
+                    (point)
+                    (+ (point) (length agent-shell-markdown-list-checkbox-checked)))
+                   agent-shell-markdown-list-checkbox-checked))
+    (search-forward "Done")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'agent-shell-markdown-list-done))))
+
+(ert-deftest agent-shell-markdown-list-ordered-keeps-number ()
+  ;; Ordered items keep their number (no `display' swap) and face the
+  ;; marker; no auto-renumbering, so the source round-trips.
+  (with-temp-buffer
+    (insert "1. First\n")
+    (agent-shell-markdown-replace-markup)
+    (should (null (get-text-property (point-min) 'display)))
+    (should (eq (char-after (point-min)) ?1))
+    (should (eq (get-text-property (point-min) 'face)
+                'agent-shell-markdown-list-marker))
+    (should (equal (get-text-property (point-min) 'line-prefix)
+                   agent-shell-markdown--list-line-prefix))))
+
+(ert-deftest agent-shell-markdown-list-framed-when-flush-against-prose ()
+  ;; A list flush against prose gains a blank line on each side.  The
+  ;; buffer text shows the rendered glyphs (base indent is display-only).
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "Intro\n- One\n- Two\nOutro")
+      (agent-shell-markdown-replace-markup)
+      (should (equal (substring-no-properties (buffer-string))
+                     "Intro\n\n• One\n• Two\n\nOutro")))))
+
+(ert-deftest agent-shell-markdown-list-below-gap-held-back-while-streaming ()
+  ;; Regression: a new item streaming in after a rendered list must fold
+  ;; into it, not be split off by a framing blank line.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "Intro\n- One\n- Two\n")
+      (agent-shell-markdown-replace-markup)
+      (goto-char (point-max))
+      (insert "- Three\n")
+      (agent-shell-markdown-replace-markup)
+      (should (equal (substring-no-properties (buffer-string))
+                     "Intro\n\n• One\n• Two\n• Three\n")))))
+
+(ert-deftest agent-shell-markdown-list-reconstructs-to-source ()
+  ;; The rendered glyphs are real buffer text, but each line stashes its
+  ;; markdown on `agent-shell-markdown-source', so copy-as-markdown
+  ;; recovers the original verbatim.
+  (should (equal (agent-shell-markdown-tests--roundtrip
+                  "- First\n  - Nested\n- [x] Done\n1. One\n")
+                 "- First\n  - Nested\n- [x] Done\n1. One\n")))
+
+(ert-deftest agent-shell-markdown-list-not-styled-in-code-block ()
+  ;; A `- x' line inside a fenced block is code, not a list: its marker
+  ;; is left untouched and it isn't tagged as a rendered list.
+  (with-temp-buffer
+    (insert "```\n- not a list\n```\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    (search-forward "- not a list")
+    (goto-char (match-beginning 0))
+    (should (eq (char-after) ?-))
+    (should (null (get-text-property
+                   (point) 'agent-shell-markdown-list-rendered)))))
+
+(ert-deftest agent-shell-markdown-list-does-not-match-divider-or-emphasis ()
+  ;; `---' is a divider and `*word*' is emphasis; neither is a list (the
+  ;; marker requires a following space).
+  (with-temp-buffer
+    (insert "---\n*word*\n")
+    (agent-shell-markdown-replace-markup)
+    (should (null (text-property-not-all
+                   (point-min) (point-max)
+                   'agent-shell-markdown-list-rendered nil)))))
+
 (ert-deftest agent-shell-markdown-inline-code-body-protected-across-calls ()
   ;; Streaming counterpart for inline code: after the backticks
   ;; are gone, body chars must not be re-bolded on a second pass.
