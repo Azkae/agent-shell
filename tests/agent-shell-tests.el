@@ -4667,5 +4667,43 @@ think-kind calls into Thinking."
     (should (equal (agent-shell--format-buffer-name "Claude" "agent-shell")
                    "Claude: agent-shell"))))
 
+(ert-deftest agent-shell--live-input-prompt-p-test ()
+  "Test `agent-shell--live-input-prompt-p' across buffer states."
+  (with-temp-buffer
+    ;; Prompt at the very end of the buffer with an empty input area is live.
+    (insert "output\n")
+    (let ((start (copy-marker (point) nil)))
+      (insert "> ")
+      ;; End marker stays pinned at the prompt end (insertion type nil)
+      ;; so text appended after it does not drag it along, mirroring a
+      ;; real `comint-last-prompt' cdr.
+      (let ((prompt (cons start (copy-marker (point) nil))))
+        (should (agent-shell--live-input-prompt-p prompt))
+        ;; Unsubmitted typed input (no `field' `output') keeps it live.
+        (insert "typed")
+        (should (agent-shell--live-input-prompt-p prompt))
+        ;; Agent output streaming below a stale prompt makes it not-live.
+        (let ((out-start (point)))
+          (insert "streamed")
+          (put-text-property out-start (point) 'field 'output))
+        (should-not (agent-shell--live-input-prompt-p prompt))))))
+
+(ert-deftest agent-shell--live-input-prompt-p-narrowed-above-prompt-test ()
+  "Guard against inverted `text-property-any' bounds while narrowed.
+Regression for session restore inserting the truncated-history note
+above the live prompt, where the buffer is narrowed to end before the
+prompt and the prompt end sits past the accessible `point-max'."
+  (with-temp-buffer
+    (insert "output\n")
+    (let ((prompt-start (copy-marker (point) nil)))
+      (insert "> ")
+      (let ((prompt (cons prompt-start (copy-marker (point) t))))
+        (save-restriction
+          ;; Narrow above the prompt: `point-max' now precedes the prompt
+          ;; end marker, mirroring `agent-shell--render-pending-restore'.
+          (narrow-to-region (point-min) (marker-position prompt-start))
+          ;; Must not raise `Args out of range' and must report not-live.
+          (should-not (agent-shell--live-input-prompt-p prompt)))))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

@@ -4412,9 +4412,15 @@ This tells a real prompt awaiting input, possibly with unsubmitted typed
 text, apart from a stale prompt left mid-buffer while output streams
 below it (where `comint-last-prompt' still points at the previous
 prompt).  Output carries a `field' of `output'; typed input does not."
-  (let ((end (marker-position (cdr prompt))))
-    (or (= end (point-max))
-        (not (text-property-any end (point-max) 'field 'output)))))
+  (let ((end (marker-position (cdr prompt)))
+        (max (point-max)))
+    ;; When narrowed above the prompt, `end' sits past the accessible
+    ;; `point-max' and `text-property-any' would get inverted bounds.
+    ;; Treat that as not-live so callers fall back to inserting at the
+    ;; narrowed `point-max' (still above the prompt).
+    (and (<= end max)
+         (or (= end max)
+             (not (text-property-any end max 'field 'output))))))
 
 (cl-defun agent-shell--update-bootstrapping-fragment (&rest args)
   "Update a `bootstrapping'-namespace fragment above the shell prompt.
