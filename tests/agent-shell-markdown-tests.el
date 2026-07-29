@@ -307,6 +307,54 @@ streaming **not bold**" nil)))))
     (should (equal (agent-shell-markdown-reconstruct (point-min) (point-max))
                    "x ![](https://example.com/a.png) y"))))
 
+(ert-deftest agent-shell-markdown-image-attributes-parse ()
+  (should (equal (agent-shell-markdown--parse-image-attributes "width=300")
+                 '((:max-width . 300))))
+  (should (equal (agent-shell-markdown--parse-image-attributes "width=300px height=200")
+                 '((:max-width . 300) (:max-height . 200))))
+  ;; Classes / ids are ignored; only width / height are picked up.
+  (should (equal (agent-shell-markdown--parse-image-attributes ".hero width=42")
+                 '((:max-width . 42))))
+  (should (null (agent-shell-markdown--parse-image-attributes "caption"))))
+
+(ert-deftest agent-shell-markdown-image-attributes-round-trip ()
+  ;; A trailing `{width=...}' block is consumed with the image (no leaked
+  ;; braces) and folded into the stashed source, so copy-as-markdown
+  ;; restores the full markup.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest _) '(image :type svg :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "see ![logo](%s){width=300} end" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (equal (substring-no-properties (buffer-string))
+                           "see logo end"))
+            (should (equal (agent-shell-markdown-reconstruct (point-min) (point-max))
+                           (format "see ![logo](%s){width=300} end" image-file)))))
+      (delete-file image-file))))
+
+(ert-deftest agent-shell-markdown-image-attributes-sized-create-image ()
+  ;; `width='/`height=' become per-image `:max-width' / `:max-height' px
+  ;; passed to `create-image'.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg"))
+        (props nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest args) (setq props (nthcdr 3 args)) '(image :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "![logo](%s){width=300 height=200}" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (equal (plist-get props :max-width) 300))
+            (should (equal (plist-get props :max-height) 200))))
+      (delete-file image-file))))
+
 (ert-deftest agent-shell-markdown-convert-link-angle-brackets ()
   ;; CommonMark angle-bracketed destination `[t](<url>)' renders like the
   ;; bare form, with both the brackets and the angle brackets stripped.

@@ -877,6 +877,17 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                                 (buffer-substring (match-beginning 1)
                                                   (match-end 1))))
                  (url (agent-shell-markdown--link-markup-url))
+                 ;; Optional Pandoc-style `{width= height=}' block directly
+                 ;; after the markup; consumed with it so it doesn't leak as
+                 ;; literal text, and folded into the stashed source.
+                 (attribute-match (save-excursion
+                                    (goto-char markup-end)
+                                    (when (looking-at "{\\([^}\n]*\\)}")
+                                      (cons (match-string 1) (match-end 0)))))
+                 (attributes (when attribute-match
+                               (agent-shell-markdown--parse-image-attributes
+                                (car attribute-match))))
+                 (content-end (if attribute-match (cdr attribute-match) markup-end))
                  ;; Stash the original `![alt](url)' markup so
                  ;; `agent-shell-copy-as-markdown' round-trips the image back to
                  ;; source rather than yielding the bare alt placeholder (mirrors
@@ -884,7 +895,7 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                  ;; an already-captured source.
                  (source (unless (get-text-property markup-start
                                                     'agent-shell-markdown-source)
-                           (agent-shell-markdown-reconstruct markup-start markup-end)))
+                           (agent-shell-markdown-reconstruct markup-start content-end)))
                  (path (agent-shell-markdown--resolve-image-url
                         url image-cache-directory)))
             (cond
@@ -893,9 +904,11 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                    (display-graphic-p))
               (let ((image (create-image
                             path nil nil
-                            :max-width (agent-shell-markdown--image-max-width))))
+                            :max-width (or (map-elt attributes :max-width)
+                                           (agent-shell-markdown--image-max-width))
+                            :max-height (map-elt attributes :max-height))))
                 (image-flush image)
-                (delete-region markup-start markup-end)
+                (delete-region markup-start content-end)
                 (goto-char markup-start)
                 (insert placeholder)
                 (let ((end (+ markup-start (length placeholder))))
@@ -916,7 +929,7 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                                (apply #'propertize url
                                       (text-properties-at markup-start))
                              placeholder)))
-                (delete-region markup-start markup-end)
+                (delete-region markup-start content-end)
                 (goto-char markup-start)
                 (insert label)
                 (let ((end (+ markup-start (length label))))
@@ -2964,6 +2977,46 @@ Resolves `agent-shell-markdown-image-max-width' which may be an integer
         (round (* agent-shell-markdown-image-max-width
                   (window-body-width window t))))
     agent-shell-markdown-image-max-width))
+
+(defun agent-shell-markdown--image-attribute-pixels (value dimension)
+  "Resolve a Pandoc image-attribute VALUE to a pixel count for DIMENSION.
+VALUE is a string such as `300', `300px', or `50%'.  DIMENSION is
+`width' or `height'; a percentage resolves against the window body's
+pixel size in that dimension.  Returns an integer, or nil when VALUE
+is not a recognised size.
+
+For example, (agent-shell-markdown--image-attribute-pixels \"300\" \\='width)
+returns 300."
+  (when-let* (((string-match "\\`\\([0-9]+\\)\\(%\\|px\\)?\\'" value))
+              (number (string-to-number (match-string 1 value)))
+              (window (or (get-buffer-window (current-buffer))
+                          (frame-first-window))))
+    (if (equal (match-string 2 value) "%")
+        (round (* (/ number 100.0)
+                  (if (eq dimension 'width)
+                      (window-body-width window t)
+                    (window-body-height window t))))
+      number)))
+
+(defun agent-shell-markdown--parse-image-attributes (string)
+  "Parse Pandoc-style image attributes from STRING (a `{...}' body).
+Returns an alist with `:max-width' and/or `:max-height' pixel values
+for any `width='/`height=' entries found, resolved via
+`agent-shell-markdown--image-attribute-pixels'.  Other attributes
+\(classes, ids) are ignored.
+
+For example, (agent-shell-markdown--parse-image-attributes \"width=300\")
+returns \\='((:max-width . 300))."
+  (let (attributes)
+    (dolist (dimension '(width height))
+      (when-let* (((string-match (format "\\_<%s[ \t]*=[ \t]*\\([^ \t}]+\\)"
+                                         dimension)
+                                 string))
+                  (pixels (agent-shell-markdown--image-attribute-pixels
+                           (match-string 1 string) dimension)))
+        (push (cons (intern (format ":max-%s" dimension)) pixels)
+              attributes)))
+    (nreverse attributes)))
 
 (defun agent-shell-markdown--watermark-start ()
   "Return the position the next scan should start from.
