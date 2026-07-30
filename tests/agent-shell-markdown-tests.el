@@ -1113,7 +1113,7 @@ after" nil)))))
   ;; deterministic.  Other columns stay at natural width.
   (let ((agent-shell-markdown-table-max-width-fraction 1.0))
     (cl-letf (((symbol-function 'agent-shell-markdown--display-width)
-               (lambda () 30)))
+               (lambda (&optional _window) 30)))
       (should (equal (substring-no-properties
                       (agent-shell-markdown-convert
                        "| A | B |
@@ -1129,7 +1129,7 @@ after" nil)))))
   ;; widths are allocated proportionally to their natural width.
   (let ((agent-shell-markdown-table-max-width-fraction 1.0))
     (cl-letf (((symbol-function 'agent-shell-markdown--display-width)
-               (lambda () 30)))
+               (lambda (&optional _window) 30)))
       (should (equal (substring-no-properties
                       (agent-shell-markdown-convert
                        "| Header A | Header B |
@@ -1147,7 +1147,7 @@ after" nil)))))
   ;; \"33\", \"20\") stay intact.
   (let ((agent-shell-markdown-table-max-width-fraction 1.0))
     (cl-letf (((symbol-function 'agent-shell-markdown--display-width)
-               (lambda () 36)))
+               (lambda (&optional _window) 36)))
       (should (equal (substring-no-properties
                       (agent-shell-markdown-convert
                        "| 作曲家 | 主な特徴 |
@@ -1160,6 +1160,28 @@ after" nil)))))
 │      │ 偶然性の音楽の導入で20世 │
 │      │ 紀音楽の概念を根本から問 │
 │      │ い直した                 │")))))
+
+(ert-deftest agent-shell-markdown-table-hard-breaks-long-words-to-fit ()
+  ;; When the window is narrower than a column's longest unbreakable
+  ;; word, the table must shrink that column below the word and
+  ;; hard-break it across lines, so the whole table still fits the
+  ;; window instead of overflowing and line-wrapping as a jumbled
+  ;; block.  Mocks the display width to 24, narrower than the 20-column
+  ;; \"agent-shell-markdown\" word plus borders and the other column.
+  (let ((agent-shell-markdown-table-max-width-fraction 1.0))
+    (cl-letf (((symbol-function 'agent-shell-markdown--display-width)
+               (lambda (&optional _window) 24)))
+      (let ((rendered (substring-no-properties
+                       (agent-shell-markdown-convert
+                        "| Name | Detail |
+|---|---|
+| x | agent-shell-markdown |"))))
+        ;; Every rendered line fits within the window.
+        (should (<= (apply #'max (mapcar #'string-width
+                                         (split-string rendered "\n")))
+                    24))
+        ;; The long word was broken: no line holds it whole.
+        (should-not (string-match-p "agent-shell-markdown" rendered))))))
 
 (ert-deftest agent-shell-markdown-table-longest-word-breaks-at-cjk-chars ()
   ;; Words are unbreakable; line-breakable (category `|') characters
@@ -1210,6 +1232,159 @@ after" nil)))))
                 (get-text-property (point-min) 'agent-shell-ui-state)))
     (should (eq 'my-block
                 (get-text-property (1- (point-max)) 'agent-shell-ui-state)))))
+
+(ert-deftest agent-shell-markdown-table-cell-backtick-does-not-swallow-later-cell ()
+  ;; Regression: a stray unclosed backtick in one table cell must not
+  ;; protect across the `|' boundary and swallow markup (e.g. a link) in
+  ;; a later cell -- a code span cannot cross a cell boundary.
+  (with-temp-buffer
+    (insert "| A | Notes | Ref |\n|---|---|---|\n"
+            "| x | Fenced ` inside | [t](https://example.com/1) |\n")
+    (agent-shell-markdown-replace-markup)
+    ;; The link in the Ref cell renders (its `](url)' markup is gone) and
+    ;; carries the recoverable URL, rather than being left raw.
+    (should-not (save-excursion (goto-char (point-min))
+                                (search-forward "](https" nil t)))
+    (should (save-excursion
+              (goto-char (point-min))
+              (text-property-search-forward 'agent-shell-markdown-url)))))
+
+(ert-deftest agent-shell-markdown-inline-code-unclosed-backtick-protects-rest-of-line ()
+  ;; Outside a table an unmatched backtick still protects the rest of the
+  ;; line (a still-streaming code span), so markup after it is left raw.
+  (let ((s (agent-shell-markdown-convert "a `x **bold** y")))
+    (should (null (get-text-property (string-search "bold" s) 'face s)))))
+
+(ert-deftest agent-shell-markdown-table-offscreen-measures-with-no-window ()
+  ;; Regression: when the shell buffer is rendered while not displayed in
+  ;; any window (common mid-stream), the table renderer must not fall
+  ;; back to `selected-window' and measure cell widths in that window's
+  ;; (foreign) font, which bakes wrong, per-row column widths.  With no
+  ;; window showing the buffer, width measurement must receive a nil
+  ;; window so it uses the deterministic `string-width' path.
+  (let ((windows nil))
+    (cl-letf (((symbol-function 'agent-shell-markdown--table-display-width)
+               (cl-function
+                (lambda (&key str window)
+                  (push window windows)
+                  (string-width str)))))
+      (with-temp-buffer
+        (insert "| A | B |\n|---|---|\n| x | y |\n")
+        (agent-shell-markdown-replace-markup)
+        (should windows)
+        (should (seq-every-p #'null windows))))))
+
+(ert-deftest agent-shell-markdown-rerender-tables-noop-when-undisplayed ()
+  ;; With no window showing the buffer there is nothing to measure
+  ;; against, so re-rendering leaves the buffer untouched (never
+  ;; downgrades a table to string-width).
+  (with-temp-buffer
+    (insert "before\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nafter\n")
+    (agent-shell-markdown-replace-markup)
+    (let ((rendered (buffer-string)))
+      (agent-shell-markdown-rerender-tables)
+      (should (equal (buffer-string) rendered)))))
+
+(ert-deftest agent-shell-markdown-rerender-tables-skips-matching-width ()
+  ;; Re-render touches only tables whose stored
+  ;; `agent-shell-markdown-table-width' differs from the window's
+  ;; current width; a table already laid out for that width is skipped.
+  (with-temp-buffer
+    (insert "| A | B |\n|---|---|\n| 1 | 2 |\n")
+    (agent-shell-markdown-replace-markup)
+    (let ((calls 0))
+      (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'w))
+                ((symbol-function 'window-body-width) (lambda (&rest _) 500))
+                ((symbol-function 'agent-shell-markdown--render-table)
+                 (lambda (_table) (setq calls (1+ calls)))))
+        ;; Stored width (nil, rendered off-screen) differs from 500.
+        (agent-shell-markdown-rerender-tables)
+        (should (= calls 1))
+        ;; Mark the table as already laid out for 500 -> skipped.
+        (put-text-property (point-min) (point-max)
+                           'agent-shell-markdown-table-width 500)
+        (setq calls 0)
+        (agent-shell-markdown-rerender-tables)
+        (should (= calls 0))))))
+
+(ert-deftest agent-shell-markdown-carry-properties-drops-font-lock-face ()
+  ;; `font-lock-face' is our own styling (mirrored from `face'), not a
+  ;; caller property, so it must not ride along on the delete+insert.
+  ;; Carrying the table's first char (a border) would otherwise spread
+  ;; the border face uniformly and grey out the re-rendered table.
+  ;; Caller properties (here a block tag) still ride along.
+  (with-temp-buffer
+    (insert "x")
+    (put-text-property (point-min) (point-max)
+                       'font-lock-face 'agent-shell-markdown-table-border)
+    (put-text-property (point-min) (point-max) 'agent-shell-ui-state 'blk)
+    (let ((carried (agent-shell-markdown--carry-properties (point-min))))
+      (should-not (plist-member carried 'font-lock-face))
+      (should (eq (plist-get carried 'agent-shell-ui-state) 'blk)))))
+
+(ert-deftest agent-shell-markdown-rerendered-table-keeps-per-cell-faces ()
+  ;; Regression: re-rendering a table (e.g. on window resize) must not
+  ;; smear the first char's `font-lock-face' (a border) across every
+  ;; cell.  A fresh render mirrors each cell's `face' to `font-lock-face'
+  ;; on its own, so header cells stay `table-header' and plain data
+  ;; cells stay unstyled rather than all going border-grey.
+  (with-temp-buffer
+    (insert "| A | B |\n|---|---|\n| 1 | 2 |\n")
+    (agent-shell-markdown-replace-markup)
+    ;; Simulate the corrupted post-carry state: a uniform border
+    ;; `font-lock-face' over the whole rendered table, then re-render
+    ;; from the stashed source as a resize would.
+    (when-let* ((region (save-excursion
+                          (goto-char (point-min))
+                          (text-property-search-forward
+                           'agent-shell-markdown-table-source))))
+      (put-text-property (prop-match-beginning region)
+                         (prop-match-end region)
+                         'font-lock-face 'agent-shell-markdown-table-border)
+      (goto-char (prop-match-beginning region))
+      (agent-shell-markdown--render-table
+       (list (cons :source (prop-match-value region))
+             (cons :start (prop-match-beginning region))
+             (cons :end (prop-match-end region)))))
+    ;; Header cell recovers its header face; a plain data cell has no
+    ;; border font-lock-face smeared onto it.
+    (should (eq (get-text-property
+                 (save-excursion (goto-char (point-min))
+                                 (1- (search-forward "A")))
+                 'font-lock-face)
+                'agent-shell-markdown-table-header))
+    (should (null (get-text-property
+                   (save-excursion (goto-char (point-min))
+                                   (1- (search-forward "1")))
+                   'font-lock-face)))))
+
+(ert-deftest agent-shell-markdown-table-sizes-against-destination-window ()
+  ;; Regression: column allocation must size against the table's
+  ;; destination window, not whichever window happens to be selected
+  ;; when the render runs (e.g. a re-layout fired from an idle timer
+  ;; after a resize, with an unrelated wider window selected).  Sizing
+  ;; to the selected window lays the table out too wide and it overflows
+  ;; the window actually showing it.
+  (let ((measured '()))
+    (cl-letf (((symbol-function 'agent-shell-markdown--display-width)
+               (lambda (&optional window)
+                 (push window measured)
+                 ;; Narrow destination window, wide selected window.
+                 (if window 30 200))))
+      (with-temp-buffer
+        (insert "| Feature | Notes |\n|---|---|\n"
+                "| Streaming parser "
+                "| Handles token-by-token input with backpressure |\n")
+        (let ((rendered (agent-shell-markdown--render-table-source
+                         :source (buffer-string) :window 'destination-window)))
+          ;; The passed window was measured; the selected window (nil) was not.
+          (should (memq 'destination-window measured))
+          (should-not (memq nil measured))
+          ;; So the wide Notes column wrapped to fit the narrow destination
+          ;; window rather than laying out at its ~69-column natural width.
+          (should (< (apply #'max (mapcar #'string-width
+                                          (split-string rendered "\n")))
+                     45)))))))
 
 (ert-deftest agent-shell-markdown-table-extends-on-streamed-rows ()
   ;; First render a 3-row table.  Then append a 4th data row to the
@@ -1487,7 +1662,7 @@ after" nil)))))
   ;; must not register as separate cells.
   (let ((agent-shell-markdown-table-max-width-fraction 1.0))
     (cl-letf (((symbol-function 'agent-shell-markdown--display-width)
-               (lambda () 30)))
+               (lambda (&optional _window) 30)))
       (with-temp-buffer
         (insert "| A | B |
 |---|---|

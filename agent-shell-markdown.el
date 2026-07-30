@@ -1109,11 +1109,16 @@ left untouched."
                                '(agent-shell-markdown-frozen t
                                                              rear-nonsticky (agent-shell-markdown-frozen))))))))
 
-(defun agent-shell-markdown--display-width ()
-  "Return a usable display width for divider rendering.
-Tries the selected window's body width and falls back to 80
-characters when no usable window is available (e.g. batch)."
-  (or (ignore-errors (window-body-width))
+(defun agent-shell-markdown--display-width (&optional window)
+  "Return a usable display width (in columns) for rendering.
+Measures WINDOW's body width when given, otherwise the selected
+window's, and falls back to 80 columns when no usable window is
+available (e.g. batch).  Passing the destination WINDOW matters
+when rendering happens with a different window selected (e.g. a
+table re-laid out from an idle timer after a resize): measuring
+the selected window instead would size the layout for the wrong
+window and overflow the one actually showing the content."
+  (or (ignore-errors (window-body-width window))
       80))
 
 (cl-defun agent-shell-markdown--style-source-blocks (&key (highlight-blocks t))
@@ -2026,20 +2031,30 @@ Accounts for borders and padding (`| X | Y |' = 2 padding +
   (+ 1 (seq-reduce (lambda (acc w) (+ acc w 3)) widths 0)))
 
 (defun agent-shell-markdown--table-allocate-widths (natural-widths min-widths target)
-  "Shrink NATURAL-WIDTHS proportionally to fit TARGET, respecting MIN-WIDTHS."
+  "Shrink NATURAL-WIDTHS proportionally to fit TARGET, respecting MIN-WIDTHS.
+
+MIN-WIDTHS holds each column's longest unbreakable word, the width
+below which word-wrapping alone keeps content intact.  When even
+those minimums cannot fit TARGET (a window narrower than the longest
+words), columns shrink below them down to a single column and the
+cell wrapper hard-breaks those long words across lines, so the table
+still fits rather than overflowing and line-wrapping as a whole."
   (let* ((total (agent-shell-markdown--table-total-width natural-widths))
-         (excess (- total target)))
+         (excess (- total target))
+         (floors (if (> (agent-shell-markdown--table-total-width min-widths) target)
+                     (make-list (length min-widths) 1)
+                   min-widths)))
     (if (<= excess 0)
         natural-widths
       (let* ((shrinkable (seq-mapn (lambda (w m) (max 0 (- w m)))
-                                   natural-widths min-widths))
+                                   natural-widths floors))
              (total-shrinkable (seq-reduce #'+ shrinkable 0)))
         (if (<= total-shrinkable 0)
-            min-widths
+            floors
           (let ((ratio (min 1.0 (/ (float excess) total-shrinkable))))
             (seq-mapn (lambda (w m s)
                         (max m (floor (- w (* s ratio)))))
-                      natural-widths min-widths shrinkable)))))))
+                      natural-widths floors shrinkable)))))))
 
 (defun agent-shell-markdown--text-has-face-p (text)
   "Return non-nil if TEXT carries any `face' text property.
@@ -2420,12 +2435,12 @@ rendered region from inheriting either of our two properties."
   (let* ((source (map-elt table :source))
          (table-start (map-elt table :start))
          (table-end (map-elt table :end))
-         ;; Capture the destination window for pixel-accurate
-         ;; measurement of non-ASCII cells.  This is the window into
-         ;; which we're rendering; the render-table-source helper
-         ;; forwards it through to width / padding measurement.
-         (window (or (get-buffer-window (current-buffer))
-                     (selected-window)))
+         (window (get-buffer-window (current-buffer) t))
+         ;; The window pixel width column widths were measured against
+         ;; (nil when off-screen / string-width).  Stashed so
+         ;; `agent-shell-markdown-rerender-tables' can re-lay out only the
+         ;; tables whose width no longer matches the display.
+         (width (and window (window-body-width window t)))
          (rendered (agent-shell-markdown--render-table-source
                     :source source :window window))
          (carried (agent-shell-markdown--carry-properties table-start)))
@@ -2439,28 +2454,91 @@ rendered region from inheriting either of our two properties."
        table-start end
        `(agent-shell-markdown-frozen t
                                      agent-shell-markdown-table-source ,source
+                                     agent-shell-markdown-table-width ,width
                                      ;; Mirror the source under the generic property that
                                      ;; `agent-shell-copy-as-markdown' reads, so tables reconstruct
                                      ;; the same way every other block does.
                                      agent-shell-markdown-source ,source
                                      rear-nonsticky (agent-shell-markdown-frozen
                                                      agent-shell-markdown-table-source
-                                                     agent-shell-markdown-source))))))
+                                                     agent-shell-markdown-table-width
+                                                     agent-shell-markdown-source)))
+      ;; Mirror the per-cell `face' onto `font-lock-face' and mark the
+      ;; region fontified, so the rendered table survives font-lock
+      ;; re-fontification on its own.  `agent-shell-markdown-replace-markup'
+      ;; does this globally after streaming, but a standalone re-render
+      ;; (`agent-shell-markdown-rerender-tables' on resize) has no such
+      ;; follow-up pass and would otherwise render mostly greyed out.
+      (agent-shell-markdown--mirror-face-to-font-lock-face table-start end)
+      (put-text-property table-start end 'fontified t))))
+
+(defun agent-shell-markdown-rerender-tables ()
+  "Re-lay out tables whose stored width no longer matches the display.
+
+Each rendered table carries its markdown on
+`agent-shell-markdown-table-source' and the window pixel width its
+columns were measured against on `agent-shell-markdown-table-width'
+\(see `agent-shell-markdown--render-table').  This re-renders from
+the stashed source, at the current window width, only the tables
+whose stored width differs.  A table first laid out off-screen
+\(string-width) or at another width is realigned once shown, while
+tables already correct for the current width are left untouched.
+
+A no-op when the buffer isn't displayed (nothing to measure
+against) or when every table is already at the current width, so it
+is safe to call on display and on resize."
+  (when-let* ((window (get-buffer-window (current-buffer) t))
+              (width (window-body-width window t)))
+    (let ((regions nil))
+      ;; Collect the stale tables' bounds (as markers, so re-rendering
+      ;; one doesn't invalidate the others) and stashed source.
+      (save-excursion
+        (goto-char (point-min))
+        (let (match)
+          (while (setq match (text-property-search-forward
+                              'agent-shell-markdown-table-source))
+            (let ((beg (prop-match-beginning match)))
+              (unless (eql width (get-text-property
+                                  beg 'agent-shell-markdown-table-width))
+                (push (list (copy-marker beg)
+                            (copy-marker (prop-match-end match))
+                            (get-text-property
+                             beg 'agent-shell-markdown-table-source))
+                      regions))))))
+      ;; A re-layout, not a content change: keep it off the undo list and
+      ;; don't flip the buffer's modified flag.
+      (when regions
+        (let ((inhibit-read-only t)
+              (buffer-undo-list t)
+              (modified (buffer-modified-p)))
+          (dolist (region (nreverse regions))
+            (agent-shell-markdown--render-table
+             (list (cons :source (nth 2 region))
+                   (cons :start (marker-position (nth 0 region)))
+                   (cons :end (marker-position (nth 1 region)))))
+            (set-marker (nth 0 region) nil)
+            (set-marker (nth 1 region) nil))
+          (restore-buffer-modified-p modified))))))
 
 (defun agent-shell-markdown--carry-properties (pos)
   "Return a plist of properties at POS to carry across our delete+insert.
 
 Filters out properties our rendering itself sets (`face',
-`agent-shell-markdown-frozen', `agent-shell-markdown-table-source',
-`agent-shell-markdown-source', `rear-nonsticky') so callers'
-application-level properties (read-only, agent-shell block ids,
-etc.) survive on the rendered output."
+`font-lock-face', `agent-shell-markdown-frozen',
+`agent-shell-markdown-table-source', `agent-shell-markdown-source',
+`rear-nonsticky') so callers' application-level properties such as
+`read-only' or agent-shell block ids survive on the rendered
+output.  `font-lock-face' in particular must not be carried: the
+first char's value (e.g. a table border) would otherwise be
+spread uniformly across the re-rendered region, greying out the
+per-cell styling on re-render."
   (let ((props (text-properties-at pos))
         (carried nil))
     (while props
       (let ((key (car props))
             (val (cadr props)))
         (unless (memq key '(face
+                            font-lock-face
                             agent-shell-markdown-frozen
                             agent-shell-markdown-table-source
                             agent-shell-markdown-source
@@ -2569,7 +2647,7 @@ prone to a few-pixel drift on emoji-heavy tables."
            (natural-widths (map-elt preprocessed :natural-widths))
            (processed-rows (map-elt preprocessed :processed-rows))
            (target-width (when agent-shell-markdown-table-wrap-columns
-                           (floor (* (agent-shell-markdown--display-width)
+                           (floor (* (agent-shell-markdown--display-width window)
                                      agent-shell-markdown-table-max-width-fraction))))
            (needs-allocation (and target-width
                                   (> (agent-shell-markdown--table-total-width
@@ -3007,7 +3085,9 @@ starting with `~/', `./', or `../'."
 Resolves `agent-shell-markdown-image-max-width' which may be an integer
 (pixels) or a float between 0 and 1 (ratio of window body width)."
   (if (floatp agent-shell-markdown-image-max-width)
-      (let ((window (or (get-buffer-window (current-buffer))
+      ;; Prefer a window actually showing this buffer (any frame); only
+      ;; guess with `frame-first-window' when none does.
+      (let ((window (or (get-buffer-window (current-buffer) t)
                         (frame-first-window))))
         (round (* agent-shell-markdown-image-max-width
                   (window-body-width window t))))
@@ -3024,7 +3104,9 @@ For example, (agent-shell-markdown--image-attribute-pixels \"300\" \\='width)
 returns 300."
   (when-let* (((string-match "\\`\\([0-9]+\\)\\(%\\|px\\)?\\'" value))
               (number (string-to-number (match-string 1 value)))
-              (window (or (get-buffer-window (current-buffer))
+              ;; Prefer a window actually showing this buffer (any frame);
+              ;; only guess with `frame-first-window' when none does.
+              (window (or (get-buffer-window (current-buffer) t)
                           (frame-first-window))))
     (if (equal (match-string 2 value) "%")
         (round (* (/ number 100.0)
@@ -3346,6 +3428,11 @@ AVOID-RANGES are ignored.  A line with an odd number of backticks
 has its trailing unmatched backtick treated as still-streaming:
 the range extends from that backtick to end-of-line.
 
+Exception: on a table row (a line beginning with `|') an unmatched
+backtick only extends to the next `|', since a code span cannot
+cross a cell boundary.  Without this a stray backtick in one cell
+would swallow the rest of the row (e.g. a link in a later cell).
+
 For example, given the buffer \"a `code` b\" returns a list with
 one range covering the body \"code\"."
   (let ((ranges '())
@@ -3353,7 +3440,8 @@ one range covering the body \"code\"."
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
-        (let ((line-end (line-end-position))
+        (let ((line-beg (line-beginning-position))
+              (line-end (line-end-position))
               (open nil))
           (while (re-search-forward "`" line-end t)
             (let ((pos (match-beginning 0)))
@@ -3364,7 +3452,18 @@ one range covering the body \"code\"."
                       (setq open nil))
                   (setq open pos)))))
           (when open
-            (push (cons (1+ open) line-end) ranges)))
+            (push (cons (1+ open)
+                        (if (save-excursion
+                              (goto-char line-beg)
+                              (looking-at-p
+                               agent-shell-markdown--table-pending-line-regexp))
+                            (save-excursion
+                              (goto-char (1+ open))
+                              (if (search-forward "|" line-end t)
+                                  (1- (point))
+                                line-end))
+                          line-end))
+                  ranges)))
         (forward-line 1)))
     (nreverse ranges)))
 

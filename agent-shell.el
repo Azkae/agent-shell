@@ -9800,6 +9800,60 @@ For example:
       (setq end (1- end)))
     (substring text start end)))
 
+(defvar-local agent-shell--table-realign-timer nil
+  "Pending idle timer that re-aligns this buffer's markdown tables.")
+
+(defun agent-shell--realign-tables (buffer)
+  "Re-render BUFFER's markdown tables from their stashed source.
+Deferred worker for `agent-shell--realign-tables-on-change'."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq agent-shell--table-realign-timer nil)
+      (agent-shell-markdown-rerender-tables))))
+
+(defun agent-shell--realign-tables-on-change (window)
+  "Re-align the current buffer's markdown tables shown in WINDOW.
+
+Installed buffer-locally on `window-size-change-functions' and
+`window-buffer-change-functions' (whose buffer-local values are
+called with the window, the buffer current), so it runs only for
+agent-shell windows.  Table column widths are pixel-measured
+against the display, so a resize or first display can change their
+layout; schedule a re-render on any such change.  Which tables
+actually need re-laying out is decided per-table by
+`agent-shell-markdown-rerender-tables' (via the stored
+`agent-shell-markdown-table-width'), so this can fire freely: it
+also catches tables streamed in while the buffer was off-screen
+\(rendered without a window, hence not pixel-perfect) and then
+brought back into a same-width window.  Deferred to an idle timer,
+which also debounces a drag-resize into a single re-render, because
+modifying a buffer from within these redisplay hooks is unsafe."
+  (when (window-live-p window)
+    (when (timerp agent-shell--table-realign-timer)
+      (cancel-timer agent-shell--table-realign-timer))
+    (setq agent-shell--table-realign-timer
+          (run-with-idle-timer 0.15 nil #'agent-shell--realign-tables
+                               (current-buffer)))))
+
+(defun agent-shell--enable-table-realign ()
+  "Keep the current buffer's markdown tables aligned to its window.
+
+Installs buffer-local window-change handlers (see
+`agent-shell--realign-tables-on-change').  Being buffer-local they
+run only for this buffer's windows and are removed automatically
+when the buffer is killed.  Added to `agent-shell-mode-hook' and
+`agent-shell-viewport-view-mode-hook' so both the shell and its
+viewport realign; a same-size window switch also fires the
+buffer-change hook, so first display is covered too."
+  (add-hook 'window-size-change-functions
+            #'agent-shell--realign-tables-on-change nil t)
+  (add-hook 'window-buffer-change-functions
+            #'agent-shell--realign-tables-on-change nil t))
+
+(add-hook 'agent-shell-mode-hook #'agent-shell--enable-table-realign)
+(add-hook 'agent-shell-viewport-view-mode-hook
+          #'agent-shell--enable-table-realign)
+
 (provide 'agent-shell)
 
 ;;; agent-shell.el ends here
