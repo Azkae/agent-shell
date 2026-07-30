@@ -4213,7 +4213,7 @@ variable (see makunbound)"))
         (kill-buffer shell-buffer)
         (error "No way to create a new client"))
       (let ((command (map-elt (funcall (map-elt config :client-maker) (current-buffer)) :command)))
-        (unless (executable-find command)
+        (unless (executable-find command t)
           (kill-buffer shell-buffer)
           (error "%s" (agent-shell--make-missing-executable-error
                        :executable command
