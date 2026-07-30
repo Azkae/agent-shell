@@ -289,7 +289,9 @@ For example:
   => #(\"my text\" 0 2 (face italic) 3 7 (face bold))"
   (agent-shell-with-work-buffer
     (insert markdown)
-    (agent-shell-markdown-replace-markup)
+    ;; A complete string, not a stream: force a final render so trailing
+    ;; constructs (e.g. an image at end of buffer) aren't held back.
+    (agent-shell-markdown-replace-markup :force t)
     (buffer-string)))
 
 (cl-defun agent-shell-markdown-replace-markup (&key force
@@ -395,7 +397,8 @@ body un-fontified."
         (when render-images
           (agent-shell-markdown--replace-images
            :avoid-ranges avoid-ranges
-           :image-cache-directory image-cache-directory)
+           :image-cache-directory image-cache-directory
+           :complete force)
           (agent-shell-markdown--replace-image-file-paths
            :avoid-ranges avoid-ranges))
         (agent-shell-markdown--style-dividers :avoid-ranges avoid-ranges)
@@ -823,7 +826,24 @@ and a keymap that opens the URL."
                 (put-text-property markup-start end
                                    'agent-shell-markdown-source source))))))))))
 
-(cl-defun agent-shell-markdown--replace-images (&key avoid-ranges image-cache-directory)
+(defun agent-shell-markdown--image-attributes-pending-p (pos)
+  "Return non-nil when an image ending at POS may still gain `{...}' attributes.
+
+True at end of buffer (a trailing `{width= ...}' block may still
+stream in) or when such a block has opened with `{' but not closed
+before end of buffer.  Callers defer rendering the image until it
+settles, otherwise it renders and freezes before the attributes
+arrive and they leak as literal text.
+
+For example, with POS after the `)' of a just-streamed
+`![a](x.png)' at end of buffer, returns non-nil; once `{width=50%}'
+has fully streamed in after it, returns nil."
+  (or (= pos (point-max))
+      (save-excursion
+        (goto-char pos)
+        (looking-at-p "{[^}\n]*\\'"))))
+
+(cl-defun agent-shell-markdown--replace-images (&key avoid-ranges image-cache-directory complete)
   "Replace `![alt](url)' image markup with displayed images.
 
 If URL resolves to an existing local file that is image-supported
@@ -845,6 +865,12 @@ A bare `(url)' destination and the CommonMark angle-bracketed
 `(<url>)' form are both accepted; the latter allows spaces in the
 URL (see `agent-shell-markdown--link-markup-regexp').
 
+While streaming (COMPLETE nil, the default) an image that could
+still gain a trailing `{width= ...}' attribute block is left raw
+until it settles (see `agent-shell-markdown--image-attributes-pending-p').
+COMPLETE non-nil marks a final, non-streaming render, so such
+images render immediately.
+
 For example, the buffer \"see ![logo](logo.png)\" becomes
 \"see logo\" with the image shown in place of \"logo\"."
   (let ((case-fold-search nil)
@@ -857,6 +883,15 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                      markup-start markup-end avoid-ranges)))
         (cond
          (avoid (goto-char (cdr avoid)))
+         ;; Mid-stream, the image may still gain a trailing `{width= ...}'
+         ;; attribute block that hasn't fully arrived.  Rendering now would
+         ;; freeze the image and orphan those attributes as literal text on
+         ;; the next chunk, so leave the markup raw until it settles.  When
+         ;; COMPLETE (a final, non-streaming render) there is no more to
+         ;; come, so render regardless.
+         ((and (not complete)
+               (agent-shell-markdown--image-attributes-pending-p markup-end))
+          nil)
          (t
           (let* ((alt (buffer-substring-no-properties
                        (match-beginning 1) (match-end 1)))

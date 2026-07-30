@@ -337,6 +337,39 @@ streaming **not bold**" nil)))))
                            (format "see ![logo](%s){width=300} end" image-file)))))
       (delete-file image-file))))
 
+(ert-deftest agent-shell-markdown-image-attributes-not-orphaned-when-streamed ()
+  ;; Regression: when the `{width=...}' block streams in AFTER the
+  ;; `![alt](url)', the image must not render before the attributes
+  ;; arrive and leave them as literal text.  The image is deferred while
+  ;; it could still gain a trailing block, then renders and consumes it.
+  (with-temp-buffer
+    (insert "x ![a](https://x.com/i.png)")
+    (agent-shell-markdown-replace-markup :render-images t)
+    ;; At end of buffer a `{...}' may still arrive, so nothing rendered.
+    (should (equal (substring-no-properties (buffer-string))
+                   "x ![a](https://x.com/i.png)"))
+    (goto-char (point-max))
+    (insert "{width=100%} y")
+    (agent-shell-markdown-replace-markup :render-images t)
+    ;; Now the block is complete: render and consume it (no leaked braces).
+    (should (equal (substring-no-properties (buffer-string)) "x a y"))))
+
+(ert-deftest agent-shell-markdown-image-attributes-pending-p ()
+  ;; End of buffer, or an unclosed `{', means a trailing attribute block
+  ;; may still stream in; a complete `{...}' or a non-brace char does not.
+  (with-temp-buffer
+    (insert "![a](u)")
+    (should (agent-shell-markdown--image-attributes-pending-p (point-max))))
+  (with-temp-buffer
+    (insert "![a](u){wid")
+    (should (agent-shell-markdown--image-attributes-pending-p 8)))
+  (with-temp-buffer
+    (insert "![a](u){w=1%} x")
+    (should-not (agent-shell-markdown--image-attributes-pending-p 8)))
+  (with-temp-buffer
+    (insert "![a](u) x")
+    (should-not (agent-shell-markdown--image-attributes-pending-p 8))))
+
 (ert-deftest agent-shell-markdown-image-attributes-sized-create-image ()
   ;; `width='/`height=' become per-image `:max-width' / `:max-height' px
   ;; passed to `create-image'.
