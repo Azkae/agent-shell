@@ -1048,6 +1048,31 @@ state-property range first.  User-facing toggling goes through
              t)
         (agent-shell-ui--toggle-fragment-at-point)))))
 
+(cl-defun agent-shell-ui-set-group-collapsed-by-id (&key namespace-id block-id collapsed no-undo)
+  "Fold or unfold the group header NAMESPACE-ID/BLOCK-ID to match COLLAPSED.
+
+Unlike `agent-shell-ui-collapse-fragment-by-id', this sets the fold state
+rather than toggling it, so repeat calls with the same COLLAPSED are a
+no-op.  Does nothing when NAMESPACE-ID/BLOCK-ID names no rendered group
+header, or when it already matches COLLAPSED.  When NO-UNDO is non-nil,
+disable undo recording for this operation.
+
+  ;; Group \"ns-grp\" is expanded.
+  (agent-shell-ui-set-group-collapsed-by-id
+   :namespace-id \"ns\" :block-id \"grp\" :collapsed t)
+  ;; Its members are now hidden and its indicator reads `▶'."
+  (save-mark-and-excursion
+    (let ((inhibit-read-only t)
+          (buffer-undo-list (if no-undo t buffer-undo-list))
+          (qualified-id (format "%s-%s" namespace-id block-id)))
+      (when-let* ((header (agent-shell-ui--group-header-range qualified-id))
+                  (state (get-text-property (map-elt header :start)
+                                            'agent-shell-ui-state))
+                  ((eq (map-elt state :kind) 'group))
+                  ((not (eq (and (map-elt state :collapsed) t)
+                            (and collapsed t)))))
+        (agent-shell-ui--set-group-collapsed qualified-id (and collapsed t))))))
+
 (defvar-local agent-shell-ui--fold-toggle-state nil
   "Current global fold state for the buffer.
 One of `expanded', `collapsed', or nil (first call — derive from buffer).

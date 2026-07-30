@@ -4561,6 +4561,128 @@ agent activity), while an `agent_message_chunk' starts a fresh group."
     (map-put! state :last-entry-type "agent_message_chunk")
     (should (equal "activity-2" (agent-shell--activity-group-current-id state)))))
 
+(ert-deftest agent-shell--activity-group-expand-policy-test ()
+  "The expand policy resolves symbols and the legacy booleans."
+  (dolist (case '((never . never)
+                  (always . always)
+                  (when-active . when-active)
+                  ;; Legacy booleans: nil collapsed, non-nil expanded.
+                  (nil . never)
+                  (t . always)))
+    (let ((agent-shell-activity-group-expand-by-default (car case)))
+      (should (eq (cdr case) (agent-shell--activity-group-expand-policy)))
+      ;; `when-active' groups are born expanded and folded once done.
+      (should (eq (not (eq (cdr case) 'never))
+                  (agent-shell--activity-group-initial-expanded-p))))))
+
+(ert-deftest agent-shell--sync-activity-group-fold-test ()
+  "`when-active' keeps only the agent's current activity group expanded."
+  (let ((collapsed '())
+        (state (list (cons :activity-group-count 1)
+                     (cons :request-count 3)
+                     (cons :expanded-activity-group nil))))
+    (cl-letf (((symbol-function 'agent-shell--collapse-fragment-group)
+               (lambda (&rest args)
+                 (push (cons (plist-get args :namespace-id)
+                             (plist-get args :block-id))
+                       collapsed))))
+      ;; Other policies never fold anything.
+      (dolist (policy '(never always))
+        (let ((agent-shell-activity-group-expand-by-default policy))
+          (agent-shell--sync-activity-group-fold :state state :group-id "activity-1")
+          (should-not collapsed)
+          (should-not (map-elt state :expanded-activity-group))))
+      (let ((agent-shell-activity-group-expand-by-default 'when-active))
+        ;; The current run is recorded, with nothing to fold yet.
+        (agent-shell--sync-activity-group-fold :state state :group-id "activity-1")
+        (should-not collapsed)
+        (should (equal '((:namespace-id . 3) (:group-id . "activity-1"))
+                       (map-elt state :expanded-activity-group)))
+        ;; Further members of the same run leave it expanded.
+        (agent-shell--sync-activity-group-fold :state state :group-id "activity-1")
+        (should-not collapsed)
+        ;; The agent moves on: the previous run folds away.
+        (map-put! state :activity-group-count 2)
+        (agent-shell--sync-activity-group-fold :state state :group-id "activity-2")
+        (should (equal '((3 . "activity-1")) collapsed))
+        (should (equal "activity-2"
+                       (map-nested-elt state '(:expanded-activity-group :group-id))))
+        ;; A late update to the earlier run neither re-expands it nor folds
+        ;; the run the agent is currently in.
+        (setq collapsed '())
+        (agent-shell--sync-activity-group-fold :state state :group-id "activity-1")
+        (should-not collapsed)
+        (should (equal "activity-2"
+                       (map-nested-elt state '(:expanded-activity-group :group-id))))
+        ;; Turn end folds the last expanded run and forgets it.
+        (agent-shell--collapse-expanded-activity-group state)
+        (should (equal '((3 . "activity-2")) collapsed))
+        (should-not (map-elt state :expanded-activity-group))
+        (setq collapsed '())
+        (agent-shell--collapse-expanded-activity-group state)
+        (should-not collapsed)))))
+
+(ert-deftest agent-shell--activity-grouping-when-active-folds-previous-group-test ()
+  "Driving notifications under `when-active' folds each group as it is left.
+Groups are created expanded, and a group folds as soon as the agent starts
+answering rather than waiting for the next run to begin, so only the run
+in flight shows its members."
+  (let ((collapsed '())
+        (expanded '())
+        (agent-shell-activity-group-expand-by-default 'when-active)
+        (state (list (cons :tool-calls nil)
+                     (cons :last-entry-type nil)
+                     (cons :last-agent-message-id nil)
+                     (cons :activity-group-count 0)
+                     (cons :chunked-group-count 0)
+                     (cons :request-count 1)
+                     (cons :expanded-activity-group nil)
+                     (cons :active-requests t)
+                     (cons :last-activity-time nil)
+                     (cons :buffer nil))))
+    (cl-letf (((symbol-function 'agent-shell--update-fragment)
+               (lambda (&rest args)
+                 (when-let* ((group-id (plist-get args :group-id)))
+                   (push (cons group-id (plist-get args :group-expanded)) expanded))))
+              ((symbol-function 'agent-shell--collapse-fragment-group)
+               (lambda (&rest args)
+                 (push (plist-get args :block-id) collapsed)))
+              ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
+              ((symbol-function 'agent-shell--append-transcript) #'ignore)
+              ((symbol-function 'agent-shell--make-transcript-tool-call-entry)
+               (lambda (&rest _) ""))
+              ((symbol-function 'agent-shell--delete-fragment) #'ignore)
+              ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
+              ((symbol-function 'agent-shell-make-tool-call-label)
+               (lambda (&rest _) '((:status . "s") (:title . "t")))))
+      (cl-flet ((notify (update)
+                  (agent-shell--on-notification
+                   :state state
+                   :acp-notification `((method . "session/update")
+                                       (params (update . ,update))))))
+        (notify '((sessionUpdate . "tool_call") (toolCallId . "A")
+                  (title . "A") (kind . "other") (status . "pending")))
+        (should-not collapsed)
+        ;; The agent starts answering: group 1 folds right away, without
+        ;; waiting for the next group to open.
+        (notify '((sessionUpdate . "agent_message_chunk")
+                  (content (type . "text") (text . "msg"))))
+        (should (equal '("activity-1") collapsed))
+        ;; Further chunks of the same response have nothing left to fold.
+        (notify '((sessionUpdate . "agent_message_chunk")
+                  (content (type . "text") (text . " more"))))
+        (should (equal '("activity-1") collapsed))
+        ;; B lands in a fresh group, expanded, leaving group 1 folded.
+        (notify '((sessionUpdate . "tool_call") (toolCallId . "B")
+                  (title . "B") (kind . "other") (status . "pending")))
+        (should (equal '("activity-1") collapsed)))
+      ;; Both groups were created expanded.
+      (should (equal '(("activity-1" . t) ("activity-2" . t)) (nreverse expanded)))
+      ;; Turn end folds the group still in flight.
+      (agent-shell--collapse-expanded-activity-group state)
+      (should (equal '("activity-2" "activity-1") collapsed)))))
+
 (ert-deftest agent-shell--activity-grouping-late-update-starts-new-group-test ()
   "A message between a tool call and the next starts a fresh group.
 Regression for xenodium/agent-shell-js#31: a late in-place completion

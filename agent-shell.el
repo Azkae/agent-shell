@@ -139,17 +139,53 @@ When non-nil, tool use sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
-(defcustom agent-shell-activity-group-expand-by-default nil
-  "Whether an activity group header is expanded by default.
+(defcustom agent-shell-activity-group-expand-by-default 'never
+  "When activity group headers should be expanded.
 
 An activity group is a run of consecutive agent actions (tool calls,
-and eventually thoughts) rendered under one collapsible header.  When
-non-nil (the default), the group shows its members.  When nil, it starts
-collapsed, showing only the header with its aggregated status and
-completed/total count.  Individual members still follow
+and eventually thoughts) rendered under one collapsible header.
+
+  `never'       Groups start collapsed, showing only the header with its
+                aggregated status and completed/total count.
+  `always'      Groups show their members.
+  `when-active' The group the agent is currently working in shows its
+                members, and collapses once the agent moves on to a new
+                group or the turn ends.  Keeps the session tidy while
+                still making the agent's current activity followable.
+
+The legacy boolean values remain supported: nil reads as `never' and t
+as `always'.  Individual members still follow
 `agent-shell-tool-use-expand-by-default'."
-  :type 'boolean
+  :type '(choice (const :tag "Never" never)
+                 (const :tag "Always" always)
+                 (const :tag "While the agent is working in it" when-active))
   :group 'agent-shell)
+
+(defun agent-shell--activity-group-expand-policy ()
+  "Return `agent-shell-activity-group-expand-by-default' as a policy symbol.
+
+One of `never', `always', or `when-active'.  Maps the legacy boolean
+values onto the symbols: nil reads as `never' and any other unrecognized
+value as `always' (matching the pre-symbol \"non-nil means expanded\"
+behavior).
+
+  ;; `agent-shell-activity-group-expand-by-default' = t
+  (agent-shell--activity-group-expand-policy)
+  ;; => always"
+  (pcase agent-shell-activity-group-expand-by-default
+    ('never 'never)
+    ('always 'always)
+    ('when-active 'when-active)
+    ('nil 'never)
+    (_ 'always)))
+
+(defun agent-shell--activity-group-initial-expanded-p ()
+  "Return non-nil when a newly created activity group starts expanded.
+
+Both `always' and `when-active' start expanded; `when-active' collapses
+the group again once the agent moves on (see
+`agent-shell--sync-activity-group-fold')."
+  (and (memq (agent-shell--activity-group-expand-policy) '(always when-active)) t))
 
 (defvar agent-shell-mode-hook nil
   "Hook run after an `agent-shell-mode' buffer is fully initialized.
@@ -1081,6 +1117,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
         (cons :chunked-group-count 0)
         (cons :activity-group-count 0)
         (cons :activity-thoughts nil)
+        (cons :expanded-activity-group nil)
         (cons :request-count 0)
         (cons :last-activity-time nil)
         (cons :tool-calls nil)
@@ -2278,6 +2315,17 @@ same group."
                   agent-shell--activity-group-run-entry-types)
     (map-put! state :activity-group-count
               (1+ (or (map-elt state :activity-group-count) 0))))
+  (agent-shell--activity-group-latest-id state))
+
+(defun agent-shell--activity-group-latest-id (state)
+  "Return the id of the most recently started activity group in STATE.
+
+Unlike `agent-shell--activity-group-current-id', never advances the run
+counter, so callers can tell whether the group they are rendering into is
+the agent's current run or an earlier one taking a late update.
+
+  (agent-shell--activity-group-latest-id \\='((:activity-group-count . 2)))
+  ;; => \"activity-2\""
   (format "activity-%s" (map-elt state :activity-group-count)))
 
 (defun agent-shell--activity-group-id (state tool-call-id)
@@ -2602,6 +2650,39 @@ No-op while that function has nothing to summarize (an empty group)."
      :label-left label
      :above-last-prompt (not (agent-shell--active-requests-p state)))))
 
+(cl-defun agent-shell--sync-activity-group-fold (&key state group-id namespace-id)
+  "Leave GROUP-ID the only expanded activity group in STATE.
+
+No-op unless `agent-shell-activity-group-expand-by-default' is
+`when-active', where the group the agent is working in stays expanded and
+earlier ones fold away.  GROUP-ID is ignored unless it is STATE's latest
+run, so a late update to an earlier group neither re-expands that group
+nor collapses the one the agent is currently in.
+
+NAMESPACE-ID is the fragment namespace GROUP-ID's header was rendered
+under (nil for STATE's request count), recorded alongside the group so it
+can still be found once the turn ends."
+  (when-let* (((eq (agent-shell--activity-group-expand-policy) 'when-active))
+              ((equal group-id (agent-shell--activity-group-latest-id state)))
+              ((not (equal group-id (map-nested-elt state '(:expanded-activity-group :group-id))))))
+    (agent-shell--collapse-expanded-activity-group state)
+    (map-put! state :expanded-activity-group
+              (list (cons :namespace-id (or namespace-id (map-elt state :request-count)))
+                    (cons :group-id group-id)))))
+
+(defun agent-shell--collapse-expanded-activity-group (state)
+  "Collapse the activity group STATE last left expanded, if any.
+
+Called both when the agent moves on to a new group and when the turn ends,
+so a `when-active' session is left with every activity group folded.
+Clears STATE's `:expanded-activity-group'."
+  (when-let* ((group (map-elt state :expanded-activity-group)))
+    (agent-shell--collapse-fragment-group
+     :state state
+     :namespace-id (map-elt group :namespace-id)
+     :block-id (map-elt group :group-id))
+    (map-put! state :expanded-activity-group nil)))
+
 (cl-defun agent-shell--on-notification (&key state acp-notification)
   "Handle incoming ACP-NOTIFICATION using STATE."
   (map-put! state :last-activity-time (current-time))
@@ -2627,6 +2708,11 @@ No-op while that function has nothing to summarize (an empty group)."
           ((map-elt state :pending-restore)
            (agent-shell--append-restore-notification state acp-notification))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "agent_message_chunk")
+           ;; The agent has stopped acting and started answering, which
+           ;; breaks the activity run.  Fold the group `when-active' left
+           ;; expanded now, rather than leaving it open behind a response
+           ;; that may stream for a while before the next group starts.
+           (agent-shell--collapse-expanded-activity-group state)
            ;; Decide message boundaries by ACP's `messageId' when present:
            ;; distinct messages must never coalesce, even if an interleaved
            ;; entry (e.g. a tool call) failed to advance `:last-entry-type'
@@ -2713,10 +2799,11 @@ No-op while that function has nothing to summarize (an empty group)."
               :label-right (map-elt tool-call-labels :title)
               :group-id group-id
               :group-label agent-shell--activity-group-label
-              :group-expanded agent-shell-activity-group-expand-by-default
+              :group-expanded (agent-shell--activity-group-initial-expanded-p)
               :expanded agent-shell-tool-use-expand-by-default
               :above-last-prompt (not (agent-shell--active-requests-p state)))
              (agent-shell--refresh-activity-group-header state group-id)
+             (agent-shell--sync-activity-group-fold :state state :group-id group-id)
              ;; Display plan as markdown block if present
              (when (map-nested-elt acp-notification '(params update rawInput plan))
                (agent-shell--update-fragment
@@ -2769,7 +2856,7 @@ No-op while that function has nothing to summarize (an empty group)."
               :expanded agent-shell-thought-process-expand-by-default
               :group-id group-id
               :group-label agent-shell--activity-group-label
-              :group-expanded agent-shell-activity-group-expand-by-default
+              :group-expanded (agent-shell--activity-group-initial-expanded-p)
               :render-body-images t
               :above-last-prompt (not (agent-shell--active-requests-p state)))
              ;; Count this thought and relabel the header so a thought-only
@@ -2782,7 +2869,10 @@ No-op while that function has nothing to summarize (an empty group)."
              ;; chunk repeats an identical update and its buffer scan.
              (when new-thought-p
                (agent-shell--count-group-thought state group-id)
-               (agent-shell--refresh-activity-group-header state group-id)))
+               (agent-shell--refresh-activity-group-header state group-id)
+               (agent-shell--sync-activity-group-fold
+                :state state :group-id group-id
+                :namespace-id (unless (agent-shell--active-requests-p state) "out-of-turn")))
            (map-put! state :last-entry-type "agent_thought_chunk"))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "user_message_chunk")
            ;; A user_message_chunk replays a user submission.  Render it
@@ -2979,7 +3069,7 @@ No-op while that function has nothing to summarize (an empty group)."
                 :label-right (map-elt tool-call-labels :title)
                 :group-id group-id
                 :group-label agent-shell--activity-group-label
-                :group-expanded agent-shell-activity-group-expand-by-default
+                :group-expanded (agent-shell--activity-group-initial-expanded-p)
                 :body (cond
                        (command-block
                         (concat command-block "\n\n" (string-trim body-text)))
@@ -2989,7 +3079,8 @@ No-op while that function has nothing to summarize (an empty group)."
                         (string-trim body-text)))
                 :expanded agent-shell-tool-use-expand-by-default
                 :above-last-prompt (not (agent-shell--active-requests-p state)))
-               (agent-shell--refresh-activity-group-header state group-id))
+               (agent-shell--refresh-activity-group-header state group-id)
+               (agent-shell--sync-activity-group-fold :state state :group-id group-id))
              ;; Only advance the run boundary when this update introduced a new
              ;; tool call (appended at the end).  An in-place update of an
              ;; earlier tool must not erase an intervening entry's boundary.
@@ -4452,6 +4543,29 @@ variable (see makunbound)"))
                         (map-elt state :buffer)))
       (error "Editing the wrong buffer: %s" (current-buffer)))
     (agent-shell-ui-delete-fragment :namespace-id (map-elt state :request-count) :block-id block-id :no-undo t)))
+
+(cl-defun agent-shell--collapse-fragment-group (&key state namespace-id block-id)
+  "Collapse group header BLOCK-ID under NAMESPACE-ID in STATE's buffers.
+
+Mirrors `agent-shell--delete-fragment', applying to both the shell buffer
+and, when it is displaying the conversation, its viewport buffer.  Does
+nothing when BLOCK-ID names no rendered group header."
+  (when-let* (((map-elt state :buffer))
+              (viewport-buffer (agent-shell-viewport--buffer
+                                :shell-buffer (map-elt state :buffer)
+                                :existing-only t))
+              ;; Folding only makes sense when viewport is displaying
+              ;; conversation, never while it's an active compose buffer.
+              ((with-current-buffer viewport-buffer
+                 (derived-mode-p 'agent-shell-viewport-view-mode))))
+    (with-current-buffer viewport-buffer
+      (agent-shell-ui-set-group-collapsed-by-id
+       :namespace-id namespace-id :block-id block-id :collapsed t :no-undo t)))
+  (when-let* ((shell-buffer (map-elt state :buffer))
+              ((buffer-live-p shell-buffer)))
+    (with-current-buffer shell-buffer
+      (agent-shell-ui-set-group-collapsed-by-id
+       :namespace-id namespace-id :block-id block-id :collapsed t :no-undo t))))
 
 (defun agent-shell--live-input-prompt-p (prompt)
   "Non-nil when PROMPT is a live input prompt at the end of the buffer.
@@ -6724,6 +6838,10 @@ pending-restore state once replay completes."
                                       'rear-nonsticky '(field read-only))))
                 (map-put! state :last-entry-type nil))))
         (map-put! state :active-requests saved-active-requests))
+      ;; Replay renders history as a live turn would, so the last replayed
+      ;; group is left expanded under `when-active'.  Nothing is actually
+      ;; running, so fold it like a completed turn.
+      (agent-shell--collapse-expanded-activity-group state)
       ;; Point followed the narrowed history insertions up above the live
       ;; prompt.  Return it to the input area so the cursor lands where the
       ;; user types (matching pre-early-prompt restore behavior).
@@ -7474,6 +7592,9 @@ Each marked span is replaced by its `agent-shell-region-text' value."
                    ;; a session prompt request is finished.
                    ;; Avoid accumulating them unnecessarily.
                    (map-put! (agent-shell--state) :tool-calls nil)
+                   ;; The turn is over, so nothing is active any more: fold
+                   ;; the last activity group `when-active' left expanded.
+                   (agent-shell--collapse-expanded-activity-group (agent-shell--state))
                    ;; Extract usage information from response
                    (when (map-elt acp-response 'usage)
                      (agent-shell--save-usage :state (agent-shell--state) :acp-usage (map-elt acp-response 'usage)))
@@ -7525,6 +7646,8 @@ Each marked span is replaced by its `agent-shell-region-text' value."
                    (agent-shell--separate-transcript-after-agent-message
                     :last-entry-type (map-elt agent-shell--state :last-entry-type)
                     :file-path agent-shell--transcript-file)
+                   ;; An interrupted turn leaves no group active either.
+                   (agent-shell--collapse-expanded-activity-group agent-shell--state)
                    ;; Display pending requests on failure.
                    (agent-shell--prompt-queue-display)
                    (funcall (agent-shell--make-error-handler :state agent-shell--state :shell-buffer shell-buffer)
