@@ -926,6 +926,42 @@ Outro"))))
       (should (equal (substring-no-properties (buffer-string))
                      "Intro\n\n• One\n• Two\n• Three\n")))))
 
+(ert-deftest agent-shell-markdown-list-last-line-renders-under-narrow ()
+  ;; Regression: a fragment body is rendered narrowed to its content, so
+  ;; a list item on the last line has its terminating newline just
+  ;; outside the narrow.  The newline-anchored pass would leave that last
+  ;; item raw; it must still render, since a newline exists right past
+  ;; the narrow (the line is complete).
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "Sources:\n\n- First item\n- Last item\n")
+      (save-restriction
+        ;; Narrow to the body, excluding the last item's trailing newline.
+        (narrow-to-region (point-min) (1- (point-max)))
+        (agent-shell-markdown-replace-markup))
+      (goto-char (point-max))
+      (search-backward "Last item")
+      (goto-char (line-beginning-position))
+      (should (eq (char-after) ?•))
+      (should (get-text-property (point) 'agent-shell-markdown-list-rendered))
+      ;; Source is stashed whole, so copy-as-markdown round-trips.
+      (should (equal (get-text-property (point) 'agent-shell-markdown-source)
+                     "- Last item")))))
+
+(ert-deftest agent-shell-markdown-list-last-line-raw-while-streaming ()
+  ;; The last line with no newline anywhere after it is a still-streaming
+  ;; frontier (the marker may not be a list item yet), so it stays raw
+  ;; until its line completes.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "- First item\n- Last item")
+      (agent-shell-markdown-replace-markup)
+      (goto-char (point-max))
+      (goto-char (line-beginning-position))
+      (should (eq (char-after) ?-))
+      (should (null (get-text-property
+                     (point) 'agent-shell-markdown-list-rendered))))))
+
 (ert-deftest agent-shell-markdown-list-reconstructs-to-source ()
   ;; The rendered glyphs are real buffer text, but each line stashes its
   ;; markdown on `agent-shell-markdown-source', so copy-as-markdown

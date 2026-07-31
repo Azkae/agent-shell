@@ -1382,6 +1382,20 @@ Group 1 is the leading indent, group 2 the marker (`-'/`*'/`+' or
 after the marker keeps `---' (a divider) and `*emphasis*' from
 matching.")
 
+(defconst agent-shell-markdown--list-item-last-line-regexp
+  (rx bol
+      (group (zero-or-more (any " \t")))
+      (group (or (any "-*+")
+                 (seq (one-or-more digit) (any ".)"))))
+      (group (one-or-more (any " \t")))
+      (zero-or-more (not (any "\n")))
+      eos)
+  "Regexp matching a list-item line anchored at the accessible buffer end.
+Like `agent-shell-markdown--list-item-line-regexp' but ending at `eos'
+instead of a trailing `\\n', with the same groups.  Used for a list item
+on the last line of a narrowed body, whose terminating newline sits just
+outside the narrow.")
+
 (defconst agent-shell-markdown--list-item-pending-regexp
   (rx bol (zero-or-more (any " \t"))
       (or (any "-*+") (seq (one-or-more digit) (any ".)")))
@@ -1439,12 +1453,20 @@ reconstructing to `- [x] Done'."
          ;; The marker rewrite shifts everything after it; a marker keeps
          ;; the line's end (and its trailing newline) locatable.
          (end (copy-marker line-end))
+         ;; End of the line's content: LINE-END drops its trailing newline
+         ;; when present, but a list item on the last line of a narrowed
+         ;; body (see `--style-lists') runs to the narrow with its newline
+         ;; just outside, so there is nothing to drop there.
+         (content-end (copy-marker (if (eq (char-before line-end) ?\n)
+                                       (1- line-end)
+                                     line-end)))
          ;; Stash the markdown before rewriting so copy-as-markdown can
          ;; restore it.  Excludes the trailing newline (reconstructs it
          ;; verbatim).
          (source (unless (get-text-property line-start
                                             'agent-shell-markdown-source)
-                   (agent-shell-markdown-reconstruct line-start (1- line-end)))))
+                   (agent-shell-markdown-reconstruct
+                    line-start (marker-position content-end)))))
     (cond
      (ordered
       (add-face-text-property marker-start marker-end
@@ -1459,8 +1481,8 @@ reconstructing to `- [x] Done'."
         (unless (equal checkbox " ")
           (save-excursion
             (goto-char (+ marker-start (length glyph)))
-            (skip-chars-forward " \t" (1- (marker-position end)))
-            (add-face-text-property (point) (1- (marker-position end))
+            (skip-chars-forward " \t" (marker-position content-end))
+            (add-face-text-property (point) (marker-position content-end)
                                     'agent-shell-markdown-list-done)))))
      (t
       (agent-shell-markdown--replace-list-marker
@@ -1469,7 +1491,7 @@ reconstructing to `- [x] Done'."
     (put-text-property line-start (marker-position end)
                        'line-prefix agent-shell-markdown-list-line-prefix)
     (when source
-      (put-text-property line-start (1- (marker-position end))
+      (put-text-property line-start (marker-position content-end)
                          'agent-shell-markdown-source source))
     (add-text-properties
      line-start (marker-position end)
@@ -1477,7 +1499,8 @@ reconstructing to `- [x] Done'."
        agent-shell-markdown-list-rendered t
        rear-nonsticky (agent-shell-markdown-frozen
                        agent-shell-markdown-list-rendered)))
-    (set-marker end nil)))
+    (set-marker end nil)
+    (set-marker content-end nil)))
 
 (cl-defun agent-shell-markdown--style-lists (&key avoid-ranges)
   "Render markdown list lines: bullets, task checkboxes, ordered numbers.
@@ -1514,7 +1537,30 @@ a two-column base indent."
            :indent-width (- (match-end 1) (match-beginning 1))
            :marker-start (match-beginning 2)
            :marker-end (match-end 2)
-           :content-start (match-end 3)))))))
+           :content-start (match-end 3)))))
+    ;; A fragment body is rendered under a narrow to its content, so a
+    ;; list item on the last line has its terminating newline just past
+    ;; the narrow (or none yet).  The loop above is newline-anchored, so
+    ;; that last item is never rendered.  Handle it here, but only when a
+    ;; newline actually exists immediately past the narrow: that proves
+    ;; the line is complete rather than a still-streaming frontier (whose
+    ;; marker must stay raw until it is known to be a list item).
+    (when-let* ((narrow-end (point-max))
+                ((save-restriction (widen) (eq (char-after narrow-end) ?\n))))
+      (goto-char narrow-end)
+      (beginning-of-line)
+      (when (and (not (get-text-property (point)
+                                         'agent-shell-markdown-list-rendered))
+                 (looking-at agent-shell-markdown--list-item-last-line-regexp)
+                 (not (agent-shell-markdown-in-avoid-range-p
+                       (match-beginning 0) (match-end 0) avoid-ranges)))
+        (agent-shell-markdown--render-list-line
+         :line-start (match-beginning 0)
+         :line-end (match-end 0)
+         :indent-width (- (match-end 1) (match-beginning 1))
+         :marker-start (match-beginning 2)
+         :marker-end (match-end 2)
+         :content-start (match-end 3))))))
 
 (defun agent-shell-markdown--blank-line-at-p (pos)
   "Return non-nil when the line holding POS is blank.
