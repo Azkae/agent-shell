@@ -5514,8 +5514,8 @@ Session events:
   `session-title-changed' - Session title updated
     :data contains :title
   `input-submitted'       - User submitted input to the agent
-  `idle'                  - Agent idle for variable `agent-shell-idle-timeout' seconds
-    :data contains :idle-event and :buffer
+  `idle'                  - Agent idle for variable `agent-shell-idle-timeout'
+    seconds :data contains :idle-event and :buffer
 
 General events:
   `error'               - ACP request failed
