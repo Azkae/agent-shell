@@ -587,7 +587,11 @@ second call reuses the cached file instead of downloading again."
             (should (stringp path))
             (should (string-suffix-p ".png" path))
             (should (file-exists-p path))
-            (should (image-supported-file-p path))
+            ;; `image-supported-file-p' depends on the running Emacs being
+            ;; built with PNG support, which headless CI may lack, so only
+            ;; assert it where PNG is actually available.
+            (when (image-type-available-p 'png)
+              (should (image-supported-file-p path)))
             (should (equal downloads 1))
             ;; Second call reuses the cached file (globbed by base name), no
             ;; additional download.
