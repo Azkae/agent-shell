@@ -517,36 +517,32 @@ this returns `(((:watermark . 1200)))'."
                         nil))
     (nreverse results)))
 
-(defun agent-shell-markdown--emphasize-span (markup-start markup-end
-                                                          inner-start inner-end
-                                                          face)
-  "Strip emphasis delimiters around INNER-START..INNER-END and face the text.
+(cl-defun agent-shell-markdown--emphasize-span (&key markup-start markup-end
+                                                     content-start content-end face)
+  "Strip emphasis delimiters around CONTENT-START..CONTENT-END and face the text.
 
 MARKUP-START..MARKUP-END spans the whole construct including its
-delimiters (e.g. `**X**'); INNER-START..INNER-END is the inner text
-\(`X').  Only the leading and trailing delimiters are deleted -- the
-inner text is left in place rather than deleted and re-inserted -- so
-any overlays, markers, or `agent-shell-markdown-frozen' regions an
-earlier pass or an external `agent-shell-markdown-render-functions'
-renderer placed inside survive.  (Deleting and re-inserting collapsed
-external markers to a zero-length span and dropped overlays, so a
-renderer that anchors an async result inside, say, a bold span -- e.g.
-math inside `**...**' -- lost it.)
+delimiters (e.g. `**X**'); CONTENT-START..CONTENT-END is the content
+text (`X').  Only the delimiters are deleted; the content text is left
+in place rather than deleted and re-inserted, so any overlays, markers,
+or `agent-shell-markdown-frozen' regions an earlier pass or an
+external `agent-shell-markdown-render-functions' renderer anchored
+inside survive.
 
-FACE is layered onto the remaining text with `add-face-text-property'
-\(so it composes with faces from earlier passes), and the original
-markdown is stashed on `agent-shell-markdown-source' (for
-`agent-shell-copy-as-markdown') unless the text already carries one.
+FACE is layered on the remaining text with `add-face-text-property',
+so it composes with faces from earlier passes.  Unless the text
+already carries one, the original markdown is stashed on
+`agent-shell-markdown-source' for `agent-shell-copy-as-markdown'.
 Point is left at the end of the faced text."
   (let ((source (unless (get-text-property markup-start
                                            'agent-shell-markdown-source)
                   (agent-shell-markdown-reconstruct markup-start markup-end))))
-    ;; Delete the trailing delimiter first so INNER-START/INNER-END stay
+    ;; Delete the trailing delimiter first so CONTENT-START/CONTENT-END stay
     ;; valid, then the leading one.  Removing only the delimiters keeps the
-    ;; inner text's characters (and anything anchored to them) intact.
-    (delete-region inner-end markup-end)
-    (delete-region markup-start inner-start)
-    (let ((end (+ markup-start (- inner-end inner-start))))
+    ;; content text's characters (and anything anchored to them) intact.
+    (delete-region content-end markup-end)
+    (delete-region markup-start content-start)
+    (let ((end (+ markup-start (- content-end content-start))))
       (add-face-text-property markup-start end face)
       (when source
         (put-text-property markup-start end
@@ -580,10 +576,10 @@ world.\" with face `agent-shell-markdown-bold' on \"world\"."
         (if avoid
             (goto-char (cdr avoid))
           (agent-shell-markdown--emphasize-span
-           markup-start markup-end
-           (or (match-beginning 2) (match-beginning 3))
-           (or (match-end 2) (match-end 3))
-           'agent-shell-markdown-bold)
+           :markup-start markup-start :markup-end markup-end
+           :content-start (or (match-beginning 2) (match-beginning 3))
+           :content-end (or (match-end 2) (match-end 3))
+           :face 'agent-shell-markdown-bold)
           (setq changed t))))
     changed))
 
@@ -618,10 +614,10 @@ world.\" with face `agent-shell-markdown-italic' on \"world\"."
         (if avoid
             (goto-char (cdr avoid))
           (agent-shell-markdown--emphasize-span
-           markup-start markup-end
-           (or (match-beginning 2) (match-beginning 4))
-           (or (match-end 2) (match-end 4))
-           'agent-shell-markdown-italic)
+           :markup-start markup-start :markup-end markup-end
+           :content-start (or (match-beginning 2) (match-beginning 4))
+           :content-end (or (match-end 2) (match-end 4))
+           :face 'agent-shell-markdown-italic)
           (setq changed t))))
     changed))
 
@@ -648,9 +644,9 @@ For example, the buffer \"a ~~b~~ c\" becomes \"a b c\" with face
         (if avoid
             (goto-char (cdr avoid))
           (agent-shell-markdown--emphasize-span
-           markup-start markup-end
-           (match-beginning 1) (match-end 1)
-           'agent-shell-markdown-strikethrough)
+           :markup-start markup-start :markup-end markup-end
+           :content-start (match-beginning 1) :content-end (match-end 1)
+           :face 'agent-shell-markdown-strikethrough)
           (setq changed t))))
     changed))
 
