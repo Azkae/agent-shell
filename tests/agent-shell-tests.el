@@ -580,6 +580,8 @@ block -- covering the dispatch path, not just the helper in isolation."
                (lambda (_state) t))
               ((symbol-function 'agent-shell--append-transcript)
                #'ignore)
+              ((symbol-function 'agent-shell--emit-event)
+               #'ignore)
               ((symbol-function 'agent-shell--update-fragment)
                (lambda (&rest args) (setq rendered (plist-get args :body)))))
       ;; Text content block -> its text.
@@ -4285,6 +4287,7 @@ interleaved entry that failed to advance it.  Returns a list of
                (lambda (&rest args)
                  (push (cons (plist-get args :block-id) (plist-get args :create-new)) calls)))
               ((symbol-function 'agent-shell--append-transcript) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
               ((symbol-function 'agent-shell--active-requests-p) (lambda (&rest _) t))
               ((symbol-function 'agent-shell--content-block-to-markdown)
                (lambda (block) (map-elt block 'text)))
