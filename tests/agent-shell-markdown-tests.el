@@ -28,6 +28,47 @@
                  '(("hello " nil)
                    ("world" (agent-shell-markdown-bold))))))
 
+(ert-deftest agent-shell-markdown-emphasis-preserves-frozen-region ()
+  ;; An emphasis pass that WRAPS an already-frozen region (e.g. one an
+  ;; external `agent-shell-markdown-render-functions' renderer claimed and
+  ;; anchored an async result inside) must strip only the delimiters and
+  ;; leave the inner text in place: deleting and re-inserting the whole
+  ;; span used to collapse markers pointing into it and drop overlays.
+  ;; Assert markers straddling the frozen text stay valid (still spanning
+  ;; it), an overlay on it survives, and the frozen property is intact.
+  (with-temp-buffer
+    (insert "a **b FROZEN c**\n")
+    (goto-char (point-min))
+    (search-forward "FROZEN")
+    (let* ((inner-start (match-beginning 0))
+           (inner-end (match-end 0))
+           (m-start (copy-marker inner-start))
+           (m-end (copy-marker inner-end))
+           (ov (make-overlay inner-start inner-end)))
+      (overlay-put ov 'display "IMG")
+      (put-text-property inner-start inner-end 'agent-shell-markdown-frozen t)
+      (agent-shell-markdown--replace-bolds :avoid-ranges nil)
+      ;; Delimiters gone, inner text kept.
+      (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                     "a b FROZEN c\n"))
+      ;; Markers still bracket the same text (not collapsed).
+      (should (< (marker-position m-start) (marker-position m-end)))
+      (should (equal (buffer-substring-no-properties
+                      (marker-position m-start) (marker-position m-end))
+                     "FROZEN"))
+      ;; Overlay survived over the same text.
+      (should (overlay-buffer ov))
+      (should (equal (buffer-substring-no-properties
+                      (overlay-start ov) (overlay-end ov))
+                     "FROZEN"))
+      ;; Frozen property intact, bold applied to the surrounding text.
+      (should (get-text-property (marker-position m-start)
+                                 'agent-shell-markdown-frozen))
+      (should (memq 'agent-shell-markdown-bold
+                    (let ((f (get-text-property (marker-position m-start)
+                                                'face)))
+                      (if (listp f) f (list f))))))))
+
 (ert-deftest agent-shell-markdown-convert-italic ()
   (should (equal (agent-shell-markdown--deconstruct
                   (agent-shell-markdown-convert "hello *world*"))

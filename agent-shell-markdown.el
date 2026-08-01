@@ -517,6 +517,42 @@ this returns `(((:watermark . 1200)))'."
                         nil))
     (nreverse results)))
 
+(defun agent-shell-markdown--emphasize-span (markup-start markup-end
+                                                          inner-start inner-end
+                                                          face)
+  "Strip emphasis delimiters around INNER-START..INNER-END and face the text.
+
+MARKUP-START..MARKUP-END spans the whole construct including its
+delimiters (e.g. `**X**'); INNER-START..INNER-END is the inner text
+\(`X').  Only the leading and trailing delimiters are deleted -- the
+inner text is left in place rather than deleted and re-inserted -- so
+any overlays, markers, or `agent-shell-markdown-frozen' regions an
+earlier pass or an external `agent-shell-markdown-render-functions'
+renderer placed inside survive.  (Deleting and re-inserting collapsed
+external markers to a zero-length span and dropped overlays, so a
+renderer that anchors an async result inside, say, a bold span -- e.g.
+math inside `**...**' -- lost it.)
+
+FACE is layered onto the remaining text with `add-face-text-property'
+\(so it composes with faces from earlier passes), and the original
+markdown is stashed on `agent-shell-markdown-source' (for
+`agent-shell-copy-as-markdown') unless the text already carries one.
+Point is left at the end of the faced text."
+  (let ((source (unless (get-text-property markup-start
+                                           'agent-shell-markdown-source)
+                  (agent-shell-markdown-reconstruct markup-start markup-end))))
+    ;; Delete the trailing delimiter first so INNER-START/INNER-END stay
+    ;; valid, then the leading one.  Removing only the delimiters keeps the
+    ;; inner text's characters (and anything anchored to them) intact.
+    (delete-region inner-end markup-end)
+    (delete-region markup-start inner-start)
+    (let ((end (+ markup-start (- inner-end inner-start))))
+      (add-face-text-property markup-start end face)
+      (when source
+        (put-text-property markup-start end
+                           'agent-shell-markdown-source source))
+      (goto-char end))))
+
 (cl-defun agent-shell-markdown--replace-bolds (&key avoid-ranges)
   "Replace `**X**' / `__X__' spans in current buffer with bold X.
 
@@ -543,22 +579,12 @@ world.\" with face `agent-shell-markdown-bold' on \"world\"."
                      markup-start markup-end avoid-ranges)))
         (if avoid
             (goto-char (cdr avoid))
-          (let ((text (buffer-substring
-                       (or (match-beginning 2) (match-beginning 3))
-                       (or (match-end 2) (match-end 3))))
-                (source (unless (get-text-property markup-start
-                                                   'agent-shell-markdown-source)
-                          (agent-shell-markdown-reconstruct
-                           markup-start markup-end))))
-            (delete-region markup-start markup-end)
-            (goto-char markup-start)
-            (insert text)
-            (let ((end (+ markup-start (length text))))
-              (add-face-text-property markup-start end 'agent-shell-markdown-bold)
-              (when source
-                (put-text-property markup-start end
-                                   'agent-shell-markdown-source source)))
-            (setq changed t)))))
+          (agent-shell-markdown--emphasize-span
+           markup-start markup-end
+           (or (match-beginning 2) (match-beginning 3))
+           (or (match-end 2) (match-end 3))
+           'agent-shell-markdown-bold)
+          (setq changed t))))
     changed))
 
 (cl-defun agent-shell-markdown--replace-italics (&key avoid-ranges)
@@ -591,22 +617,12 @@ world.\" with face `agent-shell-markdown-italic' on \"world\"."
                      markup-start markup-end avoid-ranges)))
         (if avoid
             (goto-char (cdr avoid))
-          (let ((text (buffer-substring
-                       (or (match-beginning 2) (match-beginning 4))
-                       (or (match-end 2) (match-end 4))))
-                (source (unless (get-text-property markup-start
-                                                   'agent-shell-markdown-source)
-                          (agent-shell-markdown-reconstruct
-                           markup-start markup-end))))
-            (delete-region markup-start markup-end)
-            (goto-char markup-start)
-            (insert text)
-            (let ((end (+ markup-start (length text))))
-              (add-face-text-property markup-start end 'agent-shell-markdown-italic)
-              (when source
-                (put-text-property markup-start end
-                                   'agent-shell-markdown-source source)))
-            (setq changed t)))))
+          (agent-shell-markdown--emphasize-span
+           markup-start markup-end
+           (or (match-beginning 2) (match-beginning 4))
+           (or (match-end 2) (match-end 4))
+           'agent-shell-markdown-italic)
+          (setq changed t))))
     changed))
 
 (cl-defun agent-shell-markdown--replace-strikethroughs (&key avoid-ranges)
@@ -631,21 +647,11 @@ For example, the buffer \"a ~~b~~ c\" becomes \"a b c\" with face
                      markup-start markup-end avoid-ranges)))
         (if avoid
             (goto-char (cdr avoid))
-          (let ((text (buffer-substring (match-beginning 1) (match-end 1)))
-                (source (unless (get-text-property markup-start
-                                                   'agent-shell-markdown-source)
-                          (agent-shell-markdown-reconstruct
-                           markup-start markup-end))))
-            (delete-region markup-start markup-end)
-            (goto-char markup-start)
-            (insert text)
-            (let ((end (+ markup-start (length text))))
-              (add-face-text-property markup-start end
-                                      'agent-shell-markdown-strikethrough)
-              (when source
-                (put-text-property markup-start end
-                                   'agent-shell-markdown-source source)))
-            (setq changed t)))))
+          (agent-shell-markdown--emphasize-span
+           markup-start markup-end
+           (match-beginning 1) (match-end 1)
+           'agent-shell-markdown-strikethrough)
+          (setq changed t))))
     changed))
 
 (cl-defun agent-shell-markdown--replace-headers (&key avoid-ranges)
