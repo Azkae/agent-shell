@@ -1690,9 +1690,11 @@ buffers are available or nothing was selected."
                                                     '(:agent-config :buffer-name))))
                              (cons :status (symbol-name (agent-shell-status)))
                              (cons :title (let ((title (string-trim
-                                                        (or (map-nested-elt agent-shell--state
-                                                                            '(:session :title))
-                                                            ""))))
+                                                        (car (split-string
+                                                              (or (map-nested-elt agent-shell--state
+                                                                                  '(:session :title))
+                                                                  "")
+                                                              "\n")))))
                                             (if (> (length title) 50)
                                                 (concat (substring title 0 47) "...")
                                               title))))))
