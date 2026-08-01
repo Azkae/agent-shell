@@ -625,13 +625,17 @@ Returns an alist with all specified values."
     (:icon-name . ,icon-name)
     (:install-instructions . ,install-instructions)))
 
-(defun agent-shell--default-agent-config-makers ()
+(defun agent-shell-default-agent-config-makers ()
   "Return the list of default agent config maker functions.
 
 Each element is a function that returns a configuration alist when
 called.  Keeping makers (rather than pre-built configurations) means
 configurations are rebuilt on access and stay current across code
-reloads.  See `agent-shell-agent-configs'."
+reloads.
+
+This is the default value of `agent-shell-agent-configs'.  It is exposed
+so a function value for that variable can build on the defaults, for
+example filtering them.  See `agent-shell-agent-configs'."
   (list #'agent-shell-auggie-make-agent-config
         #'agent-shell-anthropic-make-claude-code-config
         #'agent-shell-codebuddy-make-agent-config
@@ -653,31 +657,54 @@ reloads.  See `agent-shell-agent-configs'."
         #'agent-shell-xai-make-grok-config))
 
 (defcustom agent-shell-agent-configs
-  (agent-shell--default-agent-config-makers)
-  "The list of known agent configurations.
+  (agent-shell-default-agent-config-makers)
+  "The known agent configurations.
 
-Each entry is either a function that returns a configuration alist, or a
-configuration alist itself.  Functions are preferred and used by
+Either a list of entries, or a function of no arguments returning such a
+list.  A function is called on every access, so it can compute the known
+agents dynamically, for example keeping only the agents from
+`agent-shell-default-agent-config-makers' whose executable is installed:
+
+  (setq agent-shell-agent-configs
+        (lambda ()
+          (seq-filter
+           (lambda (maker)
+             (when-let* ((config (funcall maker))
+                         (client-maker (map-elt config :client-maker))
+                         (client (ignore-errors
+                                   (funcall client-maker (current-buffer))))
+                         (command (map-elt client :command)))
+               (executable-find command)))
+           (agent-shell-default-agent-config-makers))))
+
+Each list entry is either a function that returns a configuration alist,
+or a configuration alist itself.  Functions are preferred and used by
 default: they are called on every access, so agent definitions stay
 current across code reloads.  Concrete alists are accepted for
 backwards compatibility.
 
 See `agent-shell-*-make-*-config' for details."
-  :type '(repeat (choice function
-                         (alist :key-type symbol :value-type sexp)))
+  :type '(choice (function :tag "Function returning configs")
+                 (repeat :tag "List of configs"
+                         (choice function
+                                 (alist :key-type symbol :value-type sexp))))
   :group 'agent-shell)
 
 (defun agent-shell--resolved-agent-configs ()
   "Return `agent-shell-agent-configs' with maker entries realized.
 
-Each entry is either a configuration alist or a function (a symbol or
-lambda) that returns one.  Functions are called on every access, so
-edits to the underlying makers take effect without rebuilding the list."
+`agent-shell-agent-configs' is a list of entries, or a function
+returning such a list, in which case it is called first.  Each entry is
+a configuration alist or a function (a symbol or lambda) returning one.
+Functions are called on every access, so edits to the underlying makers
+take effect without rebuilding the list."
   (mapcar (lambda (entry)
             (if (functionp entry)
                 (funcall entry)
               entry))
-          agent-shell-agent-configs))
+          (if (functionp agent-shell-agent-configs)
+              (funcall agent-shell-agent-configs)
+            agent-shell-agent-configs)))
 
 (defcustom agent-shell-preferred-agent-config nil
   "Default agent to use for all new shells.
