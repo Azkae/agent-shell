@@ -2612,6 +2612,9 @@ No-op while that function has nothing to summarize (an empty group)."
              (agent-shell--append-transcript
               :text (agent-shell--indent-markdown-headers content)
               :file-path agent-shell--transcript-file)
+             (agent-shell--emit-event
+              :event 'agent-message-chunk
+              :data (list (cons :text-chunk (map-nested-elt acp-notification '(params update content text)))))
              (agent-shell--update-fragment
               :state state
               ;; Out of turn, key under a dedicated namespace so the
@@ -5511,6 +5514,11 @@ Session events:
     :data contains :request-id, :tool-call-id, :tool-call
   `permission-response'   - Permission response sent
     :data contains :request-id, :tool-call-id, :option-id, :cancelled
+  `agent-message-chunk'   - Agent streamed a chunk of message text
+    :data contains :text-chunk (the raw text the agent emitted, nil for a
+    non-text block such as an image).  Emitted once per streamed chunk, so
+    it may fire many times per turn; agent-shell neither renders nor
+    accumulates the text.
   `turn-complete'         - Agent turn finished and prompt ready for input
     :data contains :stop-reason and :usage
   `session-title-changed' - Session title updated
