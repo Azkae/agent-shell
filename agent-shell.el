@@ -5355,6 +5355,23 @@ Copies so the cached MODEL is left untouched."
     (map-put! copy :busy-indicator-frame (agent-shell--busy-indicator-frame))
     copy))
 
+(defun agent-shell--image-extension-from-content-type ()
+  "Return an image file extension for the response `Content-Type', or nil.
+
+Point should be within the HTTP response headers of the current buffer.
+Used to name a cached icon whose URL carries no file extension (e.g. a
+GitHub avatar), so `image-supported-file-p' can recognize it later."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^Content-Type:[ \t]*\\([^ \t\r\n;]+\\)" nil t)
+      (pcase (downcase (match-string 1))
+        ("image/png" "png")
+        ("image/jpeg" "jpg")
+        ("image/gif" "gif")
+        ("image/svg+xml" "svg")
+        ("image/webp" "webp")
+        ((or "image/x-icon" "image/vnd.microsoft.icon") "ico")))))
+
 (defun agent-shell--fetch-agent-icon (icon-name)
   "Download icon with ICON-NAME from GitHub, only if it exists, and save as binary.
 
@@ -5378,20 +5395,39 @@ Icon names starting with https:// are downloaded directly from that location."
                            url))
                        ;; For lobe-icons names, use the original filename
                        (file-name-nondirectory url)))
-           (cache-path (expand-file-name filename (agent-shell-cache-dir mode))))
-      (unless (file-exists-p cache-path)
+           (cache-dir (agent-shell-cache-dir mode))
+           ;; A URL without a recognizable image extension (e.g. a GitHub
+           ;; avatar) is cached under a Content-Type-derived extension so
+           ;; that `image-supported-file-p' can recognize it. Reuse such a
+           ;; copy across calls by globbing for the extension we appended.
+           (has-extension (seq-contains-p image-file-name-extensions
+                                          (downcase (or (file-name-extension filename) ""))))
+           (cache-path (if has-extension
+                           (expand-file-name filename cache-dir)
+                         (car (file-expand-wildcards
+                               (expand-file-name (concat filename ".*")
+                                                 cache-dir))))))
+      (unless (and cache-path (file-exists-p cache-path))
         (let ((buffer (url-retrieve-synchronously url t t 5.0)))
           (when buffer
             (with-current-buffer buffer
               (goto-char (point-min))
               (if (re-search-forward "^HTTP/[0-9.]+ 200" nil t)
                   (progn
+                    (setq cache-path
+                          (expand-file-name
+                           (if has-extension
+                               filename
+                             (concat filename
+                                     (when-let* ((ext (agent-shell--image-extension-from-content-type)))
+                                       (concat "." ext))))
+                           cache-dir))
                     (re-search-forward "\r?\n\r?\n")
                     (let ((coding-system-for-write 'no-conversion))
                       (write-region (point) (point-max) cache-path)))
                 (message "Icon fetch failed: %s" url)))
             (kill-buffer buffer))))
-      (when (file-exists-p cache-path)
+      (when (and cache-path (file-exists-p cache-path))
         cache-path))))
 
 (defun agent-shell--make-agent-fallback-icon (icon-name width)

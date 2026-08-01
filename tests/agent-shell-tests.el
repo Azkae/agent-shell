@@ -533,6 +533,68 @@ file name."
     (should-not (agent-shell--image-data-to-file png "image/../../../tmp/evil"))
     (should-not (agent-shell--image-data-to-file png "image/png ../evil"))))
 
+(ert-deftest agent-shell--image-extension-from-content-type-test ()
+  "Test `agent-shell--image-extension-from-content-type'.
+
+Maps the response `Content-Type' header (parsed from the current buffer's
+HTTP headers) to a file extension, so a URL without one -- like a GitHub
+avatar -- can be cached under a name `image-supported-file-p' recognizes."
+  (cl-flet ((extension-for (content-type)
+              (with-temp-buffer
+                (insert (format "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\nBODY"
+                                content-type))
+                (goto-char (point-min))
+                (agent-shell--image-extension-from-content-type))))
+    (should (equal (extension-for "image/png") "png"))
+    (should (equal (extension-for "image/jpeg") "jpg"))
+    (should (equal (extension-for "image/svg+xml") "svg"))
+    ;; Parameters after the type (e.g. "; charset=...") are ignored.
+    (should (equal (extension-for "image/png; charset=binary") "png"))
+    (should (equal (extension-for "image/vnd.microsoft.icon") "ico"))
+    ;; Non-image or unknown content types yield nil.
+    (should-not (extension-for "text/html"))
+    ;; No Content-Type header at all -> nil.
+    (should-not (with-temp-buffer
+                  (insert "HTTP/1.1 200 OK\r\n\r\nBODY")
+                  (goto-char (point-min))
+                  (agent-shell--image-extension-from-content-type)))))
+
+(ert-deftest agent-shell--fetch-agent-icon-extensionless-url-test ()
+  "Test `agent-shell--fetch-agent-icon' with an extensionless URL.
+
+A GitHub avatar URL carries no file extension, so the cached copy must be
+named from the response `Content-Type' -- otherwise `image-supported-file-p'
+rejects it and no icon (not even a fallback) is shown.  Also verifies a
+second call reuses the cached file instead of downloading again."
+  (let* ((cache-dir (make-temp-file "agent-shell-icon-cache" t))
+         (url "https://avatars.githubusercontent.com/u/131064358")
+         (downloads 0)
+         (fake-response
+          (lambda (&rest _)
+            (setq downloads (1+ downloads))
+            (let ((buffer (generate-new-buffer " *fake-http*")))
+              (with-current-buffer buffer
+                (set-buffer-multibyte nil)
+                (insert "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\nPNGBYTES"))
+              buffer))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell-cache-dir)
+                   (lambda (&rest _) cache-dir))
+                  ((symbol-function 'url-retrieve-synchronously) fake-response))
+          ;; First call downloads and caches under a Content-Type-derived
+          ;; extension, so the result is a recognizable image file.
+          (let ((path (agent-shell--fetch-agent-icon url)))
+            (should (stringp path))
+            (should (string-suffix-p ".png" path))
+            (should (file-exists-p path))
+            (should (image-supported-file-p path))
+            (should (equal downloads 1))
+            ;; Second call reuses the cached file (globbed by base name), no
+            ;; additional download.
+            (should (equal (agent-shell--fetch-agent-icon url) path))
+            (should (equal downloads 1))))
+      (delete-directory cache-dir t))))
+
 (ert-deftest agent-shell--content-extension-test ()
   "Test `agent-shell--content-extension'."
   (should (equal (agent-shell--content-extension "audio/wav") "wav"))
