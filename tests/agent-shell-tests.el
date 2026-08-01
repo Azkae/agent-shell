@@ -1298,6 +1298,38 @@ the window.  An empty draft signals an error."
                  (list (cons :config-options options))
                  "model"))))
 
+(ert-deftest agent-shell--format-available-config-options-test ()
+  "Test `agent-shell--format-available-config-options' enumerates values."
+  (let ((rendered (agent-shell--format-available-config-options
+                   (agent-shell--normalize-config-options
+                    [((id . "thought_level")
+                      (name . "Effort")
+                      (description . "Reasoning effort")
+                      (category . "thought_level")
+                      (type . "select")
+                      (currentValue . "high")
+                      (options . [((value . "high") (name . "High"))
+                                  ((value . "low") (name . "Low"))]))]))))
+    ;; The option id (the alist key) is shown, with the description inline.
+    (should (string-match-p "id: thought_level): Reasoning effort" rendered))
+    ;; The current value shows both its name and id.
+    (should (string-match-p "current: High (id: high)" rendered))
+    ;; Every selectable value shows its name and the id the alist stores,
+    ;; one per line.
+    (should (string-match-p "values: High (id: high)" rendered))
+    (should (string-match-p "\n *Low (id: low)" rendered))))
+
+(ert-deftest agent-shell--config-option-value-label-test ()
+  "Test `agent-shell--config-option-value-label'."
+  ;; Annotates the name with its id.
+  (should (equal (agent-shell--config-option-value-label "High" "high")
+                 "High (id: high)"))
+  ;; Falls back to the bare id when the name adds no information.
+  (should (equal (agent-shell--config-option-value-label "high" "high")
+                 "high"))
+  (should (equal (agent-shell--config-option-value-label nil "high")
+                 "high")))
+
 (ert-deftest agent-shell--config-option-by-category-prefers-id-match-test ()
   "Test `agent-shell--config-option-by-category' tie-breaks on `:id'.
 
