@@ -6670,12 +6670,7 @@ pending-restore state once replay completes."
                    (agent-shell--replay-turn state (car (last prompt-turns)))))
                 ('full
                  (dolist (turn prompt-turns)
-                   (agent-shell--replay-turn state turn)
-                   ;; Repaint between turns so restored history streams in
-                   ;; visibly rather than appearing all at once when the
-                   ;; blocking replay finally returns.
-                   ;; TODO: Consider rendering on idle.
-                   (redisplay t))))))
+                   (agent-shell--replay-turn state turn))))))
         (map-put! state :active-requests saved-active-requests))
       ;; Point followed the narrowed history insertions up above the live
       ;; prompt.  Return it to the input area so the cursor lands where the
