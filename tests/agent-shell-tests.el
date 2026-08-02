@@ -2301,17 +2301,46 @@ remaining subscribers nor propagate out of `agent-shell--emit-event'."
 
 (ert-deftest agent-shell--sync-system-sleep-disabled-is-noop-test ()
   "Test no sleep block is acquired when the option is nil."
-  (let ((state (list (cons :buffer (current-buffer))
+  (let ((require-calls 0)
+        (state (list (cons :buffer (current-buffer))
                      (cons :event-subscriptions nil)
                      (cons :sleep-token nil)))
+        (agent-shell--system-sleep-load-attempted nil)
         (agent-shell-inhibit-system-sleep nil))
     (cl-letf (((symbol-function 'agent-shell--state)
                (lambda () state))
               ((symbol-function 'agent-shell-status)
                (lambda (&rest _) 'busy))
-              ((symbol-function 'system-sleep-block-sleep)
-               (lambda (&rest _) (error "Should not block sleep when disabled"))))
+              ((symbol-function 'require)
+               (lambda (&rest _)
+                 (setq require-calls (1+ require-calls))
+                 nil))
+              ((symbol-function 'system-sleep-block-sleep) nil))
       (agent-shell--emit-event :event 'input-submitted)
+      (should-not (map-elt state :sleep-token))
+      (should (= 0 require-calls)))))
+
+(ert-deftest agent-shell--sync-system-sleep-unavailable-loads-once-test ()
+  "Test unavailable sleep support is loaded at most once."
+  (let ((require-calls 0)
+        (state (list (cons :buffer (current-buffer))
+                     (cons :event-subscriptions nil)
+                     (cons :sleep-token nil)))
+        (agent-shell--system-sleep-load-attempted nil)
+        (agent-shell-inhibit-system-sleep t))
+    (cl-letf (((symbol-function 'agent-shell--state)
+               (lambda () state))
+              ((symbol-function 'agent-shell-status)
+               (lambda (&rest _) 'busy))
+              ((symbol-function 'require)
+               (lambda (feature &optional _filename _noerror)
+                 (should (eq feature 'system-sleep))
+                 (setq require-calls (1+ require-calls))
+                 nil))
+              ((symbol-function 'system-sleep-block-sleep) nil))
+      (agent-shell--emit-event :event 'input-submitted)
+      (agent-shell--emit-event :event 'tool-call-update)
+      (should (= 1 require-calls))
       (should-not (map-elt state :sleep-token)))))
 
 (ert-deftest agent-shell--sync-system-sleep-single-token-test ()
@@ -3748,6 +3777,33 @@ API's path params), so it must not be fed to `file-name-nondirectory'."
               (:raw-input . ((path . ((id . "abc")))
                              (body . ((value . 1)))))
               (:kind . "other"))))))
+
+(ert-deftest agent-shell--permission-title-fetch-shows-url-test ()
+  "Test `agent-shell--permission-title' surfaces the full URL for fetch tools.
+Based on OpenCode webfetch traffic from
+https://github.com/xenodium/agent-shell/issues/745, where a later
+`tool_call_update' clobbers the descriptive title back to
+\"webfetch\", so the URL must be recovered from `rawInput.url'."
+  (should (equal
+           "webfetch (https://en.wikipedia.org/wiki/Emacs)"
+           (agent-shell--permission-title
+            :tool-call
+            '((:title . "webfetch")
+              (:raw-input . ((url . "https://en.wikipedia.org/wiki/Emacs")
+                             (format . "markdown")))
+              (:kind . "fetch"))))))
+
+(ert-deftest agent-shell--permission-title-no-duplicate-url-test ()
+  "Test `agent-shell--permission-title' does not duplicate a URL already in title.
+The `session/request_permission' title is often the URL itself."
+  (should (equal
+           "https://en.wikipedia.org/wiki/Emacs"
+           (agent-shell--permission-title
+            :tool-call
+            '((:title . "https://en.wikipedia.org/wiki/Emacs")
+              (:raw-input . ((url . "https://en.wikipedia.org/wiki/Emacs")
+                             (format . "markdown")))
+              (:kind . "fetch"))))))
 
 (ert-deftest agent-shell--permission-title-execute-fenced-test ()
   "Test `agent-shell--permission-title' fences execute commands."
