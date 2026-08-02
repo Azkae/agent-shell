@@ -394,8 +394,19 @@ state, because label-less fragments don't follow `state :collapsed'
       ;; apply once the chunk lands — clear and re-derive.  Only when
       ;; the body is visible; for a hidden body the existing invisible
       ;; spans the whole body and must stay.
+      ;;
+      ;; `invisible' can only sit on the trailing-whitespace tail of a
+      ;; visible body (`agent-shell-markdown' never sets it mid-body), so
+      ;; clearing just the tail is equivalent to clearing the whole body
+      ;; without walking every property interval on each chunk (the whole
+      ;; body grows, so a full clear is O(body) per chunk).
       (unless body-invisible
-        (remove-text-properties body-start body-end '(invisible nil)))
+        (when (and (< body-start body-end)
+                   (eq (get-text-property (1- body-end) 'invisible) t))
+          (let ((tail-start (or (previous-single-property-change
+                                 body-end 'invisible nil body-start)
+                                body-start)))
+            (remove-text-properties tail-start body-end '(invisible nil)))))
       (goto-char body-end)
       (let ((insert-start (point)))
         (insert (agent-shell-ui--indent-text
@@ -462,7 +473,19 @@ are preserved across label updates."
                                    'agent-shell-ui-section section t t)))
                      (when (<= (prop-match-end m) (prop-match-end block-match))
                        (cons (prop-match-beginning m)
-                             (prop-match-end m)))))))
+                             (prop-match-end m))))))
+                ;; Skip the rewrite when the label already renders
+                ;; identically: tool-call updates re-send unchanged
+                ;; status/title labels on every chunk, and the rewrite
+                ;; (delete + insert + re-propertize) is pure waste.  A
+                ;; guard clause returning nil makes the whole `when-let*'
+                ;; short-circuit so the rewrite body never runs.  The
+                ;; comparison is text-only; labels are deterministic
+                ;; renderings of caller state, so unchanged text implies
+                ;; unchanged properties (no current caller changes only
+                ;; properties while keeping the text identical).
+                ((not (string= (substring-no-properties new-text)
+                               (buffer-substring-no-properties (car region) (cdr region))))))
       (let* ((region-start (car region))
              (region-end (cdr region))
              (state (get-text-property region-start 'agent-shell-ui-state)))
