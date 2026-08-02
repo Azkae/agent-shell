@@ -43,6 +43,23 @@
                   (agent-shell-markdown-convert "a \\_b\\_ c and \\* star"))
                  "a _b_ c and * star")))
 
+(ert-deftest agent-shell-markdown-escaped-punctuation-preserves-properties ()
+  "Escaped punctuation retains caller-owned text properties."
+  (with-temp-buffer
+    (insert "den\\.")
+    (add-text-properties (1- (point-max)) (point-max)
+                         '(agent-shell-ui-state sentinel
+                           agent-shell-ui-section label-right
+                           read-only t))
+    (let ((inhibit-read-only t))
+      (agent-shell-markdown-replace-markup :render-images nil))
+    (let ((period (1- (point-max))))
+      (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                     "den."))
+      (should (eq (get-text-property period 'agent-shell-ui-state) 'sentinel))
+      (should (eq (get-text-property period 'agent-shell-ui-section) 'label-right))
+      (should (eq (get-text-property period 'read-only) t)))))
+
 (ert-deftest agent-shell-markdown-escaped-punctuation-round-trips ()
   ;; The escaped markdown is stashed, so copy-as-markdown restores the
   ;; backslashes verbatim.
