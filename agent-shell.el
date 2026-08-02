@@ -5659,18 +5659,28 @@ SUBSCRIPTION is a token returned by `agent-shell-subscribe-to'."
                           (equal (map-elt sub :token) subscription))
                         (map-elt (agent-shell--state) :event-subscriptions))))
 
+(defvar agent-shell--system-sleep-load-attempted nil
+  "Non-nil after attempting to load the optional `system-sleep' library.")
+
+(defun agent-shell--system-sleep-available-p ()
+  "Return non-nil when the optional `system-sleep' API is available.
+Attempt to load the library at most once when its API is not already defined."
+  (or (fboundp 'system-sleep-block-sleep)
+      (unless agent-shell--system-sleep-load-attempted
+        (setq agent-shell--system-sleep-load-attempted t)
+        (require 'system-sleep nil t)
+        (fboundp 'system-sleep-block-sleep))))
+
 (defun agent-shell--inhibit-sleep (state)
   "Block system idle sleep for STATE's shell if so configured.
 
 No-op unless `agent-shell-inhibit-system-sleep' is non-nil and the
 `system-sleep' library (Emacs 31.1+) is available.  The block is
 recorded in STATE and released by `agent-shell--uninhibit-sleep'."
-  (unless (fboundp 'system-sleep-block-sleep)
-    (require 'system-sleep nil t))
   ;; Block system idle sleep but allow the display to blank.
   (when-let* ((agent-shell-inhibit-system-sleep)
               ((not (map-elt state :sleep-token)))
-              ((fboundp 'system-sleep-block-sleep)))
+              ((agent-shell--system-sleep-available-p)))
     ;; `system-sleep-block-sleep' talks to logind over D-Bus, which can fail
     ;; (e.g. "Permission denied" under WSL where no logind session exists).
     ;; Degrade gracefully instead of letting the error break event dispatch.
