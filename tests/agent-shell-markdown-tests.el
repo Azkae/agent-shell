@@ -28,6 +28,36 @@
                  '(("hello " nil)
                    ("world" (agent-shell-markdown-bold))))))
 
+(ert-deftest agent-shell-markdown-escaped-asterisk-in-bold ()
+  ;; Regression: `**let vs let\\***' is bold text ending in an escaped
+  ;; literal `*' (CommonMark).  The escape lets the bold span match and
+  ;; the `*' render literally rather than as a stray closing delimiter.
+  (should (equal (agent-shell-markdown--deconstruct
+                  (agent-shell-markdown-convert "**let vs let\\***"))
+                 '(("let vs let*" (agent-shell-markdown-bold))))))
+
+(ert-deftest agent-shell-markdown-escaped-punctuation-not-markup ()
+  ;; A backslash-escaped delimiter renders as the bare char with no
+  ;; emphasis: `\\_' stays `_', `\\*' stays `*'.
+  (should (equal (substring-no-properties
+                  (agent-shell-markdown-convert "a \\_b\\_ c and \\* star"))
+                 "a _b_ c and * star")))
+
+(ert-deftest agent-shell-markdown-escaped-punctuation-round-trips ()
+  ;; The escaped markdown is stashed, so copy-as-markdown restores the
+  ;; backslashes verbatim.
+  (should (equal (agent-shell-markdown-tests--roundtrip "**let vs let\\***\n")
+                 "**let vs let\\***\n"))
+  (should (equal (agent-shell-markdown-tests--roundtrip "a \\* b\n")
+                 "a \\* b\n")))
+
+(ert-deftest agent-shell-markdown-escape-left-literal-inside-code ()
+  ;; Inside a code span a backslash is literal, so `\\*' must NOT be
+  ;; unescaped (and the `*' stays plain, not a delimiter).
+  (should (equal (substring-no-properties
+                  (agent-shell-markdown-convert "`a \\* b`"))
+                 "a \\* b")))
+
 (ert-deftest agent-shell-markdown-emphasis-preserves-frozen-region ()
   ;; An emphasis pass that WRAPS an already-frozen region (e.g. one an
   ;; external `agent-shell-markdown-render-functions' renderer claimed and
