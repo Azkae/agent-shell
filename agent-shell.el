@@ -2759,13 +2759,17 @@ No-op while that function has nothing to summarize (an empty group)."
               :group-expanded agent-shell-activity-group-expand-by-default
               :render-body-images t
               :above-last-prompt (not (agent-shell--active-requests-p state)))
-             ;; Count this thought (once per thought run, not per streamed
-             ;; chunk) and relabel the header so a thought-only group reads
-             ;; "Thinking"/"Thought" instead of the neutral placeholder, and
-             ;; a mixed group can mention it.
+             ;; Count this thought and relabel the header so a thought-only
+             ;; group reads "Thinking"/"Thought" instead of the neutral
+             ;; placeholder, and a mixed group can mention it.  Both run once
+             ;; per thought run, not per streamed chunk: the header label
+             ;; depends only on the thought count (advanced here on
+             ;; `new-thought-p') and the group's tool statuses (unchanged
+             ;; while a pure thought run streams), so relabeling on every
+             ;; chunk repeats an identical update and its buffer scan.
              (when new-thought-p
-               (agent-shell--count-group-thought state group-id))
-             (agent-shell--refresh-activity-group-header state group-id))
+               (agent-shell--count-group-thought state group-id)
+               (agent-shell--refresh-activity-group-header state group-id)))
            (map-put! state :last-entry-type "agent_thought_chunk"))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "user_message_chunk")
            ;; A user_message_chunk replays a user submission.  Render it
