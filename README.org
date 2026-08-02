@@ -95,6 +95,7 @@ We now have a handful of additional packages to extend the =agent-shell= experie
 - [[https://github.com/timfel/agent-shell-desktop.el][agent-shell-desktop]]: Desktop save mode integration for =agent-shell=. Saves and resumes shells by folder, config, and session id.
 - [[https://github.com/ultronozm/agent-shell-links.el][agent-shell-links.el]]: Bookmarks and Org links for =agent-shell= sessions.
 - [[https://github.com/wandersoncferreira/agent-shell-dashboard][agent-shell-dashboard]]: A landing page for =agent-shell=.
+- [[https://github.com/SreenivasVRao/agent-shell-hq][agent-shell-hq]]: A heads-up display and peek interface for managing multiple =agent-shell= sessions, organized by project.
 
 * Articles
 - 20Y: [[https://20y.hu/~slink/journal/agent-shell/index.html][Agentic development workflow in Emacs]]
