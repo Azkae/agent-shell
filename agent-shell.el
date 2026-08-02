@@ -6679,7 +6679,15 @@ pending-restore state once replay completes."
       ;; Point followed the narrowed history insertions up above the live
       ;; prompt.  Return it to the input area so the cursor lands where the
       ;; user types (matching pre-early-prompt restore behavior).
-      (goto-char (point-max)))))
+      (goto-char (point-max))
+      ;; Re-sync the process mark to the input area.  Replay inserts the
+      ;; restored history above the early prompt with plain `insert' (not
+      ;; through the output filter), so the process mark can be left at the
+      ;; start of the live prompt.  Left there, the first submit captures the
+      ;; `PROMPT> ' text as part of the input, corrupting the message sent to
+      ;; the agent and conflating the prompt/input faces.
+      (when-let* ((process (get-buffer-process (current-buffer))))
+        (set-marker (process-mark process) (point-max))))))
 
 (cl-defun agent-shell--initiate-session-resume-by-id (&key session-id session-title shell-buffer on-session-init)
   "Resume or load session SESSION-ID with SHELL-BUFFER and ON-SESSION-INIT.
