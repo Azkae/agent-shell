@@ -967,6 +967,27 @@ Outro"))))
       (should (equal (substring-no-properties (buffer-string))
                      "Intro\n\n• One\n• Two\n• Three\n")))))
 
+(ert-deftest agent-shell-markdown-list-frontier-marker-not-framed ()
+  ;; Regression: a bare list marker at the streaming frontier (its
+  ;; trailing space not yet arrived) must not fool the framing pass into
+  ;; stranding a blank line above the item it becomes, which the collapse
+  ;; pass would then have to remove a render later.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "- one\n")
+      (agent-shell-markdown-replace-markup)
+      (goto-char (point-max))
+      (insert "-")
+      (agent-shell-markdown-replace-markup)
+      ;; No framing blank stranded between the item and the bare marker.
+      (should (equal (substring-no-properties (buffer-string))
+                     "• one\n-"))
+      (goto-char (point-max))
+      (insert " two\n")
+      (agent-shell-markdown-replace-markup)
+      (should (equal (substring-no-properties (buffer-string))
+                     "• one\n• two\n")))))
+
 (ert-deftest agent-shell-markdown-list-last-line-renders-under-narrow ()
   ;; Regression: a fragment body is rendered narrowed to its content, so
   ;; a list item on the last line has its terminating newline just

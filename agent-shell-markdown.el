@@ -1406,6 +1406,20 @@ outside the narrow.")
 Used to hold off a rendered list's bottom padding while another
 item could still stream in below it.")
 
+(defconst agent-shell-markdown--list-item-frontier-regexp
+  (rx bol (zero-or-more (any " \t"))
+      (or (any "-*+") (seq (one-or-more digit) (opt (any ".)"))))
+      (zero-or-more (any " \t"))
+      eos)
+  "Regexp: a partial list marker at the streaming frontier (buffer end).
+Matches a bare or half-typed marker whose trailing space has not
+streamed in yet (`-', `*', `1', `1.' at buffer end), unlike
+`agent-shell-markdown--list-item-pending-regexp' which requires the
+space.  Anchored at `eos', so it matches only the still-incomplete
+last line, not a mid-buffer `-foo' or a `---' divider.  Used to hold
+off a list's bottom padding so a marker mid-stream does not get a
+framing blank stranded above the item it becomes.")
+
 (defun agent-shell-markdown--list-bullet (depth)
   "Return the bullet glyph for nesting DEPTH, cycling the glyph set."
   (seq-elt agent-shell-markdown-list-bullets
@@ -1704,8 +1718,9 @@ gains a blank line above and below it:
                  agent-shell-markdown--table-pending-line-regexp)))
     (agent-shell-markdown--pad-regions
      'agent-shell-markdown-list-rendered
-     (lambda () (looking-at-p
-                 agent-shell-markdown--list-item-pending-regexp)))))
+     (lambda ()
+       (or (looking-at-p agent-shell-markdown--list-item-pending-regexp)
+           (looking-at-p agent-shell-markdown--list-item-frontier-regexp))))))
 
 (cl-defun agent-shell-markdown--find-tables (&key avoid-ranges)
   "Return tables to (re-)render in current buffer.
