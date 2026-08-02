@@ -7972,6 +7972,10 @@ For example:
                                    (map-elt raw-input 'fileName)
                                    (map-elt raw-input 'path)
                                    (map-elt raw-input 'file_path))))
+         ;; Fetch tools (eg. OpenCode's webfetch) put the target URL
+         ;; under `url'.  Surface it in full below, since the basename
+         ;; alone isn't enough to decide whether to allow the request.
+         (url (seq-find #'stringp (list (map-elt raw-input 'url))))
          (content-texts
           (delq nil
                 (mapcar (lambda (item)
@@ -8009,6 +8013,17 @@ For example:
       (setq text (if text
                      (concat (string-trim-right text) " (" filename ")")
                    filename)))
+    ;; Append the URL to the title when available and not already
+    ;; included, so the user can see which URL the permission applies
+    ;; to.  Unlike filepaths, keep the full URL (not just its basename).
+    ;; See https://github.com/xenodium/agent-shell/issues/745
+    (when-let* ((url)
+                ((not (string-empty-p url)))
+                ((or (not text)
+                     (not (string-match-p (regexp-quote url) text)))))
+      (setq text (if text
+                     (concat (string-trim-right text) " (" url ")")
+                   url)))
     ;; Fence execute commands so the markdown renderer
     ;; renders them verbatim, not as markdown.
     (when (and text

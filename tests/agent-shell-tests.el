@@ -3778,6 +3778,33 @@ API's path params), so it must not be fed to `file-name-nondirectory'."
                              (body . ((value . 1)))))
               (:kind . "other"))))))
 
+(ert-deftest agent-shell--permission-title-fetch-shows-url-test ()
+  "Test `agent-shell--permission-title' surfaces the full URL for fetch tools.
+Based on OpenCode webfetch traffic from
+https://github.com/xenodium/agent-shell/issues/745, where a later
+`tool_call_update' clobbers the descriptive title back to
+\"webfetch\", so the URL must be recovered from `rawInput.url'."
+  (should (equal
+           "webfetch (https://en.wikipedia.org/wiki/Emacs)"
+           (agent-shell--permission-title
+            :tool-call
+            '((:title . "webfetch")
+              (:raw-input . ((url . "https://en.wikipedia.org/wiki/Emacs")
+                             (format . "markdown")))
+              (:kind . "fetch"))))))
+
+(ert-deftest agent-shell--permission-title-no-duplicate-url-test ()
+  "Test `agent-shell--permission-title' does not duplicate a URL already in title.
+The `session/request_permission' title is often the URL itself."
+  (should (equal
+           "https://en.wikipedia.org/wiki/Emacs"
+           (agent-shell--permission-title
+            :tool-call
+            '((:title . "https://en.wikipedia.org/wiki/Emacs")
+              (:raw-input . ((url . "https://en.wikipedia.org/wiki/Emacs")
+                             (format . "markdown")))
+              (:kind . "fetch"))))))
+
 (ert-deftest agent-shell--permission-title-execute-fenced-test ()
   "Test `agent-shell--permission-title' fences execute commands."
   (should (equal
