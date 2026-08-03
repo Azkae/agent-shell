@@ -8399,14 +8399,31 @@ CHAR and OPTION are used for cursor sensor messages."
                            button)))
     button))
 
+(defconst agent-shell--permission-kind-order
+  '("allow_once" "reject_once" "allow_always" "reject_always")
+  "Display order for permission options, by ACP kind.
+
+Agents send options in whichever order they like (some list rejection
+first), but the dialog always offers allowing before rejecting.")
+
+(defun agent-shell--permission-action-rank (action)
+  "Return the sort rank of ACTION, derived from its ACP kind.
+
+Unknown kinds sort last.  See `agent-shell--permission-kind-order'."
+  (or (seq-position agent-shell--permission-kind-order (map-elt action :kind))
+      (length agent-shell--permission-kind-order)))
+
 (defun agent-shell--make-permission-actions (acp-options)
   "Make actions from ACP-OPTIONS for shell rendering.
+
+Actions are sorted by `agent-shell--permission-kind-order', ignoring the
+order the agent sent them in.
 
 See `agent-shell--make-permission-action' for ACP-OPTION and return schema."
   (let (acp-seen-kinds)
     (seq-sort (lambda (a b)
-                (< (length (map-elt a :label))
-                   (length (map-elt b :label))))
+                (< (agent-shell--permission-action-rank a)
+                   (agent-shell--permission-action-rank b)))
               (delq nil (mapcar (lambda (acp-option)
                                   (let ((action (agent-shell--make-permission-action
                                                  :acp-option acp-option

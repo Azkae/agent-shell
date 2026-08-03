@@ -4883,5 +4883,41 @@ hook must not gate on the window width being unchanged."
         (agent-shell--realign-tables-on-change 'window)
         (should (= scheduled 2))))))
 
+(ert-deftest agent-shell--make-permission-actions-orders-allow-before-reject ()
+  "Offer allowing before rejecting, whatever order the agent sent.
+Regression: Claude Code sends `reject_once' first, which used to render
+Deny as the leftmost (and thus default) button."
+  (should (equal '("allow_once" "allow_always" "reject_once")
+                 (mapcar (lambda (action) (map-elt action :kind))
+                         (agent-shell--make-permission-actions
+                          '(((kind . "reject_once")
+                             (name . "Deny")
+                             (optionId . "reject"))
+                            ((kind . "allow_once")
+                             (name . "Allow Once")
+                             (optionId . "allow"))
+                            ((kind . "allow_always")
+                             (name . "Always Allow")
+                             (optionId . "allow-always"))))))))
+
+(ert-deftest agent-shell--make-permission-actions-keeps-same-kind-order ()
+  "Keep the agent's order among options sharing a kind.
+Only the first of a kind gets a keybinding, so re-ordering them would
+move the binding to a different option."
+  (let ((actions (agent-shell--make-permission-actions
+                  '(((kind . "allow_once")
+                     (name . "Allow Once")
+                     (optionId . "allow"))
+                    ((kind . "allow_once")
+                     (name . "Allow this session")
+                     (optionId . "allow-session"))
+                    ((kind . "reject_once")
+                     (name . "Deny")
+                     (optionId . "reject"))))))
+    (should (equal '("Allow Once" "Allow this session" "Deny")
+                   (mapcar (lambda (action) (map-elt action :option)) actions)))
+    (should (equal "y" (map-elt (nth 0 actions) :char)))
+    (should-not (map-elt (nth 1 actions) :char))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
