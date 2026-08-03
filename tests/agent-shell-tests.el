@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 'agent-shell)
+(require 'subr-x)
 
 ;;; Code:
 
@@ -210,7 +211,7 @@
                    "[ Allow (y) ]"))))
 
 (ert-deftest agent-shell--parse-file-mentions-test ()
-  "Test agent-shell--parse-file-mentions function."
+  "Test `agent-shell--parse-file-mentions' function."
   ;; Simple @ mention
   (let ((mentions (agent-shell--parse-file-mentions "@file.txt")))
     (should (= (length mentions) 1))
@@ -238,7 +239,7 @@
     (should (= (length mentions) 0))))
 
 (ert-deftest agent-shell--build-content-blocks-test ()
-  "Test agent-shell--build-content-blocks function."
+  "Test `agent-shell--build-content-blocks' function."
   (let* ((temp-file (make-temp-file "agent-shell-test" nil ".txt"))
          (file-content "Test file content")
          (default-directory (file-name-directory temp-file))
@@ -305,7 +306,7 @@
       (delete-file temp-file))))
 
 (ert-deftest agent-shell--build-content-blocks-binary-file-test ()
-  "Test agent-shell--build-content-blocks with binary PNG files."
+  "Test `agent-shell--build-content-blocks' with binary PNG files."
   (let* ((temp-file (make-temp-file "agent-shell-test" nil ".png"))
          ;; Minimal valid 1x1 PNG file (69 bytes)
          (png-data (unibyte-string
@@ -696,7 +697,7 @@ is handed to `agent-shell--set-session-title'."
         (should (equal title "Render Tool Updates"))))))
 
 (ert-deftest agent-shell--collect-attached-files-test ()
-  "Test agent-shell--collect-attached-files function."
+  "Test `agent-shell--collect-attached-files' function."
   ;; Test with empty list
   (should (equal (agent-shell--collect-attached-files '()) '()))
 
@@ -781,7 +782,7 @@ baz
 (ert-deftest agent-shell--get-region-context-preserves-source-faces-only ()
   "Region context must keep faces but not source control properties.
 
-A markdown-mode source buffer fonts emphasis markup (e.g. underscores)
+A `markdown-mode' source buffer fonts emphasis markup (e.g. underscores)
 with `invisible' and `face' properties.  When a single-line region is
 grabbed for the file-link preview, source control properties must not
 leak into the context, otherwise the compose buffer may hide literal
@@ -880,7 +881,7 @@ _world_")
     (should (equal (agent-shell--expand-truncated-regions prompt) "keep preview me"))))
 
 (ert-deftest agent-shell--send-command-integration-test ()
-  "Integration test: verify agent-shell--send-command calls ACP correctly."
+  "Integration test: verify `agent-shell--send-command' calls ACP correctly."
   (let ((sent-request nil)
         (agent-shell--state (list
                              (cons :client 'test-client)
@@ -917,7 +918,8 @@ _world_")
         (should (equal prompt '[((type . "text") (text . "Hello agent"))]))))))
 
 (ert-deftest agent-shell--send-command-error-fallback-test ()
-  "Test agent-shell--send-command falls back to plain text on build-content-blocks error."
+  "Test `agent-shell--send-command' falls back to plain text on error.
+The fallback triggers when `agent-shell--build-content-blocks' fails."
   (let ((sent-request nil)
         (agent-shell--state (list
                              (cons :client 'test-client)
@@ -2222,7 +2224,7 @@ remaining subscribers nor propagate out of `agent-shell--emit-event'."
                (lambda () agent-shell--state)))
       (agent-shell-subscribe-to
        :shell-buffer (current-buffer)
-       :on-event (lambda (_event) (error "boom")))
+       :on-event (lambda (_event) (error "Boom")))
       (agent-shell-subscribe-to
        :shell-buffer (current-buffer)
        :on-event (lambda (event) (push event received-events)))
@@ -2236,10 +2238,11 @@ remaining subscribers nor propagate out of `agent-shell--emit-event'."
 
 (ert-deftest agent-shell--sync-system-sleep-tracks-status-test ()
   "Test system sleep tracks `agent-shell-status' across a turn."
-  ;; Pretend `system-sleep' is loadable so the helper runs on Emacs < 31.
+  ;; The `cl-letf' below is what makes
+  ;; `agent-shell--system-sleep-available-p' return non-nil, so these
+  ;; run on Emacs < 31 too, where the library is absent.
   (let ((blocked 0)
         (status 'busy)
-        (features (cons 'system-sleep features))
         (state (list (cons :buffer (current-buffer))
                      (cons :event-subscriptions nil)
                      (cons :sleep-token nil)))
@@ -2278,8 +2281,10 @@ remaining subscribers nor propagate out of `agent-shell--emit-event'."
 
 (ert-deftest agent-shell--sync-system-sleep-terminal-event-releases-test ()
   "Test `error'/`clean-up' release the block even when status reads busy."
+  ;; The `cl-letf' below is what makes
+  ;; `agent-shell--system-sleep-available-p' return non-nil, so these
+  ;; run on Emacs < 31 too, where the library is absent.
   (let ((blocked 0)
-        (features (cons 'system-sleep features))
         (state (list (cons :buffer (current-buffer))
                      (cons :event-subscriptions nil)
                      (cons :sleep-token nil)))
@@ -2345,8 +2350,10 @@ remaining subscribers nor propagate out of `agent-shell--emit-event'."
 
 (ert-deftest agent-shell--sync-system-sleep-single-token-test ()
   "Test repeated busy events don't leak extra blocks."
+  ;; The `cl-letf' below is what makes
+  ;; `agent-shell--system-sleep-available-p' return non-nil, so these
+  ;; run on Emacs < 31 too, where the library is absent.
   (let ((blocked 0)
-        (features (cons 'system-sleep features))
         (state (list (cons :buffer (current-buffer))
                      (cons :event-subscriptions nil)
                      (cons :sleep-token nil)))
@@ -2971,8 +2978,9 @@ so the command must not append a second time."
       (kill-buffer other-buffer))))
 
 (ert-deftest agent-shell--validate-session-strategy-test ()
-  "Test `agent-shell--validate-session-strategy' accepts supported values
-and rejects `new-deferred' and other unknown values."
+  "Test `agent-shell--validate-session-strategy' against every input.
+It accepts the supported values and rejects `new-deferred' along with
+other unknown ones."
   (should-not (agent-shell--validate-session-strategy 'new))
   (should-not (agent-shell--validate-session-strategy 'latest))
   (should-not (agent-shell--validate-session-strategy 'prompt))
@@ -4078,11 +4086,12 @@ and it must handle that cleanly."
       (should (equal result "Use foo-bar for that.")))))
 
 (ert-deftest agent-shell-filter-buffer-substring-handles-reversed-range ()
-  "START may be greater than END (e.g. a right-to-left mouse
-selection, or a kill where mark > point).  Like the stock
-`buffer-substring', the result must match the forward range rather
-than the empty string -- otherwise mouse copy silently yields
-nothing depending on selection direction."
+  "A reversed range yields the same text as the forward one.
+START may be greater than END (e.g. a right-to-left mouse selection, or
+a kill where mark > point).  Like the stock `buffer-substring', the
+result must match the forward range rather than the empty string --
+otherwise mouse copy silently yields nothing depending on selection
+direction."
   (with-temp-buffer
     (insert "hello world")
     (let ((forward  (agent-shell--filter-buffer-substring (point-min) (point-max)))
@@ -4488,9 +4497,10 @@ interleaved entry that failed to advance it.  Returns a list of
     (nreverse calls)))
 
 (ert-deftest agent-shell--message-chunk-distinct-message-ids-dont-coalesce-test ()
-  "Distinct `messageId's form separate fragments even when an interleaved
-entry left `:last-entry-type' unadvanced.  Regression for glued messages
-like \"Emacs:The GUI Emacs\": two turns whose text merged into one block."
+  "Distinct message ids form separate fragments.
+They do so even when an interleaved entry left `:last-entry-type'
+unadvanced.  Regression for glued messages like \"Emacs:The GUI Emacs\":
+two turns whose text merged into one block."
   (let ((calls (agent-shell-tests--message-chunk-fragments
                 :chunks '(("msg_A" . "user's Emacs:")
                           ("msg_B" . "The GUI Emacs")))))
@@ -4688,8 +4698,9 @@ completion) and renders no lasting interleaved content."
       (kill-buffer buffer))))
 
 (ert-deftest agent-shell--activity-group-header-label-test ()
-  "Header glyph is `completed' only when all are (else the worst present),
-and the completed/total count lets a non-completed member lift the total only."
+  "Header glyph is `completed' only when every member is.
+Otherwise it shows the worst status present, and the completed/total
+count lets a non-completed member lift the total only."
   (cl-flet ((label (statuses)
               (substring-no-properties
                (agent-shell--activity-group-header-label statuses))))
@@ -4722,8 +4733,9 @@ and the completed/total count lets a non-completed member lift the total only."
                  (agent-shell--tool-call-kind-phrase :kind "mystery" :count 3))))
 
 (ert-deftest agent-shell--activity-group-descriptive-text-test ()
-  "Kinds collapse into counted phrases in first-seen order, only the first
-word capitalized, present tense while any member is still unfinished."
+  "Kinds collapse into counted phrases in first-seen order.
+Only the first word is capitalized, and the phrase stays in present
+tense while any member is still unfinished."
   (cl-flet ((tc (id kind status)
               (cons id (list (cons :kind kind) (cons :status status))))
             (text (members &optional thought)
@@ -4993,9 +5005,10 @@ move the binding to a different option."
     (should (equal 1 calls))))
 
 (ert-deftest agent-shell--render-markdown-suppresses-external-renderers ()
-  "Right labels opt out: an external renderer draws images (e.g. LaTeX
-math), which single-line labels already decline via `:render-images'.
-Both the buffer-local and the global hook value must stay quiet."
+  "Right labels opt out of external Markdown renderers.
+An external renderer draws images (e.g. LaTeX math), which single-line
+labels already decline via `:render-images'.  Both the buffer-local and
+the global hook value must stay quiet."
   (let ((global-calls 0)
         (local-calls 0))
     (let ((global-renderer (lambda (_context)

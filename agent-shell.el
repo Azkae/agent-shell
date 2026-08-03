@@ -5599,7 +5599,7 @@ Session events:
   `agent-message-chunk'   - Agent streamed a chunk of message text
     :data contains :text-chunk (the raw text the agent emitted, nil for a
     non-text block such as an image).  Emitted once per streamed chunk, so
-    it may fire many times per turn; agent-shell neither renders nor
+    it may fire many times per turn; the shell neither renders nor
     accumulates the text.
   `turn-complete'         - Agent turn finished and prompt ready for input
     :data contains :stop-reason and :usage
@@ -9986,7 +9986,7 @@ Deferred worker for `agent-shell--realign-tables-on-change'."
 Installed buffer-locally on `window-size-change-functions' and
 `window-buffer-change-functions' (whose buffer-local values are
 called with the window, the buffer current), so it runs only for
-agent-shell windows.  Table column widths are pixel-measured
+shell windows.  Table column widths are pixel-measured
 against the display, so a resize or first display can change their
 layout; schedule a re-render on any such change.  Which tables
 actually need re-laying out is decided per-table by
