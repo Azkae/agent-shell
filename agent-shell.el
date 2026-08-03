@@ -139,53 +139,32 @@ When non-nil, tool use sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
-(defcustom agent-shell-activity-group-expand-by-default 'never
-  "When activity group headers should be expanded.
+(defcustom agent-shell-activity-group-expand-by-default nil
+  "When activity group sections should be expanded.
 
 An activity group is a run of consecutive agent actions (tool calls,
 and eventually thoughts) rendered under one collapsible header.
 
-  `never'       Groups start collapsed, showing only the header with its
-                aggregated status and completed/total count.
-  `always'      Groups show their members.
-  `when-active' The group the agent is currently working in shows its
-                members, and collapses once the agent moves on to a new
-                group or the turn ends.  Keeps the session tidy while
-                still making the agent's current activity followable.
+  nil      Groups start collapsed, showing only the header with its
+           aggregated status and completed/total count.
+  t        Groups show their members.
+  `latest' The group the agent is currently working in shows its
+           members, and collapses once the agent moves on to a new
+           group or the turn ends.  Keeps the session tidy while
+           still making the agent's current activity followable.
 
-The legacy boolean values remain supported: nil reads as `never' and t
-as `always'.  Individual members still follow
-`agent-shell-tool-use-expand-by-default'."
-  :type '(choice (const :tag "Never" never)
-                 (const :tag "Always" always)
-                 (const :tag "While the agent is working in it" when-active))
+Individual members still follow `agent-shell-tool-use-expand-by-default'."
+  :type '(choice (const :tag "Never (collapsed)" nil)
+                 (const :tag "Always (expanded)" t)
+                 (const :tag "While the agent is working in it" latest))
   :group 'agent-shell)
-
-(defun agent-shell--activity-group-expand-policy ()
-  "Return `agent-shell-activity-group-expand-by-default' as a policy symbol.
-
-One of `never', `always', or `when-active'.  Maps the legacy boolean
-values onto the symbols: nil reads as `never' and any other unrecognized
-value as `always' (matching the pre-symbol \"non-nil means expanded\"
-behavior).
-
-  ;; `agent-shell-activity-group-expand-by-default' = t
-  (agent-shell--activity-group-expand-policy)
-  ;; => always"
-  (pcase agent-shell-activity-group-expand-by-default
-    ('never 'never)
-    ('always 'always)
-    ('when-active 'when-active)
-    ('nil 'never)
-    (_ 'always)))
 
 (defun agent-shell--activity-group-initial-expanded-p ()
   "Return non-nil when a newly created activity group starts expanded.
 
-Both `always' and `when-active' start expanded; `when-active' collapses
-the group again once the agent moves on (see
-`agent-shell--sync-activity-group-fold')."
-  (and (memq (agent-shell--activity-group-expand-policy) '(always when-active)) t))
+Both t and `latest' start expanded; `latest' collapses the group again
+once the agent moves on (see `agent-shell--sync-activity-group-fold')."
+  (and agent-shell-activity-group-expand-by-default t))
 
 (defvar agent-shell-mode-hook nil
   "Hook run after an `agent-shell-mode' buffer is fully initialized.
@@ -2654,7 +2633,7 @@ No-op while that function has nothing to summarize (an empty group)."
   "Leave GROUP-ID the only expanded activity group in STATE.
 
 No-op unless `agent-shell-activity-group-expand-by-default' is
-`when-active', where the group the agent is working in stays expanded and
+`latest', where the group the agent is working in stays expanded and
 earlier ones fold away.  GROUP-ID is ignored unless it is STATE's latest
 run, so a late update to an earlier group neither re-expands that group
 nor collapses the one the agent is currently in.
@@ -2662,7 +2641,7 @@ nor collapses the one the agent is currently in.
 NAMESPACE-ID is the fragment namespace GROUP-ID's header was rendered
 under (nil for STATE's request count), recorded alongside the group so it
 can still be found once the turn ends."
-  (when-let* (((eq (agent-shell--activity-group-expand-policy) 'when-active))
+  (when-let* (((eq agent-shell-activity-group-expand-by-default 'latest))
               ((equal group-id (agent-shell--activity-group-latest-id state)))
               ((not (equal group-id (map-nested-elt state '(:expanded-activity-group :group-id))))))
     (agent-shell--collapse-expanded-activity-group state)
@@ -2674,7 +2653,7 @@ can still be found once the turn ends."
   "Collapse the activity group STATE last left expanded, if any.
 
 Called both when the agent moves on to a new group and when the turn ends,
-so a `when-active' session is left with every activity group folded.
+so a `latest' session is left with every activity group folded.
 Clears STATE's `:expanded-activity-group'."
   (when-let* ((group (map-elt state :expanded-activity-group)))
     (agent-shell--collapse-fragment-group
@@ -2709,7 +2688,7 @@ Clears STATE's `:expanded-activity-group'."
            (agent-shell--append-restore-notification state acp-notification))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "agent_message_chunk")
            ;; The agent has stopped acting and started answering, which
-           ;; breaks the activity run.  Fold the group `when-active' left
+           ;; breaks the activity run.  Fold the group `latest' left
            ;; expanded now, rather than leaving it open behind a response
            ;; that may stream for a while before the next group starts.
            (agent-shell--collapse-expanded-activity-group state)
@@ -2872,7 +2851,7 @@ Clears STATE's `:expanded-activity-group'."
                (agent-shell--refresh-activity-group-header state group-id)
                (agent-shell--sync-activity-group-fold
                 :state state :group-id group-id
-                :namespace-id (unless (agent-shell--active-requests-p state) "out-of-turn")))
+                :namespace-id (unless (agent-shell--active-requests-p state) "out-of-turn"))))
            (map-put! state :last-entry-type "agent_thought_chunk"))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "user_message_chunk")
            ;; A user_message_chunk replays a user submission.  Render it
@@ -6839,7 +6818,7 @@ pending-restore state once replay completes."
                 (map-put! state :last-entry-type nil))))
         (map-put! state :active-requests saved-active-requests))
       ;; Replay renders history as a live turn would, so the last replayed
-      ;; group is left expanded under `when-active'.  Nothing is actually
+      ;; group is left expanded under `latest'.  Nothing is actually
       ;; running, so fold it like a completed turn.
       (agent-shell--collapse-expanded-activity-group state)
       ;; Point followed the narrowed history insertions up above the live
@@ -7593,7 +7572,7 @@ Each marked span is replaced by its `agent-shell-region-text' value."
                    ;; Avoid accumulating them unnecessarily.
                    (map-put! (agent-shell--state) :tool-calls nil)
                    ;; The turn is over, so nothing is active any more: fold
-                   ;; the last activity group `when-active' left expanded.
+                   ;; the last activity group `latest' left expanded.
                    (agent-shell--collapse-expanded-activity-group (agent-shell--state))
                    ;; Extract usage information from response
                    (when (map-elt acp-response 'usage)

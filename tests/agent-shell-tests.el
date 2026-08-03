@@ -4561,22 +4561,18 @@ agent activity), while an `agent_message_chunk' starts a fresh group."
     (map-put! state :last-entry-type "agent_message_chunk")
     (should (equal "activity-2" (agent-shell--activity-group-current-id state)))))
 
-(ert-deftest agent-shell--activity-group-expand-policy-test ()
-  "The expand policy resolves symbols and the legacy booleans."
-  (dolist (case '((never . never)
-                  (always . always)
-                  (when-active . when-active)
-                  ;; Legacy booleans: nil collapsed, non-nil expanded.
-                  (nil . never)
-                  (t . always)))
+(ert-deftest agent-shell--activity-group-initial-expanded-test ()
+  "The group expanded initial predicate."
+  (dolist (case '((nil . nil)
+                  (t . t)
+                  ;; `latest' groups are born expanded and folded once done.
+                  (latest . t)))
     (let ((agent-shell-activity-group-expand-by-default (car case)))
-      (should (eq (cdr case) (agent-shell--activity-group-expand-policy)))
-      ;; `when-active' groups are born expanded and folded once done.
-      (should (eq (not (eq (cdr case) 'never))
+      (should (eq (cdr case)
                   (agent-shell--activity-group-initial-expanded-p))))))
 
 (ert-deftest agent-shell--sync-activity-group-fold-test ()
-  "`when-active' keeps only the agent's current activity group expanded."
+  "`latest' keeps only the agent's current activity group expanded."
   (let ((collapsed '())
         (state (list (cons :activity-group-count 1)
                      (cons :request-count 3)
@@ -4592,7 +4588,7 @@ agent activity), while an `agent_message_chunk' starts a fresh group."
           (agent-shell--sync-activity-group-fold :state state :group-id "activity-1")
           (should-not collapsed)
           (should-not (map-elt state :expanded-activity-group))))
-      (let ((agent-shell-activity-group-expand-by-default 'when-active))
+      (let ((agent-shell-activity-group-expand-by-default 'latest))
         ;; The current run is recorded, with nothing to fold yet.
         (agent-shell--sync-activity-group-fold :state state :group-id "activity-1")
         (should-not collapsed)
@@ -4622,14 +4618,14 @@ agent activity), while an `agent_message_chunk' starts a fresh group."
         (agent-shell--collapse-expanded-activity-group state)
         (should-not collapsed)))))
 
-(ert-deftest agent-shell--activity-grouping-when-active-folds-previous-group-test ()
-  "Driving notifications under `when-active' folds each group as it is left.
+(ert-deftest agent-shell--activity-grouping-latest-folds-previous-group-test ()
+  "Driving notifications under `latest' folds each group as it is left.
 Groups are created expanded, and a group folds as soon as the agent starts
 answering rather than waiting for the next run to begin, so only the run
 in flight shows its members."
   (let ((collapsed '())
         (expanded '())
-        (agent-shell-activity-group-expand-by-default 'when-active)
+        (agent-shell-activity-group-expand-by-default 'latest)
         (state (list (cons :tool-calls nil)
                      (cons :last-entry-type nil)
                      (cons :last-agent-message-id nil)
