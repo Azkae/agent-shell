@@ -5605,6 +5605,7 @@ Session events:
     :data contains :stop-reason and :usage
   `session-title-changed' - Session title updated
     :data contains :title
+  `session-restored'      - Reloaded session fully replayed and settled
   `input-submitted'       - User submitted input to the agent
   `idle'                  - Agent idle for variable `agent-shell-idle-timeout'
     seconds :data contains :idle-event and :buffer
@@ -6699,7 +6700,29 @@ pending-restore state once replay completes."
                    (agent-shell--replay-turn state (car (last prompt-turns)))))
                 ('full
                  (dolist (turn prompt-turns)
-                   (agent-shell--replay-turn state turn))))))
+                   (agent-shell--replay-turn state turn))))
+              ;; Close a replay that ended on a user prompt.
+              ;; `agent-shell--on-notification' terminates a replayed
+              ;; `user_message_chunk' only when the next notification
+              ;; arrives, emitting shell-maker's end-of-prompt marker so
+              ;; `shell-maker--extract-history' can pair the command with
+              ;; its response.  A session whose last turn is a user
+              ;; message (an interrupted request, whose final entry is the
+              ;; interruption notice) has no next notification, leaving
+              ;; the turn open: the live prompt renders on the same line
+              ;; as the restored user text, and the next unrelated
+              ;; notification (say `available_commands_update') emits the
+              ;; marker unnarrowed, landing it after the live prompt.
+              (when (equal (map-elt state :last-entry-type) "user_message_chunk")
+                (shell-maker-insert-end-of-prompt-marker)
+                (let ((inhibit-read-only t))
+                  (goto-char (point-max))
+                  (insert (propertize "\n\n"
+                                      'field 'output
+                                      'read-only t
+                                      'front-sticky '(read-only)
+                                      'rear-nonsticky '(field read-only))))
+                (map-put! state :last-entry-type nil))))
         (map-put! state :active-requests saved-active-requests))
       ;; Point followed the narrowed history insertions up above the live
       ;; prompt.  Return it to the input area so the cursor lands where the
@@ -6712,7 +6735,10 @@ pending-restore state once replay completes."
       ;; `PROMPT> ' text as part of the input, corrupting the message sent to
       ;; the agent and conflating the prompt/input faces.
       (when-let* ((process (get-buffer-process (current-buffer))))
-        (set-marker (process-mark process) (point-max))))))
+        (set-marker (process-mark process) (point-max)))
+      ;; The replayed conversation, including the live prompt, is now
+      ;; fully laid down; notify observers that the shell has settled.
+      (agent-shell--emit-event :event 'session-restored))))
 
 (cl-defun agent-shell--initiate-session-resume-by-id (&key session-id session-title shell-buffer on-session-init)
   "Resume or load session SESSION-ID with SHELL-BUFFER and ON-SESSION-INIT.

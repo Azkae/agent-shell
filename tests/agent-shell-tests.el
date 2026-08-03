@@ -4198,6 +4198,9 @@ Returns the resulting buffer string, with the live prompt trailing."
             (cl-letf (((symbol-function 'shell-maker--process) (lambda () fake-process))
                       ((symbol-function 'agent-shell--create-bootstrapping-placeholders)
                        #'ignore)
+                      ;; Emitting reads shell state, which this plain
+                      ;; temp buffer has no business carrying.
+                      ((symbol-function 'agent-shell--emit-event) #'ignore)
                       ((symbol-function 'agent-shell--effective-restore-verbosity)
                        (lambda (_state) 'last))
                       ((symbol-function 'agent-shell--replay-turn)
