@@ -4979,5 +4979,37 @@ move the binding to a different option."
     (should (equal "y" (map-elt (nth 0 actions) :char)))
     (should-not (map-elt (nth 1 actions) :char))))
 
+(ert-deftest agent-shell--render-markdown-runs-external-renderers-by-default ()
+  "Render functions see message bodies, the default for every call site."
+  (let ((calls 0))
+    (let ((agent-shell-markdown-render-functions
+           (list (lambda (_context) (setq calls (1+ calls)) nil))))
+      (with-temp-buffer
+        (insert "Result: \\(x^2\\).")
+        (agent-shell--render-markdown)))
+    (should (equal 1 calls))))
+
+(ert-deftest agent-shell--render-markdown-suppresses-external-renderers ()
+  "Right labels opt out: an external renderer draws images (e.g. LaTeX
+math), which single-line labels already decline via `:render-images'.
+Both the buffer-local and the global hook value must stay quiet."
+  (let ((global-calls 0)
+        (local-calls 0))
+    (let ((global-renderer (lambda (_context)
+                             (setq global-calls (1+ global-calls))
+                             nil)))
+      (add-hook 'agent-shell-markdown-render-functions global-renderer)
+      (unwind-protect
+          (with-temp-buffer
+            (add-hook 'agent-shell-markdown-render-functions
+                      (lambda (_context) (setq local-calls (1+ local-calls)) nil)
+                      nil t)
+            (insert "find . \\( -name '*.nix' \\)")
+            (agent-shell--render-markdown :render-images nil
+                                          :external-renderers nil))
+        (remove-hook 'agent-shell-markdown-render-functions global-renderer)))
+    (should (equal 0 global-calls))
+    (should (equal 0 local-calls))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

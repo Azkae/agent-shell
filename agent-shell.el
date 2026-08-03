@@ -314,7 +314,8 @@ image-cache-directory &allow-other-keys'."
   :group 'agent-shell)
 
 (cl-defun agent-shell--render-markdown
-    (&key (render-images t) (highlight-blocks agent-shell-highlight-blocks))
+    (&key (render-images t) (highlight-blocks agent-shell-highlight-blocks)
+          (external-renderers t))
   "Render markdown in the current narrowed buffer.
 
 Dispatches to `agent-shell-markdown-render-function', forwarding
@@ -323,12 +324,24 @@ the current value of `agent-shell-highlight-blocks' so most call
 sites can omit it; RENDER-IMAGES defaults to t, override with nil
 on label spans where images shouldn't appear.
 
+EXTERNAL-RENDERERS defaults to t.  Pass nil on single-line label
+spans to suppress `agent-shell-markdown-render-functions'.  Those
+renderers (e.g. a LaTeX-math package) draw images, which labels
+already opt out of via RENDER-IMAGES, and the render-function
+contract gives them no way to tell UI chrome from agent prose.
+The hook is bound to nil rather than emptied selectively: nil also
+drops the t marker a buffer-local hook value uses to run global
+members, so neither local nor global renderers run.
+
 Passes agent-shell's own cache directory as the renderer's remote-image
 cache so downloaded images share `agent-shell-cache-dir'."
-  (funcall agent-shell-markdown-render-function
-           :render-images render-images
-           :highlight-blocks highlight-blocks
-           :image-cache-directory (agent-shell-cache-dir "content")))
+  (let ((agent-shell-markdown-render-functions
+         (when external-renderers
+           agent-shell-markdown-render-functions)))
+    (funcall agent-shell-markdown-render-function
+             :render-images render-images
+             :highlight-blocks highlight-blocks
+             :image-cache-directory (agent-shell-cache-dir "content"))))
 
 (defcustom agent-shell-confirm-interrupt t
   "Whether to prompt for confirmation before interrupting.
@@ -4565,7 +4578,8 @@ with GROUP-EXPANDED as the group's initial fold state."
               (when-let* ((label-right-start (map-nested-elt range '(:label-right :start)))
                           (label-right-end (map-nested-elt range '(:label-right :end))))
                 (narrow-to-region label-right-start label-right-end)
-                (agent-shell--render-markdown :render-images nil))))
+                (agent-shell--render-markdown :render-images nil
+                                              :external-renderers nil))))
           (when auto-scroll
             (goto-char (point-max)))))))
   (with-current-buffer (map-elt state :buffer)
@@ -4662,7 +4676,8 @@ with GROUP-EXPANDED as the group's initial fold state."
              (when-let* ((label-right-start (map-nested-elt range '(:label-right :start)))
                          (label-right-end (map-nested-elt range '(:label-right :end))))
                (narrow-to-region label-right-start label-right-end)
-               (agent-shell--render-markdown :render-images nil)
+               (agent-shell--render-markdown :render-images nil
+                                             :external-renderers nil)
                (widen))))
          (run-hook-with-args 'agent-shell-section-functions range))))
        (when late-prompt-start
