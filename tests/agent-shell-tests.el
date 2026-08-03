@@ -4174,6 +4174,66 @@ agent activity; consecutive user chunks stay in the same turn."
       (agent-shell--append-restore-notification state notif))
     (should (= 1 (length (agent-shell-tests--pending-restore-prompt-turns state))))))
 
+(defun agent-shell-tests--render-pending-restore-with-last-entry (last-entry-type)
+  "Restore a single replayed turn ending in LAST-ENTRY-TYPE.
+
+Drives `agent-shell--render-pending-restore' as a `session/load' whose
+buffered history holds one turn: `agent-shell--replay-turn' is stubbed
+to insert that turn's text and leave `:last-entry-type' at
+LAST-ENTRY-TYPE, mimicking what the real notification dispatch leaves
+behind.
+
+Returns the resulting buffer string, with the live prompt trailing."
+  (let ((fake-process (start-process "fake-agent" nil "cat")))
+    (unwind-protect
+        (with-temp-buffer
+          (set-process-buffer fake-process (current-buffer))
+          (let ((state (list (cons :buffer (current-buffer))
+                             (cons :active-requests nil)
+                             (cons :last-entry-type nil)
+                             (cons :pending-restore
+                                   (agent-shell--make-pending-restore)))))
+            (agent-shell--append-restore-notification
+             state (agent-shell-tests--make-session-update "user_message_chunk" "Hello"))
+            (cl-letf (((symbol-function 'shell-maker--process) (lambda () fake-process))
+                      ((symbol-function 'agent-shell--create-bootstrapping-placeholders)
+                       #'ignore)
+                      ((symbol-function 'agent-shell--effective-restore-verbosity)
+                       (lambda (_state) 'last))
+                      ((symbol-function 'agent-shell--replay-turn)
+                       (lambda (state _turn)
+                         (goto-char (point-max))
+                         (insert "Claude> replayed")
+                         (map-put! state :last-entry-type last-entry-type))))
+              ;; A live prompt awaiting input, as left by shell-maker
+              ;; before the load completes.  Its start marker has
+              ;; insertion type nil so replayed history lands above it.
+              (let ((prompt-start (copy-marker (point) nil)))
+                (insert "Claude> ")
+                (setq-local comint-last-prompt
+                            (cons prompt-start (copy-marker (point) t))))
+              (agent-shell--render-pending-restore state))
+            (buffer-substring-no-properties (point-min) (point-max))))
+      (when (process-live-p fake-process)
+        (delete-process fake-process)))))
+
+(ert-deftest agent-shell--render-pending-restore-closes-trailing-user-prompt-test ()
+  "Test a replay ending on a user prompt is closed above the live prompt.
+Regression: restoring a session whose last turn is a user message (an
+interrupted request, whose final entry is the interruption notice) left
+the turn open.  The live prompt then rendered on the same line as the
+restored user text, and the next unrelated notification emitted the
+end-of-prompt marker unnarrowed, landing it after the live prompt."
+  (should (equal (agent-shell-tests--render-pending-restore-with-last-entry
+                  "user_message_chunk")
+                 (concat "Claude> replayed<shell-maker-end-of-prompt>\n\n"
+                         "Claude> ")))
+  ;; A replay ending on agent output was already closed while replaying,
+  ;; so nothing is appended.
+  (should (equal (agent-shell-tests--render-pending-restore-with-last-entry
+                  "agent_message_chunk")
+                 "Claude> replayedClaude> ")))
+
 (ert-deftest agent-shell--use-session-load-p-modes ()
   "Test `agent-shell--use-session-load-p' across verbosity/protocol combinations."
   ;; `last' mode forces session/load when supported
