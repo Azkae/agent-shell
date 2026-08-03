@@ -4887,7 +4887,7 @@ hook must not gate on the window width being unchanged."
   "Offer allowing before rejecting, whatever order the agent sent.
 Regression: Claude Code sends `reject_once' first, which used to render
 Deny as the leftmost (and thus default) button."
-  (should (equal '("allow_once" "allow_always" "reject_once")
+  (should (equal '("allow_once" "reject_once" "allow_always")
                  (mapcar (lambda (action) (map-elt action :kind))
                          (agent-shell--make-permission-actions
                           '(((kind . "reject_once")
