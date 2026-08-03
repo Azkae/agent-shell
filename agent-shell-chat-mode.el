@@ -43,8 +43,10 @@
 (require 'seq)
 (eval-when-compile (require 'subr-x))
 
+(declare-function agent-shell-subscribe-to "agent-shell")
+(declare-function agent-shell-unsubscribe "agent-shell")
+
 (defvar agent-shell--state)
-(defvar agent-shell-section-functions)
 ;; Soft reference: `agent-shell-prompt-bar-mode' may be unbound when the
 ;; prompt bar is not loaded.  Read it with `bound-and-true-p'.
 (defvar agent-shell-prompt-bar-mode)
@@ -73,6 +75,12 @@ to the background); `:box' t adds a border in the foreground color."
 (defvar-local agent-shell-chat--labeled nil
   "Non-nil once chat labels have been applied to this shell buffer.")
 
+(defvar-local agent-shell-chat--subscription nil
+  "Event subscription token keeping chat labels in sync, or nil.")
+
+(defvar-local agent-shell-chat--relabel-timer nil
+  "Pending coalesced relabel timer for this buffer, or nil.")
+
 ;;; Labels
 
 (defun agent-shell-chat--label (text face)
@@ -94,18 +102,39 @@ with none available, returns \"Agent\"."
 
 (defun agent-shell-chat--prompt-face-p (value)
   "Return non-nil when a `font-lock-face' VALUE marks a shell prompt.
-The prompt run carries `comint-highlight-prompt', possibly repeated.
+A live prompt carries `comint-highlight-prompt'; a restored or echoed
+prompt carries `agent-shell-prompt' (which inherits it).  Either may be
+repeated.
 
-For example, both \\='comint-highlight-prompt and
-\\='(comint-highlight-prompt comint-highlight-prompt) return non-nil,
+For example, \\='comint-highlight-prompt, \\='agent-shell-prompt, and
+\\='(comint-highlight-prompt comint-highlight-prompt) all return non-nil,
 while \\='default returns nil."
-  (or (eq value 'comint-highlight-prompt)
-      (and (listp value) (memq 'comint-highlight-prompt value))))
+  (let ((faces (if (listp value) value (list value))))
+    (or (memq 'comint-highlight-prompt faces)
+        (memq 'agent-shell-prompt faces))))
 
 (defun agent-shell-chat--overlay-in (beg end category)
   "Return an existing label overlay of CATEGORY between BEG and END, or nil."
   (seq-find (lambda (overlay) (eq (overlay-get overlay 'category) category))
             (overlays-in beg (max end (1+ beg)))))
+
+(defun agent-shell-chat--upsert-overlay (category anchor-beg anchor-end beg end props)
+  "Ensure a CATEGORY overlay spans BEG..END carrying PROPS.
+
+PROPS is an alist of overlay property to value.  Reuses an existing
+CATEGORY overlay overlapping ANCHOR-BEG..ANCHOR-END (moving it when the
+span changed), otherwise creates one."
+  (let ((overlay (or (agent-shell-chat--overlay-in anchor-beg anchor-end category)
+                     (let ((created (make-overlay beg end)))
+                       (overlay-put created 'category category)
+                       (overlay-put created 'evaporate t)
+                       created))))
+    (unless (and (= (overlay-start overlay) beg) (= (overlay-end overlay) end))
+      (move-overlay overlay beg end))
+    (map-do (lambda (property value)
+              (unless (equal (overlay-get overlay property) value)
+                (overlay-put overlay property value)))
+            props)))
 
 (defun agent-shell-chat--label-prompts ()
   "Overlay each prompt run in the current buffer.
@@ -119,66 +148,63 @@ Keys off the input, not the `<shell-maker-end-of-prompt>' marker (which
 only appears once the response starts), so `Me' shows the instant a
 prompt is submitted.
 
-For a submitted prompt the overlay also swallows the input's leading
-blank lines, so the label sits exactly one line above its text no matter
-how much padding the shell inserted.  Updates the overlay in place, so a
-prompt flips between hidden and `Me' as soon as its input, or the bar,
-changes."
+The overlay swallows the blank lines around the prompt (before it, and
+the input's leading ones after it) so the label is padded by exactly one
+blank line on each side, no matter how much padding the shell inserted.
+Updates the overlay in place, so a prompt flips between hidden and `Me'
+as soon as its input, or the bar, changes."
   (save-excursion
     (let ((pos (point-min)))
       (while (< pos (point-max))
-        (let ((next (or (next-single-property-change pos 'font-lock-face) (point-max))))
+        (let ((run-end (or (next-single-property-change pos 'font-lock-face) (point-max))))
           (when (agent-shell-chat--prompt-face-p
                  (get-text-property pos 'font-lock-face))
             (let* ((input-end (or (save-excursion
-                                    (goto-char next)
+                                    (goto-char run-end)
                                     (when (re-search-forward
                                            "<shell-maker-end-of-prompt>" nil t)
                                       (match-beginning 0)))
                                   (point-max)))
-                   (blank (string-blank-p (buffer-substring-no-properties next input-end)))
-                   (end (if blank next
-                          (save-excursion (goto-char next)
+                   (blank (string-blank-p (buffer-substring-no-properties run-end input-end)))
+                   (start (save-excursion (goto-char pos)
+                                          (skip-chars-backward " \t\n")
+                                          (point)))
+                   (end (if blank run-end
+                          (save-excursion (goto-char run-end)
                                           (skip-chars-forward " \t\n")
                                           (point))))
                    (display (if (and blank (bound-and-true-p agent-shell-prompt-bar-mode))
                                 ""
-                              (concat (agent-shell-chat--label
-                                       "Me" 'agent-shell-chat-me-label)
-                                      "\n\n ")))
-                   (overlay (agent-shell-chat--overlay-in
-                             pos next 'agent-shell-chat-me)))
-              (if overlay
-                  (progn
-                    (unless (and (= (overlay-start overlay) pos)
-                                 (= (overlay-end overlay) end))
-                      (move-overlay overlay pos end))
-                    (unless (equal (overlay-get overlay 'display) display)
-                      (overlay-put overlay 'display display)))
-                (setq overlay (make-overlay pos end))
-                (overlay-put overlay 'category 'agent-shell-chat-me)
-                (overlay-put overlay 'evaporate t)
-                (overlay-put overlay 'display display))))
-          (setq pos next))))))
+                              (concat "\n\n" (agent-shell-chat--label
+                                              "Me" 'agent-shell-chat-me-label)
+                                      "\n\n"))))
+              (agent-shell-chat--upsert-overlay
+               'agent-shell-chat-me pos run-end start end
+               (list (cons 'display display)))))
+          (setq pos run-end))))))
 
 (defun agent-shell-chat--label-responses ()
   "Overlay the agent label before every response in the current buffer.
-Anchored on the invisible `<shell-maker-end-of-prompt>' marker, whose
-region is stable; the `before-string' renders even though the marker
-text itself stays invisible.  Idempotent."
+
+Anchored on the invisible `<shell-maker-end-of-prompt>' marker.  The
+overlay swallows the blank lines around the marker (the input's trailing
+newlines and the response's leading ones) and hides them with a `display'
+of \"\", while a `before-string' renders the label padded by exactly one
+blank line on each side.  Updates in place; idempotent."
   (save-excursion
     (goto-char (point-min))
-    (while (re-search-forward "<shell-maker-end-of-prompt>" nil t)
-      (unless (agent-shell-chat--overlay-in
-               (match-beginning 0) (match-end 0) 'agent-shell-chat-agent)
-        (let ((overlay (make-overlay (match-beginning 0) (match-end 0))))
-          (overlay-put overlay 'category 'agent-shell-chat-agent)
-          (overlay-put overlay 'evaporate t)
-          (overlay-put overlay 'before-string
-                       (concat "\n" (agent-shell-chat--label
-                                     (agent-shell-chat--agent-name)
-                                     'agent-shell-chat-agent-label)
-                               "\n ")))))))
+    (let ((before (concat "\n\n" (agent-shell-chat--label
+                                  (agent-shell-chat--agent-name)
+                                  'agent-shell-chat-agent-label)
+                          "\n\n")))
+      (while (re-search-forward "<shell-maker-end-of-prompt>" nil t)
+        (let ((mbeg (match-beginning 0))
+              (mend (match-end 0)))
+          (agent-shell-chat--upsert-overlay
+           'agent-shell-chat-agent mbeg mend
+           (save-excursion (goto-char mbeg) (skip-chars-backward " \t\n") (point))
+           (save-excursion (goto-char mend) (skip-chars-forward " \t\n") (point))
+           (list (cons 'before-string before) (cons 'display ""))))))))
 
 (defun agent-shell-chat--relabel ()
   "Apply the `Me' and agent labels to the current buffer (idempotent).
@@ -197,26 +223,42 @@ flips between hidden and `Me' immediately across all shells."
       (with-current-buffer buffer
         (agent-shell-chat--relabel)))))
 
-(defun agent-shell-chat--relabel-current (&rest _)
-  "Relabel the current buffer if it carries chat labels.
+(defun agent-shell-chat--relabel-buffer (buffer)
+  "Relabel BUFFER, clearing its pending relabel timer."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq agent-shell-chat--relabel-timer nil)
+      (agent-shell-chat--relabel))))
 
-Added to both `agent-shell-section-functions' (mid-stream; its range
-argument is ignored) and `shell-maker-finish-output-hook' (which runs in
-the shell buffer after a turn, error, init, or `clear' brings the prompt
-back)."
-  (when agent-shell-chat--labeled
-    (agent-shell-chat--relabel)))
+(defun agent-shell-chat--schedule-relabel (&rest _)
+  "Schedule a coalesced, deferred relabel of the current buffer.
+
+Deferred so the triggering change's own text properties (e.g. the prompt
+face shell-maker applies after inserting) are in place; coalesced so a
+burst yields a single relabel.  Runs from the event subscription (which
+covers submissions, streaming, turn completion and `session-restored')
+and from `shell-maker-finish-output-hook' (which covers `clear')."
+  (when (and agent-shell-chat--labeled
+             (not agent-shell-chat--relabel-timer))
+    (setq agent-shell-chat--relabel-timer
+          (run-at-time 0 nil #'agent-shell-chat--relabel-buffer (current-buffer)))))
 
 (defun agent-shell-chat--enable-labels (buffer)
-  "Turn on chat labels for shell BUFFER and backfill existing turns.
+  "Turn on chat labels for shell BUFFER and keep them in sync.
 
-Live updates then come from `agent-shell-section-functions' (mid-stream)
-and `shell-maker-finish-output-hook' (turn completion, clear, init)."
+Backfills existing turns, then subscribes to shell events so a coalesced
+relabel tracks submissions, streaming responses, turn completion and
+reloads (`session-restored').  `clear' is covered separately by
+`shell-maker-finish-output-hook'."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (unless agent-shell-chat--labeled
         (setq-local agent-shell-chat--labeled t)
-        (agent-shell-chat--relabel)))))
+        (agent-shell-chat--relabel)
+        (setq-local agent-shell-chat--subscription
+                    (agent-shell-subscribe-to
+                     :shell-buffer buffer
+                     :on-event #'agent-shell-chat--schedule-relabel))))))
 
 (defun agent-shell-chat--on-shell-init ()
   "Enable chat labels for a newly initialized shell buffer.
@@ -232,14 +274,20 @@ are labeled too."
       (agent-shell-chat--enable-labels buffer))))
 
 (defun agent-shell-chat--unlabel-all ()
-  "Remove chat labels from every buffer that carries them."
+  "Remove chat labels, subscriptions and timers from every buffer."
   (dolist (buffer (buffer-list))
     (when (buffer-local-value 'agent-shell-chat--labeled buffer)
       (with-current-buffer buffer
+        (when agent-shell-chat--subscription
+          (agent-shell-unsubscribe :subscription agent-shell-chat--subscription))
+        (when (timerp agent-shell-chat--relabel-timer)
+          (cancel-timer agent-shell-chat--relabel-timer))
         (remove-overlays (point-min) (point-max)
                          'category 'agent-shell-chat-me)
         (remove-overlays (point-min) (point-max)
                          'category 'agent-shell-chat-agent)
+        (kill-local-variable 'agent-shell-chat--subscription)
+        (kill-local-variable 'agent-shell-chat--relabel-timer)
         (kill-local-variable 'agent-shell-chat--labeled)))))
 
 ;;; Mode
@@ -257,12 +305,13 @@ through the bar instead."
   :group 'agent-shell
   (if agent-shell-chat-mode
       (progn
-        (add-hook 'agent-shell-section-functions #'agent-shell-chat--relabel-current)
-        (add-hook 'shell-maker-finish-output-hook #'agent-shell-chat--relabel-current)
+        ;; `clear' is a shell-maker command with no agent-shell event, so
+        ;; it rides its finish-output hook; everything else comes through
+        ;; the per-buffer event subscription set up in `--enable-labels'.
+        (add-hook 'shell-maker-finish-output-hook #'agent-shell-chat--schedule-relabel)
         (add-hook 'agent-shell-mode-hook #'agent-shell-chat--on-shell-init)
         (agent-shell-chat--label-all-shells))
-    (remove-hook 'agent-shell-section-functions #'agent-shell-chat--relabel-current)
-    (remove-hook 'shell-maker-finish-output-hook #'agent-shell-chat--relabel-current)
+    (remove-hook 'shell-maker-finish-output-hook #'agent-shell-chat--schedule-relabel)
     (remove-hook 'agent-shell-mode-hook #'agent-shell-chat--on-shell-init)
     (agent-shell-chat--unlabel-all)))
 
