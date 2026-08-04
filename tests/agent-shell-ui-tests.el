@@ -717,6 +717,50 @@ navigatable block, not on the non-navigatable block's own start."
             (should (equal (agent-shell-ui-backward-block) first-start))))
       (kill-buffer buf))))
 
+(ert-deftest agent-shell-ui-left-label-recolor-without-text-change-test ()
+  "A left label that changes only its face is still redrawn.
+Regression: the rewrite guard compared text alone, so a status style
+carrying its state in the face (e.g. a box whose color separates pending
+from completed) kept the color it was first rendered with."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (dolist (face '(agent-shell-pending agent-shell-success))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :namespace-id "ns" :block-id "1"
+        :label-left (propertize " edit " 'font-lock-face face)
+        :label-right "file.el")
+       :navigation 'always))
+    (should (equal 'agent-shell-success
+                   (get-text-property
+                    (map-elt (agent-shell-ui--nearest-range-matching-property
+                              :property 'agent-shell-ui-section :value 'label-left
+                              :from (point-min) :to (point-max))
+                             :start)
+                    'font-lock-face)))))
+
+(ert-deftest agent-shell-ui-right-label-face-change-skips-rewrite-test ()
+  "A right label whose text is unchanged is left alone.
+Markdown renders over right labels in place, so their buffer faces stop
+matching the text handed in.  Comparing faces there would rewrite the
+title on every streamed chunk, discarding the rendering each time."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (dolist (face '(agent-shell-section-heading agent-shell-success))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :namespace-id "ns" :block-id "1"
+        :label-left " edit "
+        :label-right (propertize "file.el" 'font-lock-face face))
+       :navigation 'always))
+    (should (equal 'agent-shell-section-heading
+                   (get-text-property
+                    (map-elt (agent-shell-ui--nearest-range-matching-property
+                              :property 'agent-shell-ui-section :value 'label-right
+                              :from (point-min) :to (point-max))
+                             :start)
+                    'font-lock-face)))))
+
 ;;; provide
 
 (provide 'agent-shell-ui-tests)
