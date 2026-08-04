@@ -885,6 +885,7 @@ always go to Evil modes if you need to with ~C-z~).
 #+RESULTS:
 | Custom variable                               | Description                                                                     |
 |-----------------------------------------------+---------------------------------------------------------------------------------|
+| agent-shell-activity-group-expand-by-default  | When activity group sections should be expanded.                                |
 | agent-shell-agent-configs                     | The list of known agent configurations.                                         |
 | agent-shell-anthropic-authentication          | Configuration for Anthropic authentication.                                     |
 | agent-shell-anthropic-claude-acp-command      | Command and parameters for the Anthropic Claude client.                         |
