@@ -192,11 +192,17 @@ as soon as its input, or the bar, changes."
                              ((and blank (bound-and-true-p agent-shell-prompt-bar-mode))
                               "")
                              ;; Live prompt awaiting input: show `Me' and the
-                             ;; prompt marker, indented to meet the input.
+                             ;; prompt marker, indented to meet the input.  The
+                             ;; marker is faced `default' so it does not inherit
+                             ;; the covered prompt face (a display string's
+                             ;; unfaced chars take the face of the text they
+                             ;; replace).
                              (blank
                               (concat "\n\n" me-label "\n\n"
-                                      agent-shell-chat--body-indent
-                                      agent-shell-chat--prompt))
+                                      (propertize
+                                       (concat agent-shell-chat--body-indent
+                                               agent-shell-chat--prompt)
+                                       'face 'default)))
                              ;; Submitted turn: just the `Me' label.
                              (t (concat "\n\n" me-label "\n\n")))))
               (agent-shell-chat--upsert-overlay
