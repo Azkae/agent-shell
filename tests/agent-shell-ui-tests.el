@@ -438,6 +438,44 @@ caller stamping ranges leaves it unmarked, stranding navigation there)."
       (should (get-text-property (body-start 0) 'invisible))
       (should-not (get-text-property (body-start 1) 'invisible)))))
 
+(ert-deftest agent-shell-ui-set-group-collapsed-by-id-test ()
+  "Setting a group's fold state by id is idempotent and leaves leaves alone."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model
+      :namespace-id "ns" :block-id "m1" :group-id "grp" :group-label "T"
+      :label-left "run" :label-right "a" :body "aa")
+     :navigation 'always)
+    ;; A leaf fragment, to guard that only group headers are targeted.
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model
+      :namespace-id "ns" :block-id "leaf" :label-left "msg" :body "bb")
+     :expanded t :navigation 'always)
+    (cl-flet ((member-hidden-p ()
+                (get-text-property
+                 (map-elt (car (agent-shell-ui--group-children
+                                :group-qualified-id "ns-grp"))
+                          :start)
+                 'invisible)))
+      (should-not (member-hidden-p))
+      (agent-shell-ui-set-group-collapsed-by-id
+       :namespace-id "ns" :block-id "grp" :collapsed t)
+      (should (member-hidden-p))
+      ;; Repeat calls are a no-op rather than a toggle.
+      (agent-shell-ui-set-group-collapsed-by-id
+       :namespace-id "ns" :block-id "grp" :collapsed t)
+      (should (member-hidden-p))
+      (agent-shell-ui-set-group-collapsed-by-id
+       :namespace-id "ns" :block-id "grp" :collapsed nil)
+      (should-not (member-hidden-p))
+      ;; Unknown ids and non-group fragments are left untouched.
+      (agent-shell-ui-set-group-collapsed-by-id
+       :namespace-id "ns" :block-id "missing" :collapsed t)
+      (agent-shell-ui-set-group-collapsed-by-id
+       :namespace-id "ns" :block-id "leaf" :collapsed t)
+      (should-not (member-hidden-p)))))
+
 (ert-deftest agent-shell-ui-group-member-streams-body-stays-nested-test ()
   "A labels-only member that later gains a body stays nested and indented."
   (with-temp-buffer
