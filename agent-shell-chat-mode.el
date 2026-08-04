@@ -54,6 +54,19 @@
 ;; Forward-declared: used before the `define-minor-mode' at the end.
 (defvar agent-shell-chat-mode)
 
+;;; Constants
+
+(defconst agent-shell-chat--prompt "❯ "
+  "Prompt marker shown on the live shell prompt while it awaits input.
+Cleared the instant the prompt is submitted, since the overlay then
+renders the submitted turn instead.")
+
+(defconst agent-shell-chat--body-indent "  "
+  "Indent that lines the prompt input up with the response body.
+Mirrors the two-column base `line-prefix' the response carries (see
+`agent-shell-ui--indent-text'); hiding the comint prompt would otherwise
+drop the input flush to column 0.")
+
 ;;; Faces
 
 (defface agent-shell-chat-me-label
@@ -173,14 +186,39 @@ as soon as its input, or the bar, changes."
                           (save-excursion (goto-char run-end)
                                           (skip-chars-forward " \t\n")
                                           (point))))
-                   (display (if (and blank (bound-and-true-p agent-shell-prompt-bar-mode))
-                                ""
-                              (concat "\n\n" (agent-shell-chat--label
-                                              "Me" 'agent-shell-chat-me-label)
-                                      "\n\n"))))
+                   (me-label (agent-shell-chat--label
+                              "Me" 'agent-shell-chat-me-label))
+                   (display (cond
+                             ((and blank (bound-and-true-p agent-shell-prompt-bar-mode))
+                              "")
+                             ;; Live prompt awaiting input: show `Me' and the
+                             ;; prompt marker, indented to meet the input.
+                             (blank
+                              (concat "\n\n" me-label "\n\n"
+                                      agent-shell-chat--body-indent
+                                      agent-shell-chat--prompt))
+                             ;; Submitted turn: just the `Me' label.
+                             (t (concat "\n\n" me-label "\n\n")))))
               (agent-shell-chat--upsert-overlay
                'agent-shell-chat-me pos run-end start end
-               (list (cons 'display display)))))
+               (list (cons 'display display)))
+              ;; Indent the submitted input so it aligns with the response
+              ;; body; the live (blank) prompt has no input to indent.
+              (if blank
+                  (when-let* ((stale (agent-shell-chat--overlay-in
+                                      end (1+ end) 'agent-shell-chat-me-input)))
+                    (delete-overlay stale))
+                ;; End at the input's last real character, not `input-end':
+                ;; the agent label's `before-string' renders in the trailing
+                ;; newline before the marker, and would inherit this
+                ;; `line-prefix' and sit indented.
+                (let ((input-last (save-excursion (goto-char input-end)
+                                                  (skip-chars-backward " \t\n")
+                                                  (point))))
+                  (agent-shell-chat--upsert-overlay
+                   'agent-shell-chat-me-input end input-last end input-last
+                   (list (cons 'line-prefix agent-shell-chat--body-indent)
+                         (cons 'wrap-prefix agent-shell-chat--body-indent)))))))
           (setq pos run-end))))))
 
 (defun agent-shell-chat--label-responses ()
@@ -284,6 +322,8 @@ are labeled too."
           (cancel-timer agent-shell-chat--relabel-timer))
         (remove-overlays (point-min) (point-max)
                          'category 'agent-shell-chat-me)
+        (remove-overlays (point-min) (point-max)
+                         'category 'agent-shell-chat-me-input)
         (remove-overlays (point-min) (point-max)
                          'category 'agent-shell-chat-agent)
         (kill-local-variable 'agent-shell-chat--subscription)
