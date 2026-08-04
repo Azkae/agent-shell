@@ -1035,6 +1035,80 @@ Outro"))))
       (should (equal (substring-no-properties (buffer-string))
                      "• one\n• two\n")))))
 
+(ert-deftest agent-shell-markdown-list-items-not-split-when-rendered-separately ()
+  ;; Regression: streaming under a body narrow renders a last item early
+  ;; (before its trailing newline arrives), so that newline lands
+  ;; untagged between two rendered list lines, splitting the list into
+  ;; two runs.  Framing must still treat them as one block and not
+  ;; strand a blank between the items.  The body narrow here excludes a
+  ;; trailing newline (as a fragment body does), which is what triggers
+  ;; the early render.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "- one\n")
+      (save-restriction (narrow-to-region (point-min) (1- (point-max)))
+                        (agent-shell-markdown-replace-markup))
+      (goto-char (1- (point-max)))
+      (insert "\n- two")
+      (save-restriction (narrow-to-region (point-min) (1- (point-max)))
+                        (agent-shell-markdown-replace-markup))
+      (should (equal (substring-no-properties (buffer-string))
+                     "• one\n• two\n")))))
+
+(ert-deftest agent-shell-markdown-list-item-not-split-when-line-streams-in-parts ()
+  ;; Regression: a chunk can end mid-item, so the last-line handler
+  ;; renders that item before its whole line has streamed in; its
+  ;; rendered span ends partway through the line and the rest arrives
+  ;; untagged.  Framing must still fold the item's whole line into the
+  ;; block and not strand a blank between it and the next item.  Uses a
+  ;; body narrow (excluding a trailing newline) to trigger the early
+  ;; render, and splits item one mid-line like the real stream did.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "\n")
+      (goto-char (1- (point-max)))
+      (insert "- one (")
+      (save-restriction (narrow-to-region (point-min) (1- (point-max)))
+                        (agent-shell-markdown-replace-markup))
+      (goto-char (1- (point-max)))
+      (insert "rest)\n- two")
+      (save-restriction (narrow-to-region (point-min) (1- (point-max)))
+                        (agent-shell-markdown-replace-markup))
+      (should (equal (substring-no-properties
+                      (buffer-substring (point-min) (1- (point-max))))
+                     "• one (rest)\n• two")))))
+
+(ert-deftest agent-shell-markdown-list-joins-blank-separated-items ()
+  ;; A list renders tight no matter how the source spaced its items:
+  ;; blank lines sitting between two list items are removed.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "- A\n\n- B\n\n- C\n")
+      (agent-shell-markdown-replace-markup)
+      (should (equal (substring-no-properties (buffer-string))
+                     "• A\n• B\n• C\n")))))
+
+(ert-deftest agent-shell-markdown-list-joins-bold-numbered-items ()
+  ;; Bold-prefixed points like `**1. X**' become ordered list items once
+  ;; the bold markup is stripped, so a blank line the author left between
+  ;; them is joined too, and sub-bullets written tight stay tight.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "**1. First** point.\n\n**2. Second** point:\n- a\n- b\n")
+      (agent-shell-markdown-replace-markup)
+      (should (equal (substring-no-properties (buffer-string))
+                     "1. First point.\n2. Second point:\n• a\n• b\n")))))
+
+(ert-deftest agent-shell-markdown-list-keeps-blank-bordering-prose ()
+  ;; A blank with a list item on only one side frames the list off from
+  ;; prose and stays; only inter-item gaps are joined.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (with-temp-buffer
+      (insert "intro\n\n- A\n\n- B\n\nafter\n")
+      (agent-shell-markdown-replace-markup)
+      (should (equal (substring-no-properties (buffer-string))
+                     "intro\n\n• A\n• B\n\nafter\n")))))
+
 (ert-deftest agent-shell-markdown-list-last-line-renders-under-narrow ()
   ;; Regression: a fragment body is rendered narrowed to its content, so
   ;; a list item on the last line has its terminating newline just

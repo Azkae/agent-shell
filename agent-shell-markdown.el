@@ -450,6 +450,11 @@ body un-fontified."
         ;; selection to empty, silently breaking mouse copy of rendered
         ;; text (keyboard selection is unaffected).
         (put-text-property (point-min) (point-max) 'fontified t))
+      ;; Normalize list spacing before framing: join items the source
+      ;; separated with blank lines so a list always renders as one tidy
+      ;; group.  Widened, like the framing below, so it sees the whole
+      ;; list across the watermark.
+      (agent-shell-markdown--collapse-list-blank-lines)
       ;; Frame rendered blocks with a blank line where they butt against
       ;; prose.  Runs outside the watermark narrow, since a block's lower
       ;; boundary sits behind the watermark by the time its successor
@@ -1679,6 +1684,58 @@ A line is blank when it holds only whitespace before its newline
     (beginning-of-line)
     (looking-at-p "[[:blank:]]*$")))
 
+(defun agent-shell-markdown--list-line-at-p (pos)
+  "Return non-nil when the line holding POS begins a rendered list item.
+Tests the line's first char, which is where the bullet / number
+glyph and its `agent-shell-markdown-list-rendered' tag sit, so this
+holds even for an item rendered before the rest of its line streamed
+in."
+  (get-text-property (save-excursion (goto-char pos)
+                                     (line-beginning-position))
+                     'agent-shell-markdown-list-rendered))
+
+(defun agent-shell-markdown--collapse-list-blank-lines ()
+  "Delete blank lines between two rendered list items so a list is tight.
+
+A list renders as one group no matter how the source spaced its
+items: any blank run sitting directly between two
+`agent-shell-markdown-list-rendered' lines is removed.  A blank
+bordering non-list text (framing the list off from surrounding
+prose) has a list item on only one side and is left in place, so
+only the inter-item gaps go.  Runs before
+`agent-shell-markdown--pad-rendered-blocks' so the joined items form
+one block and get framed as a whole.
+
+For example, the buffer:
+
+  • One
+
+  • Two
+
+becomes:
+
+  • One
+  • Two"
+  (let ((inhibit-field-text-motion t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (if (agent-shell-markdown--blank-line-at-p (point))
+            ;; At a blank run: find its extent, then delete it only when a
+            ;; rendered list line sits on both sides.  After a delete point
+            ;; sits on the following list line; either way point has moved
+            ;; past the run, so the scan makes progress.
+            (let ((blank-start (line-beginning-position)))
+              (while (and (not (eobp))
+                          (agent-shell-markdown--blank-line-at-p (point)))
+                (forward-line 1))
+              (when (and (> blank-start (point-min))
+                         (agent-shell-markdown--list-line-at-p (1- blank-start))
+                         (not (eobp))
+                         (agent-shell-markdown--list-line-at-p (point)))
+                (delete-region blank-start (point))))
+          (forward-line 1))))))
+
 (defun agent-shell-markdown--insert-block-padding ()
   "Insert an untinted blank line at point to frame a rendered block.
 
@@ -1747,18 +1804,51 @@ the block."
     (goto-char start)
     (agent-shell-markdown--insert-block-padding)))
 
+(defun agent-shell-markdown--block-end (start property)
+  "Return where PROPERTY stops for the block of lines beginning at START.
+A block is the run of consecutive lines that each carry PROPERTY,
+joined across their line terminators.  A line may carry PROPERTY only
+partway (a list item rendered before the rest of its line streamed in
+leaves the tail untagged); its whole line still counts, so the next
+line is still folded in rather than framed apart.  The result is where
+PROPERTY next stops, so a caller can resume scanning there.
+
+For example, with the current buffer holding two PROPERTY-tagged list
+lines (the first tagged only up to `(', the rest streamed in later):
+
+  • one (rest)
+  • two
+
+called at `• one', this returns the position past `• two', not the
+one partway through the first line."
+  (let ((end (or (next-single-property-change start property nil (point-max))
+                 (point-max))))
+    (while (let ((line-end (if (and (< end (point-max))
+                                    (not (eq (char-after end) ?\n)))
+                               (save-excursion (goto-char end)
+                                               (line-end-position))
+                             end)))
+             (and (< line-end (point-max))
+                  (eq (char-after line-end) ?\n)
+                  (get-text-property (1+ line-end) property)
+                  (setq end (or (next-single-property-change
+                                 (1+ line-end) property nil (point-max))
+                                (point-max))))))
+    end))
+
 (defun agent-shell-markdown--pad-regions (property continues-p)
-  "Frame every maximal run of non-nil PROPERTY with blank lines.
+  "Frame every block of PROPERTY-tagged lines with blank lines.
 CONTINUES-P is forwarded to `agent-shell-markdown--frame-block' to
-gate the bottom gap.  See `agent-shell-markdown--pad-rendered-blocks'."
+gate the bottom gap.  A block spans consecutive PROPERTY lines (see
+`agent-shell-markdown--block-end'), so a multi-line construct is
+framed as a whole rather than split with a blank stranded inside.
+See `agent-shell-markdown--pad-rendered-blocks'."
   (save-excursion
     (goto-char (point-min))
     (let ((pos (point-min)))
       (while (< pos (point-max))
         (if (get-text-property pos property)
-            (let* ((end (or (next-single-property-change
-                             pos property nil (point-max))
-                            (point-max)))
+            (let* ((end (agent-shell-markdown--block-end pos property))
                    ;; The top insert shifts END; a marker tracks it so the
                    ;; scan resumes just past the framed block.
                    (resume (copy-marker end)))
