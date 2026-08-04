@@ -605,19 +605,23 @@ equal to GROUP-QUALIFIED-ID; the run stops at the first non-member."
             (let ((state (get-text-property (point) 'agent-shell-ui-state)))
               (unless (and state (equal (map-elt state :group-id) group-qualified-id))
                 (throw 'done nil))
-              (let* ((block (agent-shell-ui--block-range :position (point)))
-                     (end (map-elt block :end)))
-                ;; POS advances only to END, with nothing requiring END to move
-                ;; forward.  A range ending at or behind POS re-examines the
-                ;; same member forever (consing on every pass), and a nil BLOCK
-                ;; reaches `goto-char' as nil.  Stop instead.
-                (unless (and end (> end pos))
+              (let ((block (agent-shell-ui--block-range :position (point))))
+                ;; POS advances only to the member's end, with nothing requiring
+                ;; that end to move forward.  A range ending at or behind POS
+                ;; re-examines the same member forever (consing on every pass),
+                ;; and a nil BLOCK reaches `goto-char' as nil.  Stop instead,
+                ;; and log it: the remaining members go unenumerated, which
+                ;; surfaces later as a member left out of a fold or a new member
+                ;; inserted above its siblings.
+                (unless (> (map-elt block :end 0) pos)
+                  (message "agent-shell: stopped enumerating group %s: member %s at %d resolved to %S, not past %d"
+                           group-qualified-id (map-elt state :qualified-id) (point) block pos)
                   (throw 'done nil))
                 (push (list (cons :qualified-id (map-elt state :qualified-id))
                             (cons :start (map-elt block :start))
-                            (cons :end end))
+                            (cons :end (map-elt block :end)))
                       children)
-                (setq pos end)))))
+                (setq pos (map-elt block :end))))))
         (nreverse children)))))
 
 (cl-defun agent-shell-ui--group-child-region (&key group-qualified-id)
