@@ -605,12 +605,19 @@ equal to GROUP-QUALIFIED-ID; the run stops at the first non-member."
             (let ((state (get-text-property (point) 'agent-shell-ui-state)))
               (unless (and state (equal (map-elt state :group-id) group-qualified-id))
                 (throw 'done nil))
-              (let ((block (agent-shell-ui--block-range :position (point))))
+              (let* ((block (agent-shell-ui--block-range :position (point)))
+                     (end (map-elt block :end)))
+                ;; POS advances only to END, with nothing requiring END to move
+                ;; forward.  A range ending at or behind POS re-examines the
+                ;; same member forever (consing on every pass), and a nil BLOCK
+                ;; reaches `goto-char' as nil.  Stop instead.
+                (unless (and end (> end pos))
+                  (throw 'done nil))
                 (push (list (cons :qualified-id (map-elt state :qualified-id))
                             (cons :start (map-elt block :start))
-                            (cons :end (map-elt block :end)))
+                            (cons :end end))
                       children)
-                (setq pos (map-elt block :end))))))
+                (setq pos end)))))
         (nreverse children)))))
 
 (cl-defun agent-shell-ui--group-child-region (&key group-qualified-id)
