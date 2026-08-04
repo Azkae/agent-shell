@@ -583,6 +583,43 @@ separators stayed hidden, collapsing members onto the folded header line."
     (should (agent-shell-ui--group-header-range "ns-grp"))
     (should (equal '("ns-m2") (agent-shell-ui-tests--group-child-ids "ns-grp")))))
 
+(ert-deftest agent-shell-ui-group-children-stops-when-block-range-stalls-test ()
+  "Member enumeration stops when a block range fails to advance.
+The member walk moves to each block's `:end', with nothing requiring that
+end to move forward.  A range ending at or behind the walk position, or a
+nil range, used to re-examine the same member forever and cons on every
+pass until Emacs stopped responding."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (dolist (id '("t1" "t2"))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :namespace-id "ns" :block-id id :group-id "grp" :group-label "Tools"
+        :label-left "run" :label-right id)
+       :navigation 'always))
+    (should (equal '("ns-t1" "ns-t2")
+                   (agent-shell-ui-tests--group-child-ids "ns-grp")))
+    (let ((block-range (symbol-function 'agent-shell-ui--block-range)))
+      ;; Members report a stalled range; the header keeps its real one so the
+      ;; walk still starts.
+      (cl-letf (((symbol-function 'agent-shell-ui--block-range)
+                 (lambda (&rest args)
+                   (if (eq 'group (map-elt (get-text-property
+                                            (plist-get args :position)
+                                            'agent-shell-ui-state)
+                                           :kind))
+                       (apply block-range args)
+                     '((:start . 1) (:end . 1))))))
+        (should-not (agent-shell-ui-tests--group-child-ids "ns-grp")))
+      (cl-letf (((symbol-function 'agent-shell-ui--block-range)
+                 (lambda (&rest args)
+                   (when (eq 'group (map-elt (get-text-property
+                                              (plist-get args :position)
+                                              'agent-shell-ui-state)
+                                             :kind))
+                     (apply block-range args)))))
+        (should-not (agent-shell-ui-tests--group-child-ids "ns-grp"))))))
+
 ;;; backward-block
 
 (defun agent-shell-ui-tests--fragment-start (qualified-id)
