@@ -126,6 +126,15 @@ while \\='default returns nil."
     (or (memq 'comint-highlight-prompt faces)
         (memq 'agent-shell-prompt faces))))
 
+(defun agent-shell-chat--extends-bg-p (face)
+  "Return non-nil when FACE paints an `:extend' background past end of line.
+FACE is a `face' text-property value (a face symbol or list of them).  A
+code block's padding carries such a face (`agent-shell-markdown-source-block'),
+so this marks whitespace the prompt overlay must not swallow."
+  (seq-some (lambda (f)
+              (and (facep f) (eq (face-attribute f :extend nil t) t)))
+            (if (proper-list-p face) face (list face))))
+
 (defun agent-shell-chat--overlay-in (beg end category)
   "Return an existing label overlay of CATEGORY between BEG and END, or nil."
   (seq-find (lambda (overlay) (eq (overlay-get overlay 'category) category))
@@ -179,35 +188,62 @@ as soon as its input, or the bar, changes."
                                       (match-beginning 0)))
                                   (point-max)))
                    (blank (string-blank-p (buffer-substring-no-properties run-end input-end)))
-                   (start (save-excursion (goto-char pos)
-                                          (skip-chars-backward " \t\n")
-                                          (point)))
+                   (start (save-excursion
+                            (goto-char pos)
+                            (skip-chars-backward " \t\n")
+                            ;; Leave a code block's tinted padding (an
+                            ;; `:extend' background) to the panel: stepping
+                            ;; back out of it keeps the overlay off those
+                            ;; newlines, so the panel keeps its padding and
+                            ;; its background cannot bleed across the label.
+                            (while (and (< (point) pos)
+                                        (agent-shell-chat--extends-bg-p
+                                         (get-text-property (point) 'face)))
+                              (forward-char 1))
+                            (point)))
                    (end (if blank run-end
                           (save-excursion (goto-char run-end)
                                           (skip-chars-forward " \t\n")
                                           (point))))
                    (me-label (agent-shell-chat--label
                               "Me" 'agent-shell-chat-me-label))
+                   ;; Face the padding and marker `default' so they do not
+                   ;; inherit the covered text's face: a display string's
+                   ;; unfaced chars take the face of the text they replace, and
+                   ;; when the prompt sits right after a code block that is the
+                   ;; tinted `agent-shell-markdown-source-block' background.
+                   (pad (propertize "\n\n" 'face 'default))
+                   ;; One fewer leading newline when the label follows a panel:
+                   ;; `start' then sits at a fresh line (after the panel's
+                   ;; tinted padding newline), so `pad' would render two blank
+                   ;; lines instead of one.  The panel padding already
+                   ;; separates it, so a single newline keeps exactly one.
+                   (lead (if (and (> start (point-min))
+                                  (agent-shell-chat--extends-bg-p
+                                   (get-text-property (1- start) 'face)))
+                             (propertize "\n" 'face 'default)
+                           pad))
                    (display (cond
                              ((and blank (bound-and-true-p agent-shell-prompt-bar-mode))
                               "")
                              ;; Live prompt awaiting input: show `Me' and the
-                             ;; prompt marker, indented to meet the input.  The
-                             ;; marker is faced `default' so it does not inherit
-                             ;; the covered prompt face (a display string's
-                             ;; unfaced chars take the face of the text they
-                             ;; replace).
+                             ;; prompt marker, indented to meet the input.
                              (blank
-                              (concat "\n\n" me-label "\n\n"
+                              (concat lead me-label pad
                                       (propertize
                                        (concat agent-shell-chat--body-indent
                                                agent-shell-chat--prompt)
                                        'face 'default)))
                              ;; Submitted turn: just the `Me' label.
-                             (t (concat "\n\n" me-label "\n\n")))))
+                             (t (concat lead me-label pad)))))
               (agent-shell-chat--upsert-overlay
                'agent-shell-chat-me pos run-end start end
-               (list (cons 'display display)))
+               ;; Empty `line-prefix'/`wrap-prefix' drop any inherited from the
+               ;; covered text (e.g. a code block's tinted gutter), which would
+               ;; otherwise indent and tint the label.
+               (list (cons 'display display)
+                     (cons 'line-prefix "")
+                     (cons 'wrap-prefix "")))
               ;; Indent the submitted input so it aligns with the response
               ;; body; the live (blank) prompt has no input to indent.
               (if blank
