@@ -1062,7 +1062,10 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                                      (agent-shell-markdown--make-ret-binding-map
                                       (lambda () (interactive)
                                         (find-file path))))
-                  (put-text-property markup-start end 'mouse-face 'highlight)
+                  ;; A hand pointer signals the image is clickable; unlike
+                  ;; `mouse-face', it adds no background that would paint a
+                  ;; highlighted box across the image on hover.
+                  (put-text-property markup-start end 'pointer 'hand)
                   (when source
                     (put-text-property markup-start end
                                        'agent-shell-markdown-source source))
@@ -1138,7 +1141,9 @@ renders the image in place of that text."
                                    (agent-shell-markdown--make-ret-binding-map
                                     (lambda () (interactive)
                                       (find-file resolved))))
-                (put-text-property path-start path-end 'mouse-face 'highlight)
+                ;; A hand pointer signals the image is clickable without the
+                ;; background a `mouse-face' would paint across it on hover.
+                (put-text-property path-start path-end 'pointer 'hand)
                 ;; A bare-path image is sized by the default
                 ;; `agent-shell-markdown-image-max-width'; when that is a
                 ;; ratio it tracks the window, so mark it `default' for
