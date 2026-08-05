@@ -5055,25 +5055,26 @@ prompt and the prompt end sits past the accessible `point-max'."
           ;; Must not raise `Args out of range' and must report not-live.
           (should-not (agent-shell--live-input-prompt-p prompt)))))))
 
-(ert-deftest agent-shell--realign-tables-on-change-schedules-regardless-of-width ()
-  "Schedule a table re-align on every window change, not just width changes.
-Regression: a table streamed in while the buffer was off-screen is
-laid out with `string-width' (no window to measure against), so it
-is not pixel-perfect.  Bringing the buffer back into a same-width
-window must still schedule a re-render; the per-table staleness
-decision belongs to `agent-shell-markdown-rerender-tables', so this
-hook must not gate on the window width being unchanged."
+(ert-deftest agent-shell--realign-on-change-schedules-regardless-of-width ()
+  "Schedule a re-align on every window change, not just width changes.
+Regression: content rendered while the buffer was off-screen (a table
+laid out with `string-width', an image sized against no window) is not
+correct for the display.  Bringing the buffer back into a same-width
+window must still schedule a re-render; the per-item staleness decision
+belongs to `agent-shell-markdown-rerender-tables' /
+`agent-shell-markdown-rerender-images', so this hook must not gate on
+the window width being unchanged."
   (with-temp-buffer
     (let ((scheduled 0))
       (cl-letf (((symbol-function 'window-live-p) (lambda (_) t))
                 ((symbol-function 'window-body-width) (lambda (&rest _) 800))
                 ((symbol-function 'run-with-idle-timer)
                  (lambda (&rest _) (setq scheduled (1+ scheduled)) 'timer)))
-        (agent-shell--realign-tables-on-change 'window)
+        (agent-shell--realign-on-change 'window)
         (should (= scheduled 1))
-        ;; Same width again: a previously off-screen table may now be
+        ;; Same width again: a previously off-screen item may now be
         ;; stale, so this must still schedule.
-        (agent-shell--realign-tables-on-change 'window)
+        (agent-shell--realign-on-change 'window)
         (should (= scheduled 2))))))
 
 (ert-deftest agent-shell--make-permission-actions-orders-allow-before-reject ()

@@ -405,6 +405,114 @@ streaming **not bold**" nil)))))
                  '((:max-width . 42))))
   (should (null (agent-shell-markdown--parse-image-attributes "caption"))))
 
+(ert-deftest agent-shell-markdown-image-attribute-ratio ()
+  ;; A percentage yields its window fraction; a fixed pixel or bare
+  ;; number yields nil (not window-relative).
+  (should (= 0.5 (agent-shell-markdown--image-attribute-ratio "50%")))
+  (should (= 0.2 (agent-shell-markdown--image-attribute-ratio "20%")))
+  (should (null (agent-shell-markdown--image-attribute-ratio "300")))
+  (should (null (agent-shell-markdown--image-attribute-ratio "300px"))))
+
+(ert-deftest agent-shell-markdown-image-attributes-parse-percentage-ratio ()
+  ;; A percentage width surfaces its window fraction on `:max-width-ratio'
+  ;; (for `agent-shell-markdown-rerender-images') alongside the resolved
+  ;; `:max-width' pixels; a fixed pixel width carries no ratio.
+  (should (= 0.5 (map-elt (agent-shell-markdown--parse-image-attributes "width=50%")
+                          :max-width-ratio)))
+  (should (null (map-elt (agent-shell-markdown--parse-image-attributes "width=300")
+                         :max-width-ratio))))
+
+(ert-deftest agent-shell-markdown-image-render-stores-width-ratio ()
+  ;; A percentage-width image records its window fraction and the width it
+  ;; was sized against, so `agent-shell-markdown-rerender-images' can
+  ;; re-size it; a fixed pixel width records no ratio.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image) (lambda (&rest _) '(image :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil))
+                  ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+                  ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+          (with-temp-buffer
+            (insert (format "![a](%s){width=50%%}" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (= 0.5 (get-text-property
+                            (point-min) 'agent-shell-markdown-image-width-ratio)))
+            (should (= 1000 (get-text-property
+                             (point-min) 'agent-shell-markdown-image-window-width))))
+          ;; No attribute: sized by the default `image-max-width' (a float),
+          ;; so tracked with the `default' sentinel (not a baked-in value).
+          ;; A trailing newline settles the streaming attribute guard.
+          (with-temp-buffer
+            (insert (format "![a](%s)\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (eq 'default (get-text-property
+                                  (point-min) 'agent-shell-markdown-image-width-ratio))))
+          (with-temp-buffer
+            (insert (format "![a](%s){width=300px}" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (null (get-text-property
+                           (point-min) 'agent-shell-markdown-image-width-ratio)))))
+      (delete-file image-file))))
+
+(ert-deftest agent-shell-markdown-rerender-images-resizes-stale-only ()
+  ;; Re-size only images whose stored window width differs from the
+  ;; current one, passing the max-width recomputed from the image's own
+  ;; ratio; images already at the current width are left alone.
+  (with-temp-buffer
+    (insert "AB")
+    (put-text-property 1 2 'agent-shell-markdown-image-width-ratio 0.5)
+    (put-text-property 1 2 'agent-shell-markdown-image-window-width 1000)
+    (put-text-property 2 3 'agent-shell-markdown-image-width-ratio 0.4)
+    (put-text-property 2 3 'agent-shell-markdown-image-window-width 2000)
+    (let ((calls nil))
+      (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+                ((symbol-function 'window-body-width) (lambda (&rest _) 2000))
+                ((symbol-function 'agent-shell-markdown--resize-image)
+                 (lambda (start _end max-width width)
+                   (push (list start max-width width) calls))))
+        (agent-shell-markdown-rerender-images)
+        ;; Only the stale image (stored 1000), at 0.5 * 2000 = 1000 px.
+        (should (equal calls '((1 1000 2000))))))))
+
+(ert-deftest agent-shell-markdown-rerender-images-default-reads-live-max-width ()
+  ;; A `default'-sized image (from `agent-shell-markdown-image-max-width')
+  ;; re-reads that variable live on resize, so a changed setting applies
+  ;; rather than a value baked in at render time.
+  (with-temp-buffer
+    (insert "X")
+    (put-text-property (point-min) (point-max)
+                       'agent-shell-markdown-image-width-ratio 'default)
+    (put-text-property (point-min) (point-max)
+                       'agent-shell-markdown-image-window-width 500)
+    (let ((max-widths nil)
+          (agent-shell-markdown-image-max-width 0.6))
+      (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+                ((symbol-function 'window-body-width) (lambda (&rest _) 1000))
+                ((symbol-function 'agent-shell-markdown--resize-image)
+                 (lambda (_s _e max-width _w) (push max-width max-widths))))
+        (agent-shell-markdown-rerender-images)
+        ;; 0.6 (the live value) * 1000 = 600.
+        (should (equal max-widths '(600)))))))
+
+(ert-deftest agent-shell-markdown-resize-image-applies-max-width ()
+  ;; Applies the given `:max-width', keeps `:max-height', and records the
+  ;; new window width.
+  (with-temp-buffer
+    (insert "X")
+    (put-text-property (point-min) (point-max) 'display
+                       '(image :file "x.png" :max-width 500 :max-height 40))
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (_file &optional _type _data-p &rest props) (cons 'image props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+      (agent-shell-markdown--resize-image (point-min) (point-max) 1000 2000))
+    (let ((image (get-text-property (point-min) 'display)))
+      (should (= 1000 (image-property image :max-width)))
+      (should (= 40 (image-property image :max-height))))
+    (should (= 2000 (get-text-property
+                     (point-min) 'agent-shell-markdown-image-window-width)))))
+
 (ert-deftest agent-shell-markdown-image-attributes-round-trip ()
   ;; A trailing `{width=...}' block is consumed with the image (no leaked
   ;; braces) and folded into the stashed source, so copy-as-markdown
