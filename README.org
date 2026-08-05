@@ -58,6 +58,7 @@ With agent-shell, you can interact with any ACP-driven agent like:
 
 Do take a look at all these blog posts as they showcase most =agent-shell= features.
 
+- [[https://xenodium.com/agent-shell-0-63-updates][agent-shell 0.63 updates]].
 - [[https://xenodium.com/agent-shell-0-55-updates][agent-shell 0.55 updates]].
 - [[https://xenodium.com/agent-shell-0-47-1-updates][agent-shell 0.47 updates]].
 - [[https://xenodium.com/agent-shell-0-25-updates][agent-shell 0.25 updates]].
