@@ -116,12 +116,32 @@ You may use \"􀇾\" as an SF Symbol on macOS."
   :type 'string
   :group 'agent-shell)
 
-(defcustom agent-shell-thought-process-icon "💡"
+(defcustom agent-shell-thought-process-icon "⚹"
   "Icon displayed during the AI's thought process.
 
-You may use \"􁷘\" as an SF Symbol on macOS."
+Displays a diamond instead on displays that cannot draw it.
+
+Favour single width icons as they line \"Thinking\" up with the status
+icons beside tool calls; wider ones, including most emoji and the SF
+Symbols shift it right by the difference."
   :type 'string
   :group 'agent-shell)
+
+(defun agent-shell--thought-process-icon ()
+  "Return the thought process icon this display can draw, else nil.
+
+Resolved per call rather than at load time: whether a character is
+drawable depends on the frame, which may not exist yet when this file
+loads (a daemon starting before its first graphical frame).  Falls back
+to a diamond, drawn by most monospace fonts.
+
+  (agent-shell--thought-process-icon)
+  ;; => \"⚹\" where its font is available, \"◇\" otherwise"
+  (when-let* ((icon agent-shell-thought-process-icon)
+              ((not (string-empty-p icon))))
+    (if (seq-every-p #'char-displayable-p (string-to-list icon))
+        icon
+      "◇")))
 
 (defcustom agent-shell-thought-process-expand-by-default nil
   "Whether thought process sections should be expanded by default.
@@ -2825,9 +2845,8 @@ Clears STATE's `:expanded-activity-group'."
               :block-id (format "%s-agent_thought_chunk"
                                 (map-elt state :chunked-group-count))
               :label-left  (concat
-                            (when (and agent-shell-thought-process-icon
-                                       (not (string-empty-p agent-shell-thought-process-icon)))
-                              (concat agent-shell-thought-process-icon " "))
+                            (when-let* ((icon (agent-shell--thought-process-icon)))
+                              (concat icon " "))
                             (propertize "Thinking" 'font-lock-face 'agent-shell-section-heading))
               :body content
               :append (equal (map-elt state :last-entry-type)
@@ -4074,7 +4093,7 @@ for details."
         file-path))))))
 
 (defcustom agent-shell-status-kind-label-function
-  #'agent-shell--inverse-icon-status-kind-label
+  #'agent-shell--icon-and-kind-status-kind-label
   "Function to render status and kind labels.
 
 Called with two arguments: STATUS (string or nil) and KIND (string or nil).
@@ -4142,13 +4161,13 @@ Returns propertized labels in :status and :title propertized."
                               (not (equal (string-remove-prefix "`" (string-remove-suffix "`" (string-trim title)))
                                           (string-remove-prefix "`" (string-remove-suffix "`" (string-trim description))))))
                          (concat
-                          (propertize title 'font-lock-face 'agent-shell-section-heading)
+                          (propertize title 'font-lock-face 'default)
                           " "
                           (propertize description 'font-lock-face 'agent-shell-section-annotation)))
                         (title
-                         (propertize title 'font-lock-face 'agent-shell-section-heading))
+                         (propertize title 'font-lock-face 'default))
                         (description
-                         (propertize description 'font-lock-face 'agent-shell-section-heading)))))
+                         (propertize description 'font-lock-face 'default)))))
       `((:status . ,(agent-shell--make-status-kind-label
                      :status (map-elt tool-call :status)
                      :kind (map-elt tool-call :kind)))

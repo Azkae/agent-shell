@@ -90,7 +90,7 @@
 
 (defface agent-shell-section-heading
   '((t :inherit font-lock-doc-markup-face))
-  "Face for a section's heading (e.g. \"Plan\", \"Thinking\", a tool call's title)."
+  "Face for a section's heading (e.g. \"Plan\", \"Thinking\", a tool call's kind)."
   :group 'agent-shell-faces)
 
 (defface agent-shell-section-annotation

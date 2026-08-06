@@ -145,24 +145,26 @@
 
 (ert-deftest agent-shell--format-plan-test ()
   "Test `agent-shell--format-plan' function."
+  ;; Plan steps carry no kind, so the default label is the status icon
+  ;; alone, which renders the same on graphical and text frames.
   (dolist (test-case `(;; Graphical display mode
                        ( :graphic t
                          :homogeneous-expected
-                         ,(concat " …  Update state initialization\n"
-                                  " …  Update session initialization")
+                         ,(concat "◔ Update state initialization\n"
+                                  "◔ Update session initialization")
                          :mixed-expected
-                         ,(concat " …  First task\n"
-                                  " …  Second task\n"
-                                  " ✓  Third task"))
+                         ,(concat "◔ First task\n"
+                                  "◔ Second task\n"
+                                  "✓ Third task"))
                        ;; Terminal display mode
                        ( :graphic nil
                          :homogeneous-expected
-                         ,(concat "[…] Update state initialization\n"
-                                  "[…] Update session initialization")
+                         ,(concat "◔ Update state initialization\n"
+                                  "◔ Update session initialization")
                          :mixed-expected
-                         ,(concat "[…] First task\n"
-                                  "[…] Second task\n"
-                                  "[✓] Third task"))))
+                         ,(concat "◔ First task\n"
+                                  "◔ Second task\n"
+                                  "✓ Third task"))))
     (cl-letf (((symbol-function 'display-graphic-p)
                (lambda (&optional _display) (plist-get test-case :graphic))))
       ;; Test homogeneous statuses
@@ -4687,14 +4689,8 @@ interleaving message created, or the next tool call joins the earlier
 group and renders above the message.  Drives the full notification
 dispatch, since the defect is in the `tool_call_update' handler, not the
 group-id helper alone."
-  (let ((state (list (cons :tool-calls nil)
-                     (cons :last-entry-type nil)
-                     (cons :last-agent-message-id nil)
-                     (cons :activity-group-count 0)
-                     (cons :chunked-group-count 0)
-                     (cons :active-requests t)
-                     (cons :last-activity-time nil)
-                     (cons :buffer nil))))
+  (let ((state (agent-shell--make-state)))
+    (map-put! state :active-requests t)
     (cl-letf (((symbol-function 'agent-shell--update-fragment) #'ignore)
               ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
               ((symbol-function 'agent-shell--append-transcript) #'ignore)
@@ -4728,14 +4724,11 @@ group-id helper alone."
   "Consecutive tool calls (no interleaving entry) share one group.
 Guards that the #31 fix does not over-split: an in-place completion update
 between two tool calls keeps them together."
-  (let ((state (list (cons :tool-calls nil)
-                     (cons :last-entry-type nil)
-                     (cons :last-agent-message-id nil)
-                     (cons :activity-group-count 0)
-                     (cons :chunked-group-count 0)
-                     (cons :active-requests t)
-                     (cons :last-activity-time nil)
-                     (cons :buffer nil))))
+  ;; Built through `agent-shell--make-state' so the notification handlers
+  ;; find every field they write; a hand-rolled alist missing one fails
+  ;; `map-put!' with `map-not-inplace'.
+  (let ((state (agent-shell--make-state)))
+    (map-put! state :active-requests t)
     (cl-letf (((symbol-function 'agent-shell--update-fragment) #'ignore)
               ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
               ((symbol-function 'agent-shell--append-transcript) #'ignore)
@@ -4769,13 +4762,8 @@ advanced the group counter and split the following tool call into its own
 group even though the permission dialog is transient (deleted on
 completion) and renders no lasting interleaved content."
   (let* ((buffer (generate-new-buffer " *permission-group-test*"))
-         (state (list (cons :tool-calls nil)
-                      (cons :last-entry-type nil)
-                      (cons :activity-group-count 0)
-                      (cons :chunked-group-count 0)
-                      (cons :active-requests t)
-                      (cons :last-activity-time nil)
-                      (cons :buffer buffer))))
+         (state (agent-shell--make-state :buffer buffer)))
+    (map-put! state :active-requests t)
     (unwind-protect
     (cl-letf (((symbol-function 'agent-shell--update-fragment) #'ignore)
               ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
@@ -4833,7 +4821,7 @@ count lets a non-completed member lift the total only."
                              (label '("completed" "completed" "completed"
                                       "failed" "failed"))))
     ;; In-progress dominates when nothing failed.
-    (should (string-prefix-p "…" (label '("completed" "pending" "in_progress"))))
+    (should (string-prefix-p "◔" (label '("completed" "pending" "in_progress"))))
     (should (string-suffix-p "Activity 2/5"
                              (label '("completed" "completed" "in_progress"
                                       "pending" "in_progress"))))))
@@ -5145,6 +5133,53 @@ the global hook value must stay quiet."
         (remove-hook 'agent-shell-markdown-render-functions global-renderer)))
     (should (equal 0 global-calls))
     (should (equal 0 local-calls))))
+
+(ert-deftest agent-shell--icon-and-kind-status-kind-label-test ()
+  "Kind renders capitalized, unpadded, beside the status icon."
+  (let ((label (lambda (status kind)
+                 (when-let* ((text (agent-shell--icon-and-kind-status-kind-label
+                                    status kind)))
+                   (substring-no-properties text)))))
+    (should (equal "✓ Command" (funcall label "completed" "execute")))
+    (should (equal "◔ Find" (funcall label "in_progress" "search")))
+    (should (equal "◔ Command" (funcall label "pending" "execute")))
+    (should (equal "✗ Delete" (funcall label "failed" "delete")))
+    ;; Underscores read as words.
+    (should (equal "✓ Switch Mode" (funcall label "completed" "switch_mode")))
+    ;; Kind-less entries (plan steps, group headers) render icon only.
+    (should (equal "✓" (funcall label "completed" nil)))
+    (should (equal "Read" (funcall label nil "read")))
+    (should (equal nil (funcall label nil nil)))))
+
+(ert-deftest agent-shell--icon-and-kind-status-kind-label-faces-test ()
+  "The icon tracks status while the kind reads as a section heading."
+  ;; Position based: the icon leads, the kind runs to the end.
+  (let ((label (agent-shell--icon-and-kind-status-kind-label "completed" "execute")))
+    (should (equal 'agent-shell-success
+                   (get-text-property 0 'font-lock-face label)))
+    (should (equal 'agent-shell-section-heading
+                   (get-text-property (1- (length label)) 'font-lock-face label)))))
+
+(ert-deftest agent-shell--thought-process-icon-falls-back-test ()
+  "The icon stands aside for the fallback when a display cannot draw it."
+  (let ((agent-shell-thought-process-icon "⚹"))
+    (cl-letf (((symbol-function 'char-displayable-p) (lambda (&rest _) t)))
+      (should (equal "⚹" (agent-shell--thought-process-icon))))
+    (cl-letf (((symbol-function 'char-displayable-p) (lambda (&rest _) nil)))
+      (should (equal "◇" (agent-shell--thought-process-icon)))))
+  ;; An emptied icon opts out entirely, fallback included.
+  (let ((agent-shell-thought-process-icon ""))
+    (should (equal nil (agent-shell--thought-process-icon)))))
+
+(ert-deftest agent-shell-make-tool-call-label-titles-render-plain-test ()
+  "Titles carry content, so they render plain beside the status label."
+  (let ((state '((:tool-calls . (("t1" . ((:kind . "read")
+                                          (:status . "completed")
+                                          (:title . "file.el"))))))))
+    (should (equal 'default
+                   (get-text-property
+                    0 'font-lock-face
+                    (map-elt (agent-shell-make-tool-call-label state "t1") :title))))))
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
