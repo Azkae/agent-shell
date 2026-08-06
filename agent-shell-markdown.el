@@ -2756,13 +2756,16 @@ is safe to call on display and on resize."
         (let ((inhibit-read-only t)
               (buffer-undo-list t)
               (modified (buffer-modified-p)))
-          (dolist (region (nreverse regions))
-            (agent-shell-markdown--render-table
-             (list (cons :source (nth 2 region))
-                   (cons :start (marker-position (nth 0 region)))
-                   (cons :end (marker-position (nth 1 region)))))
-            (set-marker (nth 0 region) nil)
-            (set-marker (nth 1 region) nil))
+          ;; Preserve point (`agent-shell-markdown--render-table' moves point
+          ;; and can be triggered at arbitrary times).
+          (save-excursion
+            (dolist (region (nreverse regions))
+              (agent-shell-markdown--render-table
+               (list (cons :source (nth 2 region))
+                     (cons :start (marker-position (nth 0 region)))
+                     (cons :end (marker-position (nth 1 region)))))
+              (set-marker (nth 0 region) nil)
+              (set-marker (nth 1 region) nil)))
           (restore-buffer-modified-p modified))))))
 
 (defun agent-shell-markdown--carry-properties (pos)
