@@ -212,6 +212,43 @@ land on the first.  The hint line steers it to the intended occurrence."
             (when (find-buffer-visiting file) (kill-buffer (find-buffer-visiting file)))))
       (delete-file file))))
 
+(ert-deftest agent-shell-diff-open-file-navigates-later-hunk-test ()
+  "Test that open-file resolves a change in a later hunk.
+
+With more than one hunk, blank spacer lines surround each `changes'
+label (the one below it is tagged `agent-shell-diff-spacer').  The jump
+must skip that spacer and still land on the changed line of the hunk at
+point."
+  (let* ((old (string-join
+               '("alpha" "one" "two" "three" "four" "five" "six" "seven"
+                 "OLD_A" "eight" "nine" "ten" "eleven" "twelve" "thirteen"
+                 "fourteen" "OLD_B" "omega")
+               "\n"))
+         (new (string-join
+               '("alpha" "one" "two" "three" "four" "five" "six" "seven"
+                 "NEW_A" "eight" "nine" "ten" "eleven" "twelve" "thirteen"
+                 "fourteen" "NEW_B" "omega")
+               "\n"))
+         (file (make-temp-file "agent-shell-jump" nil ".txt" (concat old "\n"))))
+    (unwind-protect
+        (let ((buf (agent-shell-diff
+                    :diffs (list (list (cons :old old)
+                                       (cons :new new)
+                                       (cons :file file))))))
+          (unwind-protect
+              (with-current-buffer buf
+                ;; Two changes far enough apart to form separate hunks.
+                (goto-char (point-min))
+                (search-forward "-OLD_B")
+                (beginning-of-line)
+                (agent-shell-diff-open-file)
+                (should (equal (buffer-substring-no-properties
+                                (line-beginning-position) (line-end-position))
+                               "OLD_B")))
+            (when (buffer-live-p buf) (kill-buffer buf))
+            (when (find-buffer-visiting file) (kill-buffer (find-buffer-visiting file)))))
+      (delete-file file))))
+
 (ert-deftest agent-shell-diff-on-exit-skipped-when-calling-buffer-dead-test ()
   "Test that ON-EXIT is skipped without error when calling buffer is dead."
   (let ((on-exit-called nil)
