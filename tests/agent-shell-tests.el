@@ -6394,5 +6394,695 @@ Then [after](https://after.com/y)
     (agent-shell-previous-item)
     (should (eq (char-after) ?A))))
 
+(defun agent-shell-tests--elicitation-state (&optional pending)
+  "Return a minimal state for elicitation tests, PENDING request ids tracked."
+  (list (cons :buffer (current-buffer))
+        (cons :client nil)
+        (cons :elicitations pending)
+        (cons :active-requests nil)
+        (cons :event-subscriptions nil)
+        (cons :last-entry-type nil)
+        (cons :idle-timer nil)))
+
+(defmacro agent-shell-tests--with-elicitation (bindings &rest body)
+  "Run BODY with elicitation collaborators stubbed.
+
+BINDINGS is a list of (SYMBOL FORM) recording lists BODY can assert on:
+`responses' collects every `acp-send-response' :response, `events'
+collects every `agent-shell--emit-event' event symbol and data, and
+`fragments' collects every `agent-shell--update-fragment' :body."
+  (declare (indent 1))
+  `(let (,@bindings)
+     (cl-letf (((symbol-function 'acp-send-response)
+                (lambda (&rest args) (push (plist-get args :response) responses)))
+               ((symbol-function 'agent-shell--emit-event)
+                (lambda (&rest args) (push (cons (plist-get args :event)
+                                                 (plist-get args :data))
+                                           events)))
+               ((symbol-function 'agent-shell--update-fragment)
+                (lambda (&rest args) (push (plist-get args :body) fragments)))
+               ((symbol-function 'agent-shell--delete-fragment) #'ignore)
+               ((symbol-function 'agent-shell--start-idle-timer) #'ignore)
+               ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+               ((symbol-function 'agent-shell-viewport--buffer) (lambda (&rest _) nil))
+               ((symbol-function 'agent-shell-jump-to-latest-permission-button-row)
+                (lambda (&rest _) nil)))
+       ,@body)))
+
+(defconst agent-shell-tests--elicitation-schema
+  '((type . "object")
+    (properties
+     . ((question_0
+         . ((type . "string")
+            (title . "Next task")
+            (oneOf . [((const . "Describe a new task")
+                       (title . "Describe a new task")
+                       (description . "You have something specific in mind - a feature, bug fix, or refactor."))
+                      ((const . "Tour the codebase")
+                       (title . "Tour the codebase")
+                       (description . "I explore src/routes, src/lib, and the component patterns."))
+                      ((const . "Review recent changes")
+                       (title . "Review recent changes")
+                       (description . "I look at the latest commits on master and flag anything worth fixing."))
+                      ((const . "Check types and tests")
+                       (title . "Check types and tests")
+                       (description . "Run npx tsc --noEmit and npm run test, then report what breaks."))])))
+        (question_0_custom
+         . ((type . "string")
+            (title . "Other")
+            (description . "Type your own answer instead of choosing an option above (optional)."))))))
+  "A real \"elicitation/create\" schema, as sent by Claude Code.
+
+Choices come as titled `oneOf' options rather than a bare `enum', and are
+paired with an optional free text property for answering in one's own
+words.")
+
+(defconst agent-shell-tests--elicitation-multi-schema
+  '((type . "object")
+    (properties
+     . ((question_0
+         . ((type . "string")
+            (title . "CI on PRs")
+            (description . "What happens to the ci.yml I added?")
+            (oneOf . [((const . "Keep it as is")
+                       (title . "Keep it as is")
+                       (description . "Both jobs run on every PR."))
+                      ((const . "Keep only the macOS build")
+                       (title . "Keep only the macOS build")
+                       (description . "Drop the Linux lint/build job."))
+                      ((const . "Drop ci.yml entirely")
+                       (title . "Drop ci.yml entirely")
+                       (description . "No CI in the RN repo."))])))
+        (question_0_custom
+         . ((type . "string")
+            (title . "Other")
+            (description . "Type your own answer instead of choosing an option above (optional).")))
+        (question_1
+         . ((type . "string")
+            (title . "Watcher")
+            (description . "Keep the nightly watch-ios-sdk.yml cron?")
+            (oneOf . [((const . "Drop it (Recommended)")
+                       (title . "Drop it (Recommended)")
+                       (description . "One fewer workflow."))
+                      ((const . "Keep it")
+                       (title . "Keep it")
+                       (description . "Covers a failed dispatch."))])))
+        (question_1_custom
+         . ((type . "string")
+            (title . "Other")
+            (description . "Type your own answer instead of choosing an option above (optional).")))
+        (question_2
+         . ((type . "string")
+            (title . "Side fixes")
+            (description . "I also changed things outside this chain.")
+            (oneOf . [((const . "Keep version single-sourcing, revert the rest")
+                       (title . "Keep version single-sourcing, revert the rest")
+                       (description . "Fixes real drift in two files."))
+                      ((const . "Revert all of them")
+                       (title . "Revert all of them")
+                       (description . "Diff becomes only the pin plus the bump workflow."))
+                      ((const . "Keep all of them")
+                       (title . "Keep all of them")
+                       (description . "Also keeps verify-package.js."))])))
+        (question_2_custom
+         . ((type . "string")
+            (title . "Other")
+            (description . "Type your own answer instead of choosing an option above (optional)."))))))
+  "A real multi-question \"elicitation/create\" schema, as sent by Claude Code.
+
+Three single-selects, each paired with an optional free text property
+named after it, and no `required' at all.")
+
+(ert-deftest agent-shell-elicitation--choices-test ()
+  "Test `agent-shell-elicitation--choices' normalizes both schema spellings."
+  ;; Titled options.
+  (should (equal (agent-shell-elicitation--choices
+                  '((oneOf . [((const . "tour")
+                               (title . "Tour the codebase")
+                               (description . "I explore src/lib."))])))
+                 '(((:value . "tour")
+                    (:title . "Tour the codebase")
+                    (:description . "I explore src/lib.")))))
+  ;; anyOf spelled instead of oneOf.
+  (should (equal (agent-shell-elicitation--choices
+                  '((anyOf . [((const . "tour") (title . "Tour"))])))
+                 '(((:value . "tour") (:title . "Tour") (:description . nil)))))
+  ;; An option naming no value cannot become a button.
+  (should (equal (agent-shell-elicitation--choices
+                  '((oneOf . [((title . "No const here"))
+                              ((const . "tour") (title . "Tour"))])))
+                 '(((:value . "tour") (:title . "Tour") (:description . nil)))))
+  ;; A titleless option falls back to its value.
+  (should (equal (agent-shell-elicitation--choices '((oneOf . [((const . "tour"))])))
+                 '(((:value . "tour") (:title . "tour") (:description . nil)))))
+  ;; Bare enum, with no enumNames to title it.
+  (should (equal (agent-shell-elicitation--choices
+                  '((type . "string") (enum . ["conservative" "balanced"])))
+                 '(((:value . "conservative") (:title . "conservative") (:description . nil))
+                   ((:value . "balanced") (:title . "balanced") (:description . nil)))))
+  ;; enumNames titles the values, which stay the values sent back.
+  (should (equal (agent-shell-elicitation--choices
+                  '((enum . ["c" "b"]) (enumNames . ["Conservative" "Balanced"])))
+                 '(((:value . "c") (:title . "Conservative") (:description . nil))
+                   ((:value . "b") (:title . "Balanced") (:description . nil)))))
+  ;; A non-string value keeps its type so it round-trips as JSON.
+  (should (equal (agent-shell-elicitation--choices '((enum . [1 2])))
+                 '(((:value . 1) (:title . "1") (:description . nil))
+                   ((:value . 2) (:title . "2") (:description . nil)))))
+  ;; Free text is not a single-select.
+  (should-not (agent-shell-elicitation--choices '((type . "string"))))
+  (should-not (agent-shell-elicitation--choices '((type . "boolean")))))
+
+(ert-deftest agent-shell-elicitation--button-forms-test ()
+  "Test `agent-shell-elicitation--button-forms' makes a form per single-select."
+  ;; A choice paired with an optional free text property qualifies.
+  (should (equal (agent-shell-elicitation--button-forms
+                  agent-shell-tests--elicitation-schema)
+                 `(((:name . question_0)
+                    (:title . "Next task")
+                    (:description . nil)
+                    (:required . nil)
+                    (:choices . ,(agent-shell-elicitation--choices
+                                  (map-nested-elt agent-shell-tests--elicitation-schema
+                                                  '(properties question_0))))
+                    (:extras . ,(list (assq 'question_0_custom
+                                            (map-elt agent-shell-tests--elicitation-schema
+                                                     'properties))))))))
+  ;; A lone enum qualifies, with no extras, titled after its property.
+  (should (equal (agent-shell-elicitation--button-forms
+                  '((type . "object")
+                    (properties . ((strategy . ((enum . ["conservative" "balanced"])))))
+                    (required . ["strategy"])))
+                 '(((:name . strategy)
+                    (:title . "strategy")
+                    (:description . nil)
+                    (:required . t)
+                    (:choices . (((:value . "conservative") (:title . "conservative")
+                                  (:description . nil))
+                                 ((:value . "balanced") (:title . "balanced")
+                                  (:description . nil))))
+                    (:extras . nil)))))
+  ;; Several single-selects: one form each, extras paired by name.
+  (should (equal (seq-map (lambda (form)
+                            (cons (map-elt form :name)
+                                  (seq-map #'car (map-elt form :extras))))
+                          (agent-shell-elicitation--button-forms
+                           agent-shell-tests--elicitation-multi-schema))
+                 '((question_0 question_0_custom)
+                   (question_1 question_1_custom)
+                   (question_2 question_2_custom))))
+  ;; An extra starting with no question name belongs to none of them.
+  (should (equal (seq-map (lambda (form) (map-elt form :extras))
+                          (agent-shell-elicitation--button-forms
+                           '((properties . ((a . ((enum . ["x"])))
+                                            (b . ((enum . ["y"])))
+                                            (notes . ((type . "string"))))))))
+                 '(nil nil)))
+  ;; No properties at all.
+  (should-not (agent-shell-elicitation--button-forms '((type . "object"))))
+  ;; Single property, but free text rather than a choice.
+  (should-not (agent-shell-elicitation--button-forms
+               '((properties . ((summary . ((type . "string"))))))))
+  ;; A required extra cannot be skipped by picking a choice.
+  (should-not (agent-shell-elicitation--button-forms
+               '((properties . ((strategy . ((enum . ["balanced"])))
+                                (summary . ((type . "string")))))
+                 (required . ["summary"]))))
+  ;; Too many choices to give each a single digit shortcut.
+  (should-not (agent-shell-elicitation--button-forms
+               `((properties . ((n . ((enum . ,(vconcat (number-sequence 1 10)))))))))))
+
+(ert-deftest agent-shell-elicitation--extra-owner-test ()
+  "Test `agent-shell-elicitation--extra-owner' pairs by longest question name."
+  (should (equal (agent-shell-elicitation--extra-owner
+                  'question_0_custom '(question_0 question_1))
+                 'question_0))
+  ;; The longest match wins, so question_1 does not steal question_10's extra.
+  (should (equal (agent-shell-elicitation--extra-owner
+                  'question_10_custom '(question_1 question_10))
+                 'question_10))
+  (should-not (agent-shell-elicitation--extra-owner 'notes '(question_0))))
+
+(ert-deftest agent-shell-elicitation-accepts-choice-test ()
+  "Test picking an enum value accepts with that value as content."
+  (let ((state (agent-shell-tests--elicitation-state '(43))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore fragments)
+      ;; Second button is "balanced (2)".
+      (funcall (map-elt (seq-elt (agent-shell-elicitation--make-actions
+                                  :dialog (agent-shell-elicitation--make-dialog
+                                           :state state
+                                           :request-id 43
+                                           :schema '((properties . ((strategy . ((enum . ["conservative" "balanced"])))))))) 1)
+                        :action))
+      (should (equal (map-elt (car responses) :request-id) 43))
+      (should (equal (map-elt (car responses) :result)
+                     '((action . "accept")
+                       (content . ((strategy . "balanced"))))))
+      (should (equal (car (car events)) 'elicitation-response))
+      (should (equal (map-elt (cdr (car events)) :action) "accept"))
+      ;; No longer awaiting a response.
+      (should-not (map-elt state :elicitations)))))
+
+(ert-deftest agent-shell-elicitation-declines-test ()
+  "Test the decline button responds without content."
+  (let ((state (agent-shell-tests--elicitation-state '(43))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (funcall (map-elt (car (last (agent-shell-elicitation--make-actions
+                                    :dialog (agent-shell-elicitation--make-dialog
+                                             :state state
+                                             :request-id 43
+                                             :schema '((properties . ((strategy . ((enum . ["balanced"]))))))))))
+                        :action))
+      (should (equal (map-elt (car responses) :result) '((action . "decline")))))))
+
+(ert-deftest agent-shell-elicitation-responds-once-test ()
+  "Test a second answer to the same request is a no-op.
+A stale button (clicked after the request was answered or cancelled on
+interrupt) must not desynchronize the agent."
+  (let ((state (agent-shell-tests--elicitation-state '(43))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (let ((actions (agent-shell-elicitation--make-actions
+                      :dialog (agent-shell-elicitation--make-dialog
+                               :state state
+                               :request-id 43
+                               :schema '((properties . ((strategy . ((enum . ["conservative" "balanced"]))))))))))
+        (funcall (map-elt (seq-first actions) :action))
+        (funcall (map-elt (car (last actions)) :action))
+        (should (= (length responses) 1))
+        (should (equal (map-elt (car responses) :result)
+                       '((action . "accept")
+                         (content . ((strategy . "conservative"))))))))))
+
+(ert-deftest agent-shell-elicitation-accepts-empty-schema-test ()
+  "Test a schema with no properties accepts with empty content."
+  (let ((state (agent-shell-tests--elicitation-state '(43))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (let ((actions (agent-shell-elicitation--make-actions
+                      :dialog (agent-shell-elicitation--make-dialog
+                               :state state :request-id 43 :schema '((type . "object"))))))
+        (should (equal (seq-map (lambda (action) (map-elt action :label)) actions)
+                       '("OK (y)" "Decline (d)")))
+        (funcall (map-elt (seq-first actions) :action))
+        (should (equal (map-elt (car responses) :result)
+                       '((action . "accept") (content . nil))))))))
+
+(ert-deftest agent-shell-elicitation-renders-form-request-test ()
+  "Test `agent-shell--on-request' renders an elicitation/create button row."
+  (let ((state (agent-shell-tests--elicitation-state)))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore responses)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state)))
+        (agent-shell--on-request
+         :state state
+         :acp-request '((id . 43)
+                        (method . "elicitation/create")
+                        (params . ((sessionId . "sess_abc123")
+                                   (mode . "form")
+                                   (message . "How should I approach this refactoring?")
+                                   (requestedSchema
+                                    . ((type . "object")
+                                       (properties . ((strategy . ((type . "string")
+                                                                   (enum . ["conservative" "balanced"])))))
+                                       (required . ["strategy"]))))))))
+      (should (equal (map-elt state :elicitations) '(43)))
+      (should (equal (map-elt state :last-entry-type) "elicitation/create"))
+      (should (string-match-p "How should I approach this refactoring\\?" (car fragments)))
+      (should (string-match-p "conservative (1)" (car fragments)))
+      (should (string-match-p "balanced (2)" (car fragments)))
+      (should (string-match-p "Decline (d)" (car fragments)))
+      (should (equal (car events)
+                     '(elicitation-request
+                       (:request-id . 43)
+                       (:message . "How should I approach this refactoring?")))))))
+
+(ert-deftest agent-shell-elicitation-declines-url-mode-test ()
+  "Test url mode is declined rather than errored.
+Only form mode is advertised, and \"decline\" is an outcome agents must
+already handle while a JSON-RPC error is not."
+  (let ((state (agent-shell-tests--elicitation-state)))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state)))
+        (agent-shell--on-request
+         :state state
+         :acp-request '((id . 44)
+                        (method . "elicitation/create")
+                        (params . ((mode . "url")
+                                   (elicitationId . "github-oauth-001")
+                                   (url . "https://agent.example.com/connect")
+                                   (message . "Please authorize access."))))))
+      (should (equal (map-elt (car responses) :result) '((action . "decline"))))
+      (should-not (map-elt (car responses) :error))
+      (should-not fragments)
+      (should-not (map-elt state :elicitations)))))
+
+(ert-deftest agent-shell-elicitation-cancel-pending-test ()
+  "Test `agent-shell-elicitation-cancel-pending' cancels every open question."
+  (let ((state (agent-shell-tests--elicitation-state '(43 44))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (agent-shell-elicitation-cancel-pending :state state)
+      (should (equal (seq-map (lambda (response) (map-elt response :result)) responses)
+                     '(((action . "cancel")) ((action . "cancel")))))
+      (should-not (map-elt state :elicitations)))))
+
+(ert-deftest agent-shell-elicitation--read-content-test ()
+  "Test `agent-shell-elicitation--read-content' collects and coerces values."
+  (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "balanced"))
+            ((symbol-function 'read-string) (lambda (&rest _) "Rename the parser"))
+            ((symbol-function 'read-number) (lambda (&rest _) 42.0))
+            ((symbol-function 'y-or-n-p) (lambda (&rest _) nil)))
+    (should (equal (agent-shell-elicitation--read-content
+                    :schema '((type . "object")
+                              (properties . ((strategy . ((enum . ["conservative" "balanced"])))
+                                             (summary . ((type . "string")))
+                                             (issue . ((type . "integer")))
+                                             (urgent . ((type . "boolean")))))
+                              (required . ["strategy" "summary"])))
+                   ;; Booleans serialize as JSON false rather than null, and an
+                   ;; integer property is truncated to an integer.
+                   '((strategy . "balanced")
+                     (summary . "Rename the parser")
+                     (issue . 42)
+                     (urgent . :false)))))
+  ;; A blank optional answer is omitted rather than sent as an empty string.
+  (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "")))
+    (should-not (agent-shell-elicitation--read-content
+                 :schema '((properties . ((summary . ((type . "string"))))))))))
+
+(ert-deftest agent-shell-elicitation-cancels-on-quit-test ()
+  "Test quitting out of the minibuffer cancels rather than declines."
+  (let ((state (agent-shell-tests--elicitation-state '(43))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (signal 'quit nil))))
+        (funcall (map-elt (seq-first (agent-shell-elicitation--make-actions
+                                      :dialog (agent-shell-elicitation--make-dialog
+                                               :state state
+                                               :request-id 43
+                                               :schema '((properties . ((summary . ((type . "string")))))))))
+                          :action)))
+      (should (equal (map-elt (car responses) :result) '((action . "cancel")))))))
+
+(ert-deftest agent-shell-elicitation-renders-titled-choices-test ()
+  "Test a titled `oneOf' schema renders every choice plus a custom reply.
+
+Regression test: the choices came as `oneOf' options alongside a second
+optional property, which used to fall through to a single \"Answer\"
+button prompting for free text, hiding the options entirely."
+  (let ((state (agent-shell-tests--elicitation-state)))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore responses events)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state)))
+        (agent-shell--on-request
+         :state state
+         :acp-request `((id . 1)
+                        (method . "elicitation/create")
+                        (params . ((mode . "form")
+                                   (sessionId . "4b81b8be")
+                                   (toolCallId . "toolu_01KrNoFnTv8rE3wFuNy7Gg8w")
+                                   (message . "What would you like to work on?")
+                                   (requestedSchema . ,agent-shell-tests--elicitation-schema))))))
+      (let ((fragment (car fragments)))
+        (should (string-match-p "What would you like to work on\\?" fragment))
+        (should (string-match-p "Describe a new task (1)" fragment))
+        (should (string-match-p "Tour the codebase (2)" fragment))
+        (should (string-match-p "Review recent changes (3)" fragment))
+        (should (string-match-p "Check types and tests (4)" fragment))
+        (should (string-match-p "Custom reply (c)" fragment))
+        (should (string-match-p "Decline (d)" fragment))
+        ;; Each option's copy is readable in the buffer, not just on hover.
+        (should (string-match-p "I explore src/routes, src/lib" fragment))
+        (should (string-match-p "Type your own answer instead" fragment))))))
+
+(ert-deftest agent-shell-elicitation-accepts-titled-choice-test ()
+  "Test picking a titled choice sends its const, omitting the optional extra."
+  (let ((state (agent-shell-tests--elicitation-state '(1))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      ;; Second button is "Tour the codebase (2)".
+      (funcall (map-elt (seq-elt (agent-shell-elicitation--make-actions
+                                  :dialog (agent-shell-elicitation--make-dialog
+                                           :state state
+                                           :request-id 1
+                                           :schema agent-shell-tests--elicitation-schema))
+                                 1)
+                        :action))
+      (should (equal (map-elt (car responses) :result)
+                     '((action . "accept")
+                       (content . ((question_0 . "Tour the codebase")))))))))
+
+(ert-deftest agent-shell-elicitation-renders-first-question-test ()
+  "Test a schema asking several questions renders the first one as buttons.
+
+Regression test: three single-selects used to fall through to a lone
+\"Answer\" button dragging the user through the minibuffer, hiding every
+choice."
+  (let ((state (agent-shell-tests--elicitation-state)))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore responses events)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state)))
+        (agent-shell--on-request
+         :state state
+         :acp-request `((id . 8)
+                        (method . "elicitation/create")
+                        (params . ((mode . "form")
+                                   (message . "Please answer the following questions.")
+                                   (requestedSchema
+                                    . ,agent-shell-tests--elicitation-multi-schema))))))
+      (let ((fragment (car fragments)))
+        (should (string-match-p "Please answer the following questions\\." fragment))
+        (should (string-match-p "(1/3) CI on PRs" fragment))
+        (should (string-match-p "What happens to the ci.yml I added\\?" fragment))
+        (should (string-match-p "Keep it as is (1)" fragment))
+        (should (string-match-p "Keep only the macOS build (2)" fragment))
+        (should (string-match-p "Drop ci.yml entirely (3)" fragment))
+        (should (string-match-p "Custom reply (c)" fragment))
+        (should (string-match-p "Skip (s)" fragment))
+        (should (string-match-p "Decline (d)" fragment))
+        ;; The minibuffer fallback has no business here.
+        (should-not (string-match-p "Answer (y)" fragment))
+        ;; Only the current question is offered.
+        (should-not (string-match-p "Watcher" fragment))))))
+
+(ert-deftest agent-shell-elicitation-answers-questions-in-sequence-test ()
+  "Test a schema asking several questions is answered one question at a time.
+
+Each answer re-renders the dialog on the next question, recapping the
+ones already answered, and only the last one sends a response."
+  (let ((state (agent-shell-tests--elicitation-state))
+        (steps))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state))
+                ((symbol-function 'agent-shell-elicitation--make-text)
+                 (lambda (&rest args)
+                   (push (plist-get args :actions) steps)
+                   (format "%s" (plist-get args :progress)))))
+        (agent-shell--on-request
+         :state state
+         :acp-request `((id . 8)
+                        (method . "elicitation/create")
+                        (params . ((mode . "form")
+                                   (message . "Please answer the following questions.")
+                                   (requestedSchema
+                                    . ,agent-shell-tests--elicitation-multi-schema)))))
+        (should (string-match-p "(1/3) CI on PRs" (car fragments)))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "1"))
+        ;; Nothing is sent until every question has been answered.
+        (should-not responses)
+        (should (string-match-p "(2/3) Watcher" (car fragments)))
+        (should (string-match-p "CI on PRs - Keep it as is" (car fragments)))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "2"))
+        (should-not responses)
+        (should (string-match-p "(3/3) Side fixes" (car fragments)))
+        (should (string-match-p "Watcher - Keep it" (car fragments)))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "3")))
+      ;; One response carrying every answer, in the order asked.
+      (should (= (length responses) 1))
+      (should (equal (map-elt (car responses) :result)
+                     '((action . "accept")
+                       (content . ((question_0 . "Keep it as is")
+                                   (question_1 . "Keep it")
+                                   (question_2 . "Keep all of them")))))))))
+
+(ert-deftest agent-shell-elicitation-skips-question-test ()
+  "Test skipping a question leaves its property out of the content."
+  (let ((state (agent-shell-tests--elicitation-state))
+        (steps))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state))
+                ((symbol-function 'agent-shell-elicitation--make-text)
+                 (lambda (&rest args)
+                   (push (plist-get args :actions) steps)
+                   "")))
+        (agent-shell--on-request
+         :state state
+         :acp-request `((id . 8)
+                        (method . "elicitation/create")
+                        (params . ((mode . "form")
+                                   (message . "Please answer the following questions.")
+                                   (requestedSchema
+                                    . ,agent-shell-tests--elicitation-multi-schema)))))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "s"))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "s"))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "2")))
+      (should (equal (map-elt (car responses) :result)
+                     '((action . "accept")
+                       (content . ((question_2 . "Revert all of them")))))))))
+
+(ert-deftest agent-shell-elicitation-custom-reply-mid-sequence-test ()
+  "Test a custom reply answers its own question and moves on to the next.
+
+Mid-sequence it must not send the elicitation, which used to be the only
+thing a custom reply could do."
+  (let ((state (agent-shell-tests--elicitation-state))
+        (steps)
+        (reply (lambda (&rest _) (signal 'quit nil))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state))
+                ((symbol-function 'read-string) (lambda (&rest args) (apply reply args)))
+                ((symbol-function 'agent-shell-elicitation--make-text)
+                 (lambda (&rest args)
+                   (push (plist-get args :actions) steps)
+                   (format "%s" (plist-get args :progress)))))
+        (agent-shell--on-request
+         :state state
+         :acp-request `((id . 8)
+                        (method . "elicitation/create")
+                        (params . ((mode . "form")
+                                   (message . "Please answer the following questions.")
+                                   (requestedSchema
+                                    . ,agent-shell-tests--elicitation-multi-schema)))))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "1"))
+        ;; Quitting the prompt returns to the same question, keeping the
+        ;; answer the first one already collected.
+        (funcall (agent-shell-tests--elicitation-action (car steps) "c"))
+        (should-not responses)
+        (should (string-match-p "(2/3) Watcher" (car fragments)))
+        (should (string-match-p "CI on PRs - Keep it as is" (car fragments)))
+        (setq reply (lambda (&rest _) "Only on tagged releases"))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "c"))
+        (should-not responses)
+        (funcall (agent-shell-tests--elicitation-action (car steps) "s")))
+      (should (equal (map-elt (car responses) :result)
+                     '((action . "accept")
+                       (content . ((question_0 . "Keep it as is")
+                                   (question_1_custom . "Only on tagged releases")))))))))
+
+(ert-deftest agent-shell-elicitation-declines-mid-sequence-test ()
+  "Test declining part-way through declines the whole elicitation."
+  (let ((state (agent-shell-tests--elicitation-state))
+        (steps))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state))
+                ((symbol-function 'agent-shell-elicitation--make-text)
+                 (lambda (&rest args)
+                   (push (plist-get args :actions) steps)
+                   "")))
+        (agent-shell--on-request
+         :state state
+         :acp-request `((id . 8)
+                        (method . "elicitation/create")
+                        (params . ((mode . "form")
+                                   (message . "Please answer the following questions.")
+                                   (requestedSchema
+                                    . ,agent-shell-tests--elicitation-multi-schema)))))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "1"))
+        (funcall (agent-shell-tests--elicitation-action (car steps) "d")))
+      (should (equal (map-elt (car responses) :result) '((action . "decline"))))
+      (should-not (map-elt state :elicitations)))))
+
+(ert-deftest agent-shell-elicitation-accepts-custom-reply-test ()
+  "Test the custom reply button sends the typed answer as the extra property."
+  (let ((state (agent-shell-tests--elicitation-state '(1))))
+    (agent-shell-tests--with-elicitation (responses events fragments)
+      (ignore events fragments)
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Rename the parser")))
+        (funcall (agent-shell-tests--elicitation-schema-action
+                  state agent-shell-tests--elicitation-schema "c")))
+      (should (equal (map-elt (car responses) :result)
+                     '((action . "accept")
+                       (content . ((question_0_custom . "Rename the parser")))))))))
+
+(ert-deftest agent-shell-elicitation-backs-out-of-custom-reply-test ()
+  "Test backing out of a custom reply leaves the question answerable.
+
+Blank or quit, the question is rendered again rather than the
+elicitation ending, so the offered choices are still there to pick
+from."
+  (dolist (reply (list (lambda (&rest _) "")
+                       (lambda (&rest _) (signal 'quit nil))))
+    (let ((state (agent-shell-tests--elicitation-state '(1))))
+      (agent-shell-tests--with-elicitation (responses events fragments)
+        (ignore events)
+        (cl-letf (((symbol-function 'read-string) reply))
+          (funcall (agent-shell-tests--elicitation-schema-action
+                    state agent-shell-tests--elicitation-schema "c")))
+        ;; Nothing sent, and the choices are back on screen.
+        (should-not responses)
+        (should (string-match-p "Tour the codebase (2)" (car fragments)))
+        ;; Still awaiting an answer, which a choice can now give.
+        (should (equal (map-elt state :elicitations) '(1)))
+        (funcall (agent-shell-tests--elicitation-schema-action
+                  state agent-shell-tests--elicitation-schema "2"))
+        (should (equal (map-elt (car responses) :result)
+                       '((action . "accept")
+                         (content . ((question_0 . "Tour the codebase"))))))))))
+
+(ert-deftest agent-shell-elicitation--read-property-completes-titles-test ()
+  "Test the minibuffer fallback completes titles and returns the value.
+
+Reached when a schema is too rich for buttons, so a titled single-select
+must still offer its options for completion."
+  (let (candidates)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (setq candidates collection)
+                 "Tour the codebase")))
+      (should (equal (agent-shell-elicitation--read-property
+                      :name 'question_0
+                      :property (map-nested-elt agent-shell-tests--elicitation-schema
+                                                '(properties question_0))
+                      :required t)
+                     "Tour the codebase"))
+      (should (equal candidates '("Describe a new task"
+                                  "Tour the codebase"
+                                  "Review recent changes"
+                                  "Check types and tests")))))
+  ;; A title differing from the value maps back to the value.
+  (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Balanced")))
+    (should (equal (agent-shell-elicitation--read-property
+                    :name 'strategy
+                    :property '((enum . ["c" "b"]) (enumNames . ["Conservative" "Balanced"]))
+                    :required t)
+                   "b"))))
+
+(defun agent-shell-tests--elicitation-action (actions char)
+  "Return the action ACTIONS bind to CHAR, or nil.
+
+ACTIONS are as returned by `agent-shell-elicitation--make-actions'.
+Looking a button up by its keyboard shortcut also pins the shortcut
+each one is offered under."
+  (map-elt (seq-find (lambda (action)
+                       (equal (map-elt action :char) char))
+                     actions)
+           :action))
+
+(defun agent-shell-tests--elicitation-schema-action (state schema char)
+  "Return SCHEMA's elicitation action bound to CHAR, for STATE's request 1."
+  (agent-shell-tests--elicitation-action
+   (agent-shell-elicitation--make-actions
+    :dialog (agent-shell-elicitation--make-dialog
+             :state state :request-id 1 :schema schema))
+   char))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

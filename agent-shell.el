@@ -64,6 +64,7 @@
 (require 'agent-shell-cursor)
 (require 'agent-shell-devcontainer)
 (require 'agent-shell-diff)
+(require 'agent-shell-elicitation)
 (require 'agent-shell-experimental)
 (require 'agent-shell-droid)
 (require 'agent-shell-github)
@@ -987,10 +988,11 @@ For example, with the default nil value choices pass through unchanged:
 (defvar agent-shell-idle-timeout 30
   "Seconds before an `idle' event is emitted.
 
-When the agent is waiting for user input (after `permission-request'
-or `turn-complete'), an `idle' event is emitted after this many
-seconds of inactivity.  Activity events (`permission-response',
-`tool-call-update', `input-submitted', `clean-up') cancel the timer.
+When the agent is waiting for user input (after `permission-request',
+`elicitation-request' or `turn-complete'), an `idle' event is emitted
+after this many seconds of inactivity.  Activity events
+\(`permission-response', `elicitation-response', `tool-call-update',
+`input-submitted', `clean-up') cancel the timer.
 
 Can be a number (same timeout for all events) or an alist mapping
 event symbols to timeouts:
@@ -1193,6 +1195,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
         (cons :idle-timer nil)
         (cons :sleep-token nil)
         (cons :active-requests nil)
+        (cons :elicitations nil)
         (cons :pending-prompts nil)
         (cons :usage (list (cons :total-tokens 0)
                            (cons :input-tokens 0)
@@ -2049,6 +2052,7 @@ advertises it in the `initialize' response's top-level `_meta' as
 
 (defun agent-shell-interrupt (&optional force)
   "Interrupt in-progress request and reject all pending permissions.
+Pending elicitations are cancelled alongside permissions.
 When FORCE is non-nil, skip confirmation prompt.
 See also `agent-shell-confirm-interrupt'."
   (declare (modes agent-shell-mode))
@@ -2068,6 +2072,8 @@ See also `agent-shell-confirm-interrupt'."
                  :state (agent-shell--state)
                  :tool-call-id tool-call-id)))
             (map-elt (agent-shell--state) :tool-calls))
+           ;; Then cancel any question the agent is still waiting on
+           (agent-shell-elicitation-cancel-pending :state (agent-shell--state))
            ;; Then send the cancel notification
            (acp-send-notification
             :client (map-elt (agent-shell--state) :client)
@@ -2420,12 +2426,13 @@ active label function still has nothing to summarize (an empty group).")
 
 (defconst agent-shell--activity-group-run-entry-types
   '("tool_call" "tool_call_update" "session/request_permission"
-    "agent_thought_chunk")
+    "elicitation/create" "agent_thought_chunk")
   "Entry types that keep the current activity run open.
 Consecutive tool calls and thoughts share one activity group; any other
 rendered entry between them (e.g. a streamed message) starts a fresh one.
 A permission request is part of a tool call's own flow (its dialog is
-transient, deleted on completion), so it must not break the run.")
+transient, deleted on completion), so it must not break the run.  An
+elicitation dialog is transient in the same way.")
 
 (defun agent-shell--activity-group-current-id (state)
   "Return the current activity group id for STATE, advancing on a new run.
@@ -2929,14 +2936,15 @@ Clears STATE's `:expanded-activity-group'."
              (agent-shell--refresh-activity-group-header state group-id)
              (agent-shell--sync-activity-group-fold :state state :group-id group-id)
              ;; Display plan as markdown block if present
-             (when (map-nested-elt acp-notification '(params update rawInput plan))
-               (agent-shell--update-fragment
-                :state state
-                :block-id (concat (map-nested-elt acp-notification '(params update toolCallId)) "-plan")
-                :label-left (propertize "Proposed plan" 'font-lock-face 'agent-shell-section-heading)
-                :body (agent-shell--format-plan (map-nested-elt acp-notification '(params update rawInput plan)))
-                :expanded t
-                :above-last-prompt (not (agent-shell--active-requests-p state)))))
+             ;; (when (map-nested-elt acp-notification '(params update rawInput plan))
+             ;;   (agent-shell--update-fragment
+             ;;    :state state
+             ;;    :block-id (concat (map-nested-elt acp-notification '(params update toolCallId)) "-plan")
+             ;;    :label-left (propertize "Proposed plan" 'font-lock-face 'agent-shell-section-heading)
+             ;;    :body (agent-shell--format-plan (map-nested-elt acp-notification '(params update rawInput plan)))
+             ;;    :expanded t
+             ;;    :above-last-prompt (not (agent-shell--active-requests-p state))))
+             )
            (map-put! state :last-entry-type "tool_call"))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "agent_thought_chunk")
            (let ((new-thought-p (not (equal (map-elt state :last-entry-type)
@@ -3370,6 +3378,10 @@ Clears STATE's `:expanded-activity-group'."
           :acp-request acp-request))
         ((equal (map-elt acp-request 'method) "fs/write_text_file")
          (agent-shell--on-fs-write-text-file-request
+          :state state
+          :acp-request acp-request))
+        ((equal (map-elt acp-request 'method) "elicitation/create")
+         (agent-shell-elicitation--on-create-request
           :state state
           :acp-request acp-request))
         ((equal (map-elt acp-request 'method) "session/push")
@@ -6136,6 +6148,11 @@ Session events:
     :data contains :request-id, :tool-call-id, :tool-call
   `permission-response'   - Permission response sent
     :data contains :request-id, :tool-call-id, :option-id, :cancelled
+  `elicitation-request'   - Agent question displayed to user
+    :data contains :request-id and :message
+  `elicitation-response'  - Elicitation response sent
+    :data contains :request-id, :action (\"accept\", \"decline\" or
+    \"cancel\") and :content
   `agent-message-chunk'   - Agent streamed a chunk of message text
     :data contains :text-chunk (the raw text the agent emitted, nil for a
     non-text block such as an image).  Emitted once per streamed chunk, so
@@ -6424,7 +6441,8 @@ Must provide ON-INITIATED (lambda ())."
                             (title . "Emacs Agent Shell")
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
-             :write-text-file-capability agent-shell-text-file-capabilities)
+             :write-text-file-capability agent-shell-text-file-capabilities
+             :elicitation-form-capability t)
    :on-success (lambda (acp-response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt acp-response 'sessionCapabilities)
@@ -9151,9 +9169,9 @@ Returns nil if the ACP-OPTION kind is not recognized."
 (defun agent-shell-jump-to-latest-permission-button-row ()
   "Jump to the latest permission button row.
 
-Moves point to the first button of the latest permission row and syncs
-that position into every window showing the buffer, across frames.  The
-row is thus revealed even when the shell window is not the selected one
+Moves point to the first button of the latest dialog and syncs that
+position into every window showing the buffer, across frames.  The row is
+thus revealed even when the shell window is not the selected one
 \(for example when a prompt bar has focus); a bare `goto-char' would only
 move point in the selected window.  When the buffer is not displayed,
 only its point moves, so a later display still shows the row.
@@ -9166,8 +9184,16 @@ Returns non-nil if a permission button was found, nil otherwise."
                        (agent-shell-previous-permission-button))))
     (deactivate-mark)
     (let ((target (save-excursion
-                    (goto-char found)
-                    (beginning-of-line)
+                    ;; Search from the enclosing dialog's start rather than
+                    ;; from the last button's line: an elicitation can spread
+                    ;; its buttons over several lines (one per described
+                    ;; choice), whose last line is "Decline".  For a
+                    ;; single-row dialog both are the same position.
+                    (goto-char (or (map-elt (agent-shell-ui--block-range :position found)
+                                            :start)
+                                   (save-excursion
+                                     (goto-char found)
+                                     (line-beginning-position))))
                     (agent-shell-next-permission-button)
                     (point))))
       (goto-char target)
