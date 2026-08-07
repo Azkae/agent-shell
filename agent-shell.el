@@ -116,7 +116,7 @@ You may use \"􀇾\" as an SF Symbol on macOS."
   :type 'string
   :group 'agent-shell)
 
-(defcustom agent-shell-thought-process-icon "⚹"
+(defcustom agent-shell-thought-process-icon "✶"
   "Icon displayed during the AI's thought process.
 
 Displays a diamond instead on displays that cannot draw it.
