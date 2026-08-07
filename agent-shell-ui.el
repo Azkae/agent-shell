@@ -49,6 +49,74 @@ For example, fragment qualified-ids appear in the echo area on
 hover.  These are implementation details of no use to users, so
 they stay hidden by default.")
 
+(defun agent-shell-ui-act (&optional position)
+  "Invoke the agent-shell UI action at POSITION.
+
+POSITION defaults to point.  It may also be a mouse event, in which
+case the action at the event's position is invoked.
+
+Actions are held in the `agent-shell-ui-action' text property, added
+by `agent-shell-ui-add-action-to-text'."
+  (interactive (list (if (integerp last-command-event)
+                         (point)
+                       last-command-event)))
+  (when-let* ((position (cond ((integerp position) position)
+                              ((null position) (point))
+                              (t (posn-point (event-start position)))))
+              (action (get-text-property position 'agent-shell-ui-action)))
+    (goto-char position)
+    (funcall action)))
+
+(defvar agent-shell-ui-action-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'agent-shell-ui-act)
+    (define-key map (kbd "RET") #'agent-shell-ui-act)
+    (define-key map [remap self-insert-command] #'ignore)
+    map)
+  "Keymap active on agent-shell UI links.
+
+Applied via the `keymap' text property to text which opens something
+when invoked: file links, region links and URLs.
+
+Fold indicators and fragment labels use `agent-shell-ui-fragment-map'
+instead, so expanding can be bound separately from opening.")
+
+(defvar agent-shell-ui-fragment-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'agent-shell-ui-act)
+    (define-key map (kbd "RET") #'agent-shell-ui-act)
+    (define-key map [remap self-insert-command] #'ignore)
+    map)
+  "Keymap active on agent-shell UI fold indicators and fragment labels.
+
+Applied via the `keymap' text property to text which expands or
+collapses a fragment when invoked.  For example, to expand with TAB
+while leaving RET to open links:
+
+  (with-eval-after-load \\='agent-shell-ui
+    (define-key agent-shell-ui-fragment-map (kbd \"TAB\") #\\='agent-shell-ui-act)
+    (define-key agent-shell-ui-fragment-map (kbd \"RET\") nil t))
+
+Links use `agent-shell-ui-action-map' instead.")
+
+(defun agent-shell-ui-make-action-hint (verb &optional keymap)
+  "Return a function messaging how to invoke an action, described by VERB.
+
+KEYMAP is the map the text is bound to, and defaults to
+`agent-shell-ui-action-map'.
+
+For example, (agent-shell-ui-make-action-hint \"toggle\"
+agent-shell-ui-fragment-map) returns a function messaging \"Press RET
+to toggle\" with the default bindings, or \"Press TAB to toggle\" once
+that map binds TAB.
+
+Suitable as the ON-ENTERED argument of
+`agent-shell-ui-add-action-to-text'."
+  (lambda ()
+    (when-let* ((key (where-is-internal #'agent-shell-ui-act
+                                        (or keymap agent-shell-ui-action-map) t)))
+      (message "Press %s to %s" (key-description key) verb))))
+
 (defun agent-shell-ui--fragment-help-echo (qualified-id)
   "Return the `help-echo' value for a fragment tagged QUALIFIED-ID.
 Returns QUALIFIED-ID only when `agent-shell-ui-debug-enabled' is set,
@@ -495,10 +563,10 @@ are preserved across label updates."
           (insert (agent-shell-ui-add-action-to-text
                    new-text
                    (lambda ()
-                     (interactive)
                      (agent-shell-ui--toggle-fragment-at-point))
-                   (lambda ()
-                     (message "Press RET to toggle"))))
+                   (agent-shell-ui-make-action-hint "toggle" agent-shell-ui-fragment-map)
+                   nil
+                   agent-shell-ui-fragment-map))
           (let ((insert-end (point)))
             (add-text-properties insert-start insert-end
                                  `(agent-shell-ui-section ,section
@@ -768,17 +836,13 @@ indents a member's header line under its group header."
             (insert (agent-shell-ui-add-action-to-text
                      (if expanded "▼ " "▶ ")
                      (lambda ()
-                       (interactive)
                        (agent-shell-ui--toggle-fragment-at-point))
-                     (lambda ()
-                       (message "Press RET to toggle"))))
+                     (agent-shell-ui-make-action-hint "toggle" agent-shell-ui-fragment-map)
+                     nil
+                     agent-shell-ui-fragment-map))
             (setq indicator-end (point))
             (add-text-properties indicator-start indicator-end
                                  `(agent-shell-ui-section indicator
-                                                          keymap ,(agent-shell-ui-make-action-keymap
-                                                                   (lambda ()
-                                                                     (interactive)
-                                                                     (agent-shell-ui--toggle-fragment-at-point)))
                                                           read-only t
                                                           front-sticky (read-only))))
         (setq collapsable nil)
@@ -802,10 +866,10 @@ indents a member's header line under its group header."
       (insert (agent-shell-ui-add-action-to-text
                label-left
                (lambda ()
-                 (interactive)
                  (agent-shell-ui--toggle-fragment-at-point))
-               (lambda ()
-                 (message "Press RET to toggle"))))
+               (agent-shell-ui-make-action-hint "toggle" agent-shell-ui-fragment-map)
+               nil
+               agent-shell-ui-fragment-map))
       (setq label-left-end (point))
       (add-text-properties label-left-start label-left-end
                            `(agent-shell-ui-section label-left
@@ -821,10 +885,10 @@ indents a member's header line under its group header."
       (insert (agent-shell-ui-add-action-to-text
                label-right
                (lambda ()
-                 (interactive)
                  (agent-shell-ui--toggle-fragment-at-point))
-               (lambda ()
-                 (message "Press RET to toggle"))))
+               (agent-shell-ui-make-action-hint "toggle" agent-shell-ui-fragment-map)
+               nil
+               agent-shell-ui-fragment-map))
       (setq label-right-end (point))
       (add-text-properties label-right-start label-right-end
                            `(agent-shell-ui-section label-right
@@ -1303,20 +1367,17 @@ block's beginning instead of the previous block."
       (goto-char found)
       found)))
 
-(defun agent-shell-ui-make-action-keymap (action)
-  "Create keymap with ACTION."
-  (let ((map (make-sparse-keymap)))
-    (define-key map [mouse-1] action)
-    (define-key map (kbd "RET") action)
-    (define-key map [remap self-insert-command] 'ignore)
-    map))
-
-(defun agent-shell-ui-add-action-to-text (text action &optional on-entered face)
+(defun agent-shell-ui-add-action-to-text (text action &optional on-entered face keymap)
   "Add ACTION lambda to propertized TEXT and return modified text.
 ON-ENTERED is a function to call when the cursor enters the text.
-FACE when non-nil applies the specified face to the text."
+FACE when non-nil applies the specified face to the text.
+KEYMAP is the map invoking ACTION, and defaults to
+`agent-shell-ui-action-map'.
+
+ACTION is invoked by `agent-shell-ui-act'."
   (add-text-properties 0 (length text)
-                       `(keymap ,(agent-shell-ui-make-action-keymap action))
+                       `(keymap ,(or keymap agent-shell-ui-action-map)
+                         agent-shell-ui-action ,action)
                        text)
   (when on-entered
     (add-text-properties 0 (length text)

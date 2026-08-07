@@ -820,6 +820,27 @@ All of the above settings can be applied on a per-project basis using [[https://
                   ("C-c C-k" . agent-shell-interrupt)))
   #+end_src
 
+*** Expanding and opening
+
+Fold indicators, fragment labels and links carry their own keymaps, which
+take precedence over =agent-shell-mode-map=. Both bind =RET= and =mouse-1=
+to =agent-shell-ui-act= by default:
+
+- =agent-shell-ui-fragment-map= - expands/collapses a fragment.
+- =agent-shell-ui-action-map= - opens a file link, region link or URL.
+
+They're separate so expanding can be bound apart from opening. For example,
+to expand with =TAB= while leaving =RET= to open links:
+
+#+begin_src emacs-lisp :lexical no
+  (with-eval-after-load 'agent-shell-ui
+    (define-key agent-shell-ui-fragment-map (kbd "TAB") #'agent-shell-ui-act)
+    (define-key agent-shell-ui-fragment-map (kbd "RET") nil t))
+#+end_src
+
+Note this shadows =TAB= navigation (=agent-shell-next-item=) while point is
+on a fold indicator or fragment label.
+
 *** Session controls
 
 When the active agent advertises the corresponding session option, you can switch it from the shell buffer:

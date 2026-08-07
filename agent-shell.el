@@ -2229,10 +2229,8 @@ Includes pretty-printed JSON and a `file a feature request' link."
           (agent-shell-ui-add-action-to-text
            "please file a feature request"
            (lambda ()
-             (interactive)
              (browse-url "https://github.com/xenodium/agent-shell/issues/new/choose"))
-           (lambda ()
-             (message "Press RET to open URL"))
+           (agent-shell-ui-make-action-hint "open URL")
            'agent-shell-link)
           (agent-shell-with-work-buffer
             (insert (json-serialize acp-notification))
@@ -7914,10 +7912,8 @@ Uses AGENT-CWD to shorten file paths where necessary."
                                             (when (< image-start edit-start)
                                               (delete-region image-start edit-start))))))
                       (lambda ()
-                        (interactive)
                         (find-file file))
-                      (lambda ()
-                        (message "Press RET to open"))
+                      (agent-shell-ui-make-action-hint "open")
                       ;; No link face for image (no underline).
                       nil)
                    ;; Not an image, insert as normal text
@@ -7929,10 +7925,8 @@ Uses AGENT-CWD to shorten file paths where necessary."
                       (propertize (concat "@" file)
                                   'pointer 'hand))
                     (lambda ()
-                      (interactive)
                       (find-file file))
-                    (lambda ()
-                      (message "Press RET to open"))
+                    (agent-shell-ui-make-action-hint "open")
                     'agent-shell-link)))
                files
                "\n\n")))
@@ -8838,7 +8832,6 @@ Uses AGENT-CWD to shorten file paths where necessary."
                                                        (map-elt region :line-start)
                                                        (map-elt region :line-end))
                                                (lambda ()
-                                                 (interactive)
                                                  (if (and (map-elt region :file) (file-exists-p (map-elt region :file)))
                                                      (if-let* ((window (when (get-file-buffer (map-elt region :file))
                                                                          (get-buffer-window (get-file-buffer (map-elt region :file))))))
@@ -8864,8 +8857,7 @@ Uses AGENT-CWD to shorten file paths where necessary."
                                                                     (point))
                                                                   t t))
                                                    (message "File not found")))
-                                               (lambda ()
-                                                 (message "Press RET to open file"))
+                                               (agent-shell-ui-make-action-hint "open file")
                                                'agent-shell-link))
                                    (numbered-preview
                                     (when-let* ((buffer (get-file-buffer (map-elt region :file))))
