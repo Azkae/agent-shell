@@ -193,6 +193,18 @@ Used for command, capability, config option, model and mode names."
   "Face for the viewport view status indicator."
   :group 'agent-shell-faces)
 
+
+;;; Diff
+
+(defface agent-shell-diff-changes-label
+  '((((type graphic)) :inherit diff-hunk-header :box t)
+    (t :inherit diff-hunk-header :inverse-video t))
+  "Face for the \"changes\" label shown for each hunk in diff buffers.
+On graphical frames the label is drawn with a box; on terminals,
+where boxes are not rendered, it falls back to inverse video so the
+label stays visible."
+  :group 'agent-shell-faces)
+
 (provide 'agent-shell-faces)
 
 ;;; agent-shell-faces.el ends here
