@@ -49,22 +49,16 @@ For example, fragment qualified-ids appear in the echo area on
 hover.  These are implementation details of no use to users, so
 they stay hidden by default.")
 
-(defun agent-shell-ui-act (&optional position)
-  "Invoke the agent-shell UI action at POSITION.
-
-POSITION defaults to point.  It may also be a mouse event, in which
-case the action at the event's position is invoked.
+(defun agent-shell-ui-act ()
+  "Invoke the agent-shell UI action at point.
 
 Actions are held in the `agent-shell-ui-action' text property, added
-by `agent-shell-ui-add-action-to-text'."
-  (interactive (list (if (integerp last-command-event)
-                         (point)
-                       last-command-event)))
-  (when-let* ((position (cond ((integerp position) position)
-                              ((null position) (point))
-                              (t (posn-point (event-start position)))))
-              (action (get-text-property position 'agent-shell-ui-action)))
-    (goto-char position)
+by `agent-shell-ui-add-action-to-text'.
+
+Also works from a mouse click, since point moves to the click before
+the action runs."
+  (interactive)
+  (when-let* ((action (get-text-property (point) 'agent-shell-ui-action)))
     (funcall action)))
 
 (defvar agent-shell-ui-action-map
@@ -105,10 +99,10 @@ Links use `agent-shell-ui-action-map' instead.")
 KEYMAP is the map the text is bound to, and defaults to
 `agent-shell-ui-action-map'.
 
-For example, (agent-shell-ui-make-action-hint \"toggle\"
-agent-shell-ui-fragment-map) returns a function messaging \"Press RET
-to toggle\" with the default bindings, or \"Press TAB to toggle\" once
-that map binds TAB.
+For example, called with VERB \"toggle\" and KEYMAP
+`agent-shell-ui-fragment-map', returns a function messaging \"Press
+RET to toggle\" with the default bindings, or \"Press TAB to toggle\"
+once that map binds TAB.
 
 Suitable as the ON-ENTERED argument of
 `agent-shell-ui-add-action-to-text'."
