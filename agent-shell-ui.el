@@ -116,7 +116,10 @@ already-rendered content, so `agent-shell-markdown' frozen ranges
 stay intact and streaming append is O(new-chunk) rather than
 O(accumulated-body).  Label-only updates leave the body untouched."
   (let* ((window (get-buffer-window (current-buffer)))
-         (saved-window-start (and window (window-start window))))
+         (saved-window-start (and window (window-start window)))
+         ;; Marker so it survives the edits made while updating the block.
+         ;; Bound out here so the unwind form below can release it.
+         (block-end nil))
     (unwind-protect
         (save-mark-and-excursion
           (let* ((inhibit-read-only t)
@@ -186,18 +189,27 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                   (when new-label-right
                     (agent-shell-ui--replace-label
                      qualified-id 'label-right new-label-right))
+                  ;; Derive the block extent here, after the label
+                  ;; replacements.  `agent-shell-ui--replace-label' can change
+                  ;; a label's length, which shifts everything below it — an
+                  ;; extent captured before the replacements would point at
+                  ;; the wrong chars (e.g. handing `replace-body' a stale
+                  ;; range corrupts the body boundary and leaks its content
+                  ;; past the collapse).
+                  ;;
+                  ;; Held as a marker rather than re-derived per use.  Finding
+                  ;; it means walking every text-property interval in the
+                  ;; block, and a streamed body accrues an interval per chunk,
+                  ;; so each rescan costs O(chunks so far).  The marker tracks
+                  ;; the edits below for free (issue #757).
+                  (setq block-end
+                        (copy-marker (or (map-elt (agent-shell-ui--block-range
+                                                   :position block-start)
+                                                  :end)
+                                         (prop-match-end match))
+                                     t))
                   (when new-body
-                    ;; Re-derive the block extent and body range here,
-                    ;; after the label replacements.  `agent-shell-ui--replace-label'
-                    ;; can change a label's length, which shifts everything
-                    ;; below it — a range captured before the replacements
-                    ;; would point at the wrong chars (e.g. handing
-                    ;; `replace-body' a stale range corrupts the body
-                    ;; boundary and leaks its content past the collapse).
-                    (let* ((current-block-end
-                            (or (map-elt (agent-shell-ui--block-range :position block-start)
-                                         :end)
-                                (prop-match-end match)))
+                    (let* ((current-block-end (marker-position block-end))
                            (existing-body-range
                             (agent-shell-ui--nearest-range-matching-property
                              :property 'agent-shell-ui-section :value 'body
@@ -241,11 +253,7 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                           (goto-char block-start)
                           (agent-shell-ui--insert-fragment
                            final-model qualified-id (not collapsed) navigation))))))
-                  (setq padding-end
-                        (or (when-let* ((block-range
-                                         (agent-shell-ui--block-range :position block-start)))
-                              (map-elt block-range :end))
-                            (point)))))
+                  (setq padding-end (or (marker-position block-end) (point)))))
                ;; New group member, inserted into the group's region.  The
                ;; group's trailing separator (after the header) already sits
                ;; below, so no trailing newlines are added here.
@@ -284,7 +292,12 @@ O(accumulated-body).  Label-only updates leave the body untouched."
               (agent-shell-ui--set-group-collapsed group-qid t))
             (when on-post-process
               (funcall on-post-process))
-            (when-let* ((block-range (agent-shell-ui--block-range :position block-start)))
+            (when-let* ((block-range (if block-end
+                                         ;; Tracked across the edits above, so
+                                         ;; no second walk of the block.
+                                         (list (cons :start block-start)
+                                               (cons :end (marker-position block-end)))
+                                       (agent-shell-ui--block-range :position block-start))))
               (list (cons :block block-range)
                     (cons :body (agent-shell-ui--nearest-range-matching-property
                                  :property 'agent-shell-ui-section :value 'body
@@ -302,6 +315,8 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                      (list (cons :start padding-start)
                                            (cons :end padding-end))))
                     (cons :group-header (map-elt group-header :range))))))
+      (when (markerp block-end)
+        (set-marker block-end nil))
       (when window
         (set-window-start window saved-window-start t)))))
 
@@ -588,7 +603,16 @@ In the form:
   (save-mark-and-excursion
     (save-restriction
       (when (and from to)
-        (narrow-to-region from to))
+        (narrow-to-region from to)
+        ;; Search from the start of the region rather than from wherever
+        ;; point was left.  Callers passing FROM/TO are after a section
+        ;; within a single block, and a block holds at most one of each,
+        ;; so the result is the same either way.  The searches below walk
+        ;; from point, and during streaming point sits at the block end
+        ;; while the sections sought (labels, body start) sit at the
+        ;; block start, so starting at point walked the whole accumulated
+        ;; body on every chunk (issue #757).
+        (goto-char (point-min)))
       (let ((backward-match (or (text-property-search-backward property value predicate)
                                 (progn
                                   (unless (eobp)
@@ -880,8 +904,15 @@ indents a member's header line under its group header."
                                                     front-sticky (read-only))))
     ;; Indent a group member's header line under its group header.  The
     ;; body already carries its own (deeper) `line-prefix' from above.
-    (unless (string-empty-p group-indent)
-      (add-text-properties block-start (or label-right-end label-left-end indicator-end)
+    ;; A member with neither label has no header line to indent (the
+    ;; indicator is only reserved alongside labels), so there is no end
+    ;; position and nothing to do.  A tool call carrying only a
+    ;; `toolCallId' renders that way: `agent-shell-make-tool-call-label'
+    ;; has no status, kind, title or description to work with and returns
+    ;; nil for both labels.
+    (when-let* (((not (string-empty-p group-indent)))
+                (header-end (or label-right-end label-left-end indicator-end)))
+      (add-text-properties block-start header-end
                            `(line-prefix ,group-indent wrap-prefix ,group-indent)))
     ;; Include the newlines before the body in the invisible region
     (when collapsable

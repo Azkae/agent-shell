@@ -761,6 +761,23 @@ title on every streamed chunk, discarding the rendering each time."
                              :start)
                     'font-lock-face)))))
 
+(ert-deftest agent-shell-ui-group-member-without-labels-test ()
+  "A group member with neither label renders instead of erroring.
+
+A tool call carrying only a `toolCallId' has no status, kind, title or
+description, so both its labels come back nil, and tool calls are always
+group members."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :namespace-id "1" :block-id "t1"
+        :body "some tool output\n"
+        :group-id "activity-1" :group-label "Activity")
+       :no-undo t)
+      (should (string-match-p "some tool output"
+                              (buffer-substring-no-properties (point-min) (point-max)))))))
+
 ;;; provide
 
 (provide 'agent-shell-ui-tests)

@@ -4600,6 +4600,21 @@ disturb any type-ahead the user entered while the shell bootstraps."
          :above-last-prompt t
          args))
 
+(defun agent-shell--tag-untagged-output (start end)
+  "Mark chars in [START, END) as `field' `output', skipping tagged ones.
+
+Equivalent to `add-text-properties' with `(field output)' over the whole
+range, but starts at the first char that isn't tagged yet.  A streamed
+block is re-tagged on every chunk, and `add-text-properties' signals a
+buffer modification spanning the entire range it was handed as soon as a
+single char in it needs the property.  With the whole block as the range,
+that means `jit-lock-after-change' marks the whole (by then multi-megabyte)
+block unfontified once per chunk, and redisplay refontifies it, the top
+entry in the profiles on issue #757.  Tagging only the untagged tail keeps
+the reported range down to the newly inserted chars."
+  (when-let* ((untagged (text-property-not-all start end 'field 'output)))
+    (add-text-properties untagged end '(field output))))
+
 (cl-defun agent-shell--update-fragment (&key state namespace-id block-id label-left label-right
                                              body append create-new navigation expanded
                                              render-body-images above-last-prompt
@@ -4762,13 +4777,13 @@ with GROUP-EXPANDED as the group's initial fold state."
              ;; derive `comint-next-prompt'.
              ;; Marking as field output to avoid false positives in
              ;; `agent-shell-next-item' and `agent-shell-previous-item'.
-             (add-text-properties (or padding-start block-start)
-                                  (or padding-end block-end) '(field output))
+             (agent-shell--tag-untagged-output (or padding-start block-start)
+                                               (or padding-end block-end))
              ;; Same for group header (mark as field output).
              (when (map-elt range :group-header)
-               (add-text-properties (map-nested-elt range '(:group-header :start))
-                                    (map-nested-elt range '(:group-header :end))
-                                    '(field output)))
+               (agent-shell--tag-untagged-output
+                (map-nested-elt range '(:group-header :start))
+                (map-nested-elt range '(:group-header :end))))
              ;; Apply markdown to body.  `inhibit-read-only' must
              ;; wrap the render call too — chars in the body carry
              ;; `read-only t' from `agent-shell-ui--insert-fragment',

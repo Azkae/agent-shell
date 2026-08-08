@@ -5224,5 +5224,46 @@ the global hook value must stay quiet."
                     0 'font-lock-face
                     (map-elt (agent-shell-make-tool-call-label state "t1") :title))))))
 
+(ert-deftest agent-shell--tag-untagged-output-tags-same-chars-test ()
+  "Tagging only the untagged tail covers what a whole-range tag would."
+  (with-temp-buffer
+    (insert "already tagged" "freshly appended")
+    (add-text-properties (point-min) 15 '(field output))
+    (agent-shell--tag-untagged-output (point-min) (point-max))
+    (should (equal nil (text-property-not-all (point-min) (point-max)
+                                              'field 'output)))))
+
+(ert-deftest agent-shell--tag-untagged-output-signals-tail-only-test ()
+  "Re-tagging a streamed block reports only the newly appended chars.
+
+`add-text-properties' signals a modification spanning the whole range it
+is handed, so re-tagging the whole block per chunk would hand
+`jit-lock-after-change' the entire block every time (issue #757)."
+  (with-temp-buffer
+    (insert "already tagged")
+    (add-text-properties (point-min) (point-max) '(field output))
+    (let ((signalled '()))
+      (add-hook 'after-change-functions
+                (lambda (beginning end _length)
+                  (push (cons beginning end) signalled))
+                nil t)
+      (insert "appended")
+      (setq signalled '())
+      (agent-shell--tag-untagged-output (point-min) (point-max))
+      (should (equal '((15 . 23)) signalled)))))
+
+(ert-deftest agent-shell--tag-untagged-output-skips-fully-tagged-test ()
+  "A block that needs no tagging signals no modification at all."
+  (with-temp-buffer
+    (insert "already tagged")
+    (add-text-properties (point-min) (point-max) '(field output))
+    (let ((signalled '()))
+      (add-hook 'after-change-functions
+                (lambda (beginning end _length)
+                  (push (cons beginning end) signalled))
+                nil t)
+      (agent-shell--tag-untagged-output (point-min) (point-max))
+      (should (equal '() signalled)))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
