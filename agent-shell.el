@@ -2848,7 +2848,11 @@ Clears STATE's `:expanded-activity-group'."
                             (when-let* ((icon (agent-shell--thought-process-icon)))
                               (concat icon " "))
                             (propertize "Thinking" 'font-lock-face 'agent-shell-section-heading))
-              :body content
+              ;; Base face for the body.  The markdown styling rendered on
+              ;; top layers its own faces ahead of it, so bold, links and
+              ;; code spans in a thought keep their faces.
+              :body (agent-shell--add-text-properties
+                     content 'face 'agent-shell-thought-body)
               :append (equal (map-elt state :last-entry-type)
                              "agent_thought_chunk")
               :expanded agent-shell-thought-process-expand-by-default

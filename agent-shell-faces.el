@@ -98,6 +98,15 @@
   "Face for a section's inline annotation (e.g. a tool call's description)."
   :group 'agent-shell-faces)
 
+(defface agent-shell-thought-body
+  '((t))
+  "Face for the body of a thought process section.
+Unstyled by default; customize it (for example to inherit `italic') to
+set thoughts apart from the agent's final output.  Applied as a base
+face, under the markdown styling the body carries, so bold, links and
+code spans in a thought keep their own faces on top."
+  :group 'agent-shell-faces)
+
 (defface agent-shell-secondary
   '((t :inherit font-lock-comment-face))
   "Face for de-emphasized secondary text.

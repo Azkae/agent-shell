@@ -4960,6 +4960,49 @@ think-kind calls into Thinking."
       (should (eq 'agent-shell-section-heading (get-text-property 0 'font-lock-face s)))
       (should (eq 'default (get-text-property (1- (length s)) 'font-lock-face s))))))
 
+(ert-deftest agent-shell--on-notification-agent-thought-chunk-face-test ()
+  "Test `agent_thought_chunk' rendering hands the body its base face.
+
+Drives an ACP `session/update' notification through
+`agent-shell--on-notification' and asserts the body reaching the renderer
+carries `agent-shell-thought-body', and that markdown rendered on top of
+such a body layers its own faces ahead of the base one."
+  (let ((state (list (cons :chunked-group-count 0)
+                     (cons :activity-group-count 0)
+                     ;; Pre-set so the new-thought branches (transcript
+                     ;; header, group relabel) are skipped; the test only
+                     ;; exercises content rendering.
+                     (cons :last-entry-type "agent_thought_chunk")
+                     (cons :last-activity-time nil)))
+        (rendered nil))
+    (cl-letf (((symbol-function 'agent-shell--active-requests-p)
+               (lambda (_state) t))
+              ((symbol-function 'agent-shell--append-transcript)
+               #'ignore)
+              ((symbol-function 'agent-shell--emit-event)
+               #'ignore)
+              ((symbol-function 'agent-shell--update-fragment)
+               (lambda (&rest args) (setq rendered (plist-get args :body)))))
+      (agent-shell--on-notification
+       :state state
+       :acp-notification '((method . "session/update")
+                           (params
+                            (update
+                             (sessionUpdate . "agent_thought_chunk")
+                             (content (type . "text")
+                                      (text . "plain **bold** `code`"))))))
+      (should (equal "plain **bold** `code`" (substring-no-properties rendered)))
+      (should (eq 'agent-shell-thought-body (get-text-property 0 'face rendered)))
+      ;; Rendered, unstyled text keeps the base face alone; markup keeps
+      ;; its own face ahead of the base one.
+      (let ((markdown (agent-shell-markdown-convert rendered)))
+        (should (equal "plain bold code" (substring-no-properties markdown)))
+        (should (eq 'agent-shell-thought-body (get-text-property 0 'face markdown)))
+        (should (equal '(agent-shell-markdown-bold agent-shell-thought-body)
+                       (get-text-property 6 'face markdown)))
+        (should (equal '(agent-shell-markdown-inline-code agent-shell-thought-body)
+                       (get-text-property 11 'face markdown)))))))
+
 (ert-deftest agent-shell--adapt-notification-test ()
   "Test `agent-shell--adapt-notification'."
   (let ((state (agent-shell--make-state
