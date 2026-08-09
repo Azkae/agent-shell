@@ -4406,6 +4406,7 @@ variable (see makunbound)"))
       (agent-shell--update-header-and-mode-line)
       (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
       (add-hook 'change-major-mode-hook #'agent-shell--clean-up nil t)
+      (add-hook 'window-configuration-change-hook #'agent-shell--resize-header nil t)
       (agent-shell-ui-mode +1)
       (add-hook 'agent-shell-ui-post-expand-fragment-at-point-hook
                 #'agent-shell--render-markdown nil t)
@@ -5076,11 +5077,87 @@ to fall back to black."
         (apply #'color-rgb-to-hex (append rgb '(2)))
       "#ffffff")))
 
-(cl-defun agent-shell--make-header-model (state &key position status key-hints menu-keys)
+(defun agent-shell--header-width (buffer)
+  "Return the pixel width the header should be rendered at for BUFFER.
+
+The header image is sized to the widest window showing BUFFER rather than
+to the frame.  Nothing is drawn in the padding to the right of the header
+text (the image has no background), so a narrower image looks identical
+while rasterizing fewer pixels every time the busy indicator animates.  A
+window narrower than the header text clips it exactly as the frame-wide
+image already did.
+
+Falls back to the frame width when BUFFER is not displayed, which is also
+the safe upper bound.
+
+For a buffer shown in two side-by-side windows of 740 and 742 pixels,
+returns 742.  For the same buffer in no window, on a 1482 pixel frame,
+returns 1482."
+  (if-let* ((windows (get-buffer-window-list buffer nil t)))
+      (seq-max (seq-map #'window-pixel-width windows))
+    (frame-pixel-width)))
+
+(defun agent-shell--svg-text-width (node)
+  "Return the pixel width of header `text' NODE's tspans.
+
+Sums each tspan's text width and the `dx' gap preceding it.
+
+Exact rather than estimated: the header SVG names the same font family
+and pixel size Emacs is using, so `string-pixel-width' measures what
+librsvg will draw.
+
+For example, with \"Claude\" measuring 60 pixels and \"➤\" 15:
+
+  (agent-shell--svg-text-width
+   (dom-node \\='text \\='((x . \"79\"))
+             (dom-node \\='tspan nil \"Claude\")
+             (dom-node \\='tspan \\='((dx . \"8\")) \"➤\")))
+  => 83"
+  (seq-reduce (lambda (total child)
+                (if (and (consp child) (eq (dom-tag child) 'tspan))
+                    (+ total
+                       (string-to-number (format "%s" (or (dom-attr child 'dx) 0)))
+                       (string-pixel-width (or (car (dom-children child)) "")))
+                  total))
+              (dom-children node)
+              0))
+
+(defun agent-shell--svg-content-width (svg)
+  "Return the pixel width SVG's text rows reach.
+
+The widest row wins, each measured from its own `x' offset, so the result
+is where the rightmost drawn text ends.
+
+For example, an SVG whose top row starts at x 79 and measures 634, and
+whose bottom row starts at x 79 and measures 168, returns 713."
+  (seq-reduce (lambda (widest node)
+                (max widest (+ (string-to-number (format "%s" (dom-attr node 'x)))
+                               (agent-shell--svg-text-width node))))
+              (dom-by-tag svg 'text)
+              0))
+
+(defun agent-shell--resize-header ()
+  "Re-render the header when the width it was rendered at no longer applies.
+
+The header image is sized to the window (see `agent-shell--header-width'),
+so text too long for the window is clipped by the image itself.  Widening
+the window, typically by deleting the one beside it, has to rebuild the
+image or that clipping would persist in the wider window.
+
+On `window-configuration-change-hook', so keep the common case, where the
+width is unchanged, down to a comparison."
+  (when (and (derived-mode-p 'agent-shell-mode)
+             agent-shell--header-last-model
+             (/= (map-elt agent-shell--header-last-model :width)
+                 (agent-shell--header-width (current-buffer))))
+    (agent-shell--update-header-and-mode-line)))
+
+(cl-defun agent-shell--make-header-model (state &key position status key-hints menu-keys width)
   "Create a header model alist from STATE and the given header fields.
 The model contains all inputs needed to render the header.  POSITION,
 STATUS, KEY-HINTS and MENU-KEYS are as documented in
-`agent-shell--make-header'."
+`agent-shell--make-header'.  WIDTH is the pixel width to render at,
+defaulting to the frame width."
   `((:buffer-name . ,(map-nested-elt state '(:agent-config :buffer-name)))
     (:icon-name . ,(map-nested-elt state '(:agent-config :icon-name)))
     (:model-id . ,(map-nested-elt state '(:session :model-id)))
@@ -5091,8 +5168,9 @@ STATUS, KEY-HINTS and MENU-KEYS are as documented in
     (:mode-name . ,(agent-shell-get-mode-name state))
     (:project-name . ,(agent-shell--project-name))
     (:session-id . ,(agent-shell--session-id-indicator))
-    (:frame-width . ,(frame-pixel-width))
+    (:width . ,(or width (frame-pixel-width)))
     (:font-height . ,(frame-char-height))
+    (:font-family . ,(face-attribute 'default :family))
     (:font-size . ,(if-let* (((display-graphic-p))
                              (font (face-attribute 'default :font))
                              ((fontp font))
@@ -5141,6 +5219,58 @@ string shown in its help-echo tooltip, each with:
   (agent-shell--render-header-model
    (agent-shell--make-header-model state :position position :status status
                                    :key-hints key-hints :menu-keys menu-keys)))
+
+(defun agent-shell--svg-header-geometry (header-model)
+  "Return pixel geometry for HEADER-MODEL's SVG header as an alist.
+
+Layout is:
+
+  +------+
+  | icon | Top text line
+  |      | Bottom text line
+  +------+
+  Key hints row (optional, last row)
+
+For a 21px char height and 16px font, with no key hints:
+
+  ((:char-height . 21)
+   (:font-size . 16)
+   (:image-height . 63)
+   (:image-width . 63)
+   (:text-height . 21)
+   (:total-height . 79)
+   (:icon-x . 6)
+   (:icon-y . 8)
+   (:icon-text-x . 79)
+   (:icon-text-y . 31)
+   (:key-hints-x . 6)
+   (:key-hints-y . 79))"
+  (let* ((char-height (map-elt header-model :font-height))
+         (font-size (map-elt header-model :font-size))
+         (has-key-hints (and (map-elt header-model :key-hints) t))
+         (image-height (* 3 char-height))
+         (text-height char-height)
+         (top-padding-height (/ font-size 2))
+         (bottom-padding-height (if has-key-hints
+                                    (+ text-height top-padding-height)
+                                  top-padding-height))
+         ;; Match the natural inter-line stride between top and bottom
+         ;; text rows so the key hints row sits the same vertical
+         ;; distance below the bottom row.
+         (row-spacing (if has-key-hints (- char-height font-size) 0))
+         (icon-x 6))
+    `((:char-height . ,char-height)
+      (:font-size . ,font-size)
+      (:image-height . ,image-height)
+      (:image-width . ,image-height)
+      (:text-height . ,text-height)
+      (:total-height . ,(+ image-height row-spacing top-padding-height bottom-padding-height))
+      (:icon-x . ,icon-x)
+      (:icon-y . ,top-padding-height)
+      (:icon-text-x . ,(+ icon-x image-height 10))
+      (:icon-text-y . ,(+ top-padding-height char-height (/ (- char-height font-size) 2)))
+      (:key-hints-x . ,icon-x)
+      (:key-hints-y . ,(+ image-height font-size row-spacing)))))
 
 (defun agent-shell--render-header-model (header-model)
   "Render HEADER-MODEL to a header string, caching the result.
@@ -5262,29 +5392,21 @@ keeps entries fresh."
            ;; +------+
            ;; Key hints row (optional, last row)
            ;; Caching is handled by `agent-shell--render-header-model'.
-           (let* ((char-height (map-elt header-model :font-height))
-                  (font-size (map-elt header-model :font-size))
-                  (has-key-hints key-hints)
-                  (image-height (* 3 char-height))
-                  (image-width image-height)
-                  (text-height char-height)
-                  (top-padding-height (/ font-size 2))
-                  (bottom-padding-height (if has-key-hints (+ text-height top-padding-height) top-padding-height))
-                  ;; Match the natural inter-line stride between top and
-                  ;; bottom text rows so the key hints row sits the same
-                  ;; vertical distance below the bottom row.
-                  (row-spacing (if has-key-hints (- char-height font-size) 0))
-                  (total-height (+ image-height row-spacing top-padding-height bottom-padding-height))
-                  ;; icon position
-                  (icon-x 6)
-                  (icon-y top-padding-height)
-                  ;; text position right of the icon area
-                  (icon-text-x (+ icon-x image-width 10))
-                  (icon-text-y (+ icon-y char-height (/ (- char-height font-size) 2)))
-                  ;; Key hints positioned below the icon area
-                  (key-hints-x icon-x)
-                  (key-hints-y (+ image-height font-size row-spacing))
-                  (svg (svg-create (map-elt header-model :frame-width) total-height))
+           (let* ((geometry (agent-shell--svg-header-geometry header-model))
+                  (char-height (map-elt geometry :char-height))
+                  (font-size (map-elt geometry :font-size))
+                  (font-family (map-elt header-model :font-family))
+                  (image-height (map-elt geometry :image-height))
+                  (image-width (map-elt geometry :image-width))
+                  (text-height (map-elt geometry :text-height))
+                  (total-height (map-elt geometry :total-height))
+                  (icon-x (map-elt geometry :icon-x))
+                  (icon-y (map-elt geometry :icon-y))
+                  (icon-text-x (map-elt geometry :icon-text-x))
+                  (icon-text-y (map-elt geometry :icon-text-y))
+                  (key-hints-x (map-elt geometry :key-hints-x))
+                  (key-hints-y (map-elt geometry :key-hints-y))
+                  (svg (svg-create (map-elt header-model :width) total-height))
                   (icon-filename
                    (if (map-elt header-model :icon-name)
                        (agent-shell--fetch-agent-icon (map-elt header-model :icon-name))
@@ -5300,7 +5422,8 @@ keeps entries fresh."
              (svg--append svg (let ((text-node (dom-node 'text
                                                          `((x . ,icon-text-x)
                                                            (y . ,icon-text-y)
-                                                           (font-size . ,font-size)))))
+                                                           (font-size . ,font-size)
+                                                           (font-family . ,font-family)))))
                                 ;; Agent name
                                 (dom-append-child text-node
                                                   (dom-node 'tspan
@@ -5367,7 +5490,8 @@ keeps entries fresh."
              (svg--append svg (let ((text-node (dom-node 'text
                                                          `((x . ,icon-text-x)
                                                            (y . ,(+ icon-text-y text-height (- char-height font-size)))
-                                                           (font-size . ,font-size)))))
+                                                           (font-size . ,font-size)
+                                                           (font-family . ,font-family)))))
                                 ;; Position (optional, before project)
                                 (when (map-elt header-model :position)
                                   (dom-append-child text-node
@@ -5427,7 +5551,8 @@ keeps entries fresh."
                (svg--append svg (let ((text-node (dom-node 'text
                                                            `((x . ,key-hints-x)
                                                              (y . ,key-hints-y)
-                                                             (font-size . ,font-size))))
+                                                             (font-size . ,font-size)
+                                                           (font-family . ,font-family))))
                                       (first t))
                                   (dolist (hint key-hints)
                                     (when (map-elt hint :description)
@@ -5449,6 +5574,16 @@ keeps entries fresh."
                                                                     (dx . "8"))
                                                                   (map-elt hint :description)))))
                                   text-node)))
+             ;; Shrink the canvas to what was actually drawn.  Every
+             ;; pixel of this image is redrawn on each beat of the busy
+             ;; animation, so a frame-wide canvas pays to blit padding
+             ;; nothing is drawn on.  Overshooting is harmless (the
+             ;; padding is transparent); undershooting would clip text,
+             ;; so the margin is generous.
+             (dom-set-attribute svg 'width
+                                (min (dom-attr svg 'width)
+                                     (max (+ icon-x image-width 16)
+                                          (+ (agent-shell--svg-content-width svg) 16))))
              (let ((result (propertize
                             (format " %s" (with-temp-buffer
                                             (svg-insert-image svg)
@@ -5494,6 +5629,7 @@ everything and clear the render cache."
            (setq agent-shell--header-last-model
                  (agent-shell--make-header-model
                   (agent-shell--state)
+                  :width (agent-shell--header-width (current-buffer))
                   :menu-keys `((:model . ,(key-description (where-is-internal
                                                             'agent-shell-set-session-model
                                                             agent-shell-mode-map t)))
