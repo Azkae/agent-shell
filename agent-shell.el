@@ -2238,7 +2238,10 @@ maintainer with the payload below:
 
 (defun agent-shell--make-unhandled-notification-body (acp-notification)
   "Build a fragment body for an ACP-NOTIFICATION we have no handler for.
-Includes pretty-printed JSON and a `file a feature request' link."
+Includes pretty-printed JSON and a `file a feature request' link.
+
+The body is rendered as markdown, so the link is written as one
+rather than propertized by hand."
   (format "Unhandled notification (%s) and include:
 
 ```json
@@ -2246,14 +2249,7 @@ Includes pretty-printed JSON and a `file a feature request' link."
 ```
 
 "
-          (agent-shell-ui-add-action-to-text
-           "please file a feature request"
-           (lambda ()
-             (interactive)
-             (browse-url "https://github.com/xenodium/agent-shell/issues/new/choose"))
-           (lambda ()
-             (message "Press RET to open URL"))
-           'agent-shell-link)
+          "[please file a feature request](https://github.com/xenodium/agent-shell/issues/new/choose)"
           (agent-shell-with-work-buffer
             (insert (json-serialize acp-notification))
             (json-pretty-print (point-min) (point-max))
@@ -4215,51 +4211,103 @@ a `status' key and a `content' or `step' key."
      :separator " "
      :joiner "\n"))))
 
-(cl-defun agent-shell--make-button (&key text help kind action keymap properties)
+(cl-defun agent-shell--make-button (&key text help kind action keymap properties (boxed t))
   "Make button with TEXT, HELP text, KIND, KEYMAP, ACTION, and PROPERTIES.
-PROPERTIES is an optional plist of additional text properties to apply."
-  ;; Use [ ] brackets in TUI which cannot render the box border.
-  (let ((button (agent-shell--add-text-properties
-                 (if (display-graphic-p)
-                     (format " %s " text)
-                   (format "[ %s ]" text))
-                 'font-lock-face '(:box t)
-                 'face '(:box t)
-                 'help-echo help
-                 'pointer 'hand
-                 'keymap (let ((map (make-sparse-keymap)))
-                           (define-key map [mouse-1] action)
-                           (define-key map (kbd "RET") action)
-                           (define-key map [remap self-insert-command] 'ignore)
-                           (when keymap
-                             (set-keymap-parent map keymap))
-                           map)
-                 'button kind
-                 'rear-nonsticky t)))
+PROPERTIES is an optional plist of additional text properties to apply.
+
+BOXED draws TEXT as a button and defaults to t.  Pass nil for text
+that acts but shouldn't look like a button, such as an inline file
+link: TEXT is then used verbatim, with no padding, brackets or box.
+Verbatim matters where the text is also content, as in the prompt,
+whose buffer text is what gets sent to the agent."
+  ;; TODO: Bind a shared keymap to a named command reading text
+  ;; properties, rather than a per-call keymap over ACTION.  Anonymous
+  ;; closures can't be rebound, which is what issue #759 is about.  See
+  ;; `agent-shell-ui-fragment-map' for the shape to follow.
+  (let ((button (apply
+                 #'agent-shell--add-text-properties
+                 (cond ((not boxed) text)
+                       ;; Use [ ] brackets in TUI which cannot render the box border.
+                       ((display-graphic-p) (format " %s " text))
+                       (t (format "[ %s ]" text)))
+                 (append
+                  ;; Skipped rather than set to nil when unboxed: a nil
+                  ;; face would merge into the caller's own face as an
+                  ;; invalid spec.
+                  (when boxed
+                    (list 'font-lock-face '(:box t)
+                          'face '(:box t)))
+                  (list 'help-echo help
+                        'pointer 'hand
+                        'keymap (let ((map (make-sparse-keymap)))
+                                  (define-key map [mouse-1] action)
+                                  (define-key map (kbd "RET") action)
+                                  (define-key map [remap self-insert-command] 'ignore)
+                                  (when keymap
+                                    (set-keymap-parent map keymap))
+                                  map)
+                        'button kind
+                        'rear-nonsticky t)))))
     (if properties
         (apply #'agent-shell--add-text-properties button properties)
       button)))
 
-(defun agent-shell--add-text-properties (string &rest properties)
-  "Add text PROPERTIES to entire STRING and return the propertized string.
-PROPERTIES should be a plist of property-value pairs."
-  (let ((str (copy-sequence string))
-        (len (length string)))
-    (while properties
-      (let ((prop (car properties))
-            (value (cadr properties)))
-        (if (memq prop '(face font-lock-face))
-            ;; Merge face properties
-            (let ((existing (get-text-property 0 prop str)))
-              (put-text-property 0 len prop
-                                 (if existing
-                                     (list value existing)
-                                   value)
-                                 str))
-          ;; Regular property replacement
-          (put-text-property 0 len prop value str))
-        (setq properties (cddr properties))))
-    str))
+(cl-defun agent-shell--make-file-link (&key label file line-start line-end (face 'agent-shell-link) hint)
+  "Return LABEL as text opening FILE when invoked.
+
+LINE-START and LINE-END, when given, select those lines as the region
+on open, reusing a window already showing FILE.  Without them the file
+is simply visited.
+
+FACE defaults to `agent-shell-link'.  Pass nil to leave LABEL's own
+face alone, as an image preview does.
+
+HINT is echoed when the cursor enters LABEL, for example \"open file\".
+
+These links go into the prompt, whose buffer text is sent to the agent,
+so LABEL is used verbatim (see the BOXED argument of
+`agent-shell--make-button')."
+  (agent-shell--make-button
+   :text label
+   :boxed nil
+   :action (lambda ()
+             (interactive)
+             (agent-shell--visit-file file line-start line-end))
+   :properties (append
+                (when face
+                  (list 'font-lock-face face 'face face))
+                (when hint
+                  (list 'cursor-sensor-functions
+                        (list (lambda (_window _old-pos action)
+                                (when (eq action 'entered)
+                                  (message "Press RET to %s" hint)))))))))
+
+(defun agent-shell--visit-file (file line-start line-end)
+  "Visit FILE, selecting lines LINE-START to LINE-END when given.
+
+Without a line range, simply visits FILE.  With one, selects those
+lines as the region, reusing a window already showing FILE rather than
+displacing the current one, since a region link usually points at
+something already on screen.  Messages instead when FILE no longer
+exists."
+  (if (not line-start)
+      (find-file file)
+    (if (not (and file (file-exists-p file)))
+        (message "File not found")
+      (if-let* ((window (when (get-file-buffer file)
+                          (get-buffer-window (get-file-buffer file)))))
+          (select-window window)
+        (find-file file))
+      (goto-char (point-min))
+      (forward-line (1- line-start))
+      (beginning-of-line)
+      (when line-end
+        (push-mark (save-excursion
+                     (goto-char (point-min))
+                     (forward-line (1- line-end))
+                     (end-of-line)
+                     (point))
+                   t t)))))
 
 (defun agent-shell--buffer-name-prefix (agent-name)
   "Return the prefix a buffer name for AGENT-NAME places before the project.
@@ -8075,47 +8123,40 @@ Uses AGENT-CWD to shorten file paths where necessary."
                                            :file-path file
                                            :max-width 200)))
                      ;; Propertize text to display the image
-                     (agent-shell-ui-add-action-to-text
-                      (propertize (concat "@" file)
-                                  'display image-display
-                                  'pointer 'hand
-                                  'agent-shell-context-image t
-                                  'modification-hooks
-                                  ;; Delete entire image if any of it is deleted.
-                                  (list (lambda (edit-start edit-end)
-                                          (when-let* (((get-text-property edit-start 'agent-shell-context-image))
-                                                      (image-start (or (previous-single-property-change
-                                                                        (1+ edit-start) 'agent-shell-context-image)
-                                                                       (point-min)))
-                                                      (image-end (or (next-single-property-change
-                                                                      edit-start 'agent-shell-context-image)
-                                                                     (point-max)))
-                                                      (inhibit-modification-hooks t))
-                                            (when (> image-end edit-end)
-                                              (delete-region edit-end image-end))
-                                            (when (< image-start edit-start)
-                                              (delete-region image-start edit-start))))))
-                      (lambda ()
-                        (interactive)
-                        (find-file file))
-                      (lambda ()
-                        (message "Press RET to open"))
+                     (agent-shell--make-file-link
+                      :label (propertize (concat "@" file)
+                                         'display image-display
+                                         'pointer 'hand
+                                         'agent-shell-context-image t
+                                         'modification-hooks
+                                         ;; Delete entire image if any of it is deleted.
+                                         (list (lambda (edit-start edit-end)
+                                                 (when-let* (((get-text-property edit-start 'agent-shell-context-image))
+                                                             (image-start (or (previous-single-property-change
+                                                                               (1+ edit-start) 'agent-shell-context-image)
+                                                                              (point-min)))
+                                                             (image-end (or (next-single-property-change
+                                                                             edit-start 'agent-shell-context-image)
+                                                                            (point-max)))
+                                                             (inhibit-modification-hooks t))
+                                                   (when (> image-end edit-end)
+                                                     (delete-region edit-end image-end))
+                                                   (when (< image-start edit-start)
+                                                     (delete-region image-start edit-start))))))
+                      :file file
                       ;; No link face for image (no underline).
-                      nil)
+                      :face nil
+                      :hint "open")
                    ;; Not an image, insert as normal text
-                   (agent-shell-ui-add-action-to-text
-                    (if (and agent-cwd (file-in-directory-p file agent-cwd))
-                        ;; File within project, shorten path.
-                        (propertize (concat "@" (file-relative-name file agent-cwd))
-                                    'pointer 'hand)
-                      (propertize (concat "@" file)
-                                  'pointer 'hand))
-                    (lambda ()
-                      (interactive)
-                      (find-file file))
-                    (lambda ()
-                      (message "Press RET to open"))
-                    'agent-shell-link)))
+                   (agent-shell--make-file-link
+                    :label (if (and agent-cwd (file-in-directory-p file agent-cwd))
+                               ;; File within project, shorten path.
+                               (propertize (concat "@" (file-relative-name file agent-cwd))
+                                           'pointer 'hand)
+                             (propertize (concat "@" file)
+                                         'pointer 'hand))
+                    :file file
+                    :hint "open")))
                files
                "\n\n")))
 
@@ -9012,43 +9053,17 @@ Uses AGENT-CWD to shorten file paths where necessary."
                      (unless no-error
                        (user-error "No region selected"))))
          (processed-text (if (map-elt region :file)
-                             (let ((file-link (agent-shell-ui-add-action-to-text
-                                               (format "%s:%d-%d"
-                                                       (if (and agent-cwd (file-in-directory-p (map-elt region :file) agent-cwd))
-                                                           (file-relative-name (map-elt region :file) agent-cwd)
-                                                         (map-elt region :file))
-                                                       (map-elt region :line-start)
-                                                       (map-elt region :line-end))
-                                               (lambda ()
-                                                 (interactive)
-                                                 (if (and (map-elt region :file) (file-exists-p (map-elt region :file)))
-                                                     (if-let* ((window (when (get-file-buffer (map-elt region :file))
-                                                                         (get-buffer-window (get-file-buffer (map-elt region :file))))))
-                                                         (progn
-                                                           (select-window window)
-                                                           (goto-char (point-min))
-                                                           (forward-line (1- (map-elt region :line-start)))
-                                                           (beginning-of-line)
-                                                           (push-mark (save-excursion
-                                                                        (goto-char (point-min))
-                                                                        (forward-line (1- (map-elt region :line-end)))
-                                                                        (end-of-line)
-                                                                        (point))
-                                                                      t t))
-                                                       (find-file (map-elt region :file))
-                                                       (goto-char (point-min))
-                                                       (forward-line (1- (map-elt region :line-start)))
-                                                       (beginning-of-line)
-                                                       (push-mark (save-excursion
-                                                                    (goto-char (point-min))
-                                                                    (forward-line (1- (map-elt region :line-end)))
-                                                                    (end-of-line)
-                                                                    (point))
-                                                                  t t))
-                                                   (message "File not found")))
-                                               (lambda ()
-                                                 (message "Press RET to open file"))
-                                               'agent-shell-link))
+                             (let ((file-link (agent-shell--make-file-link
+                                               :label (format "%s:%d-%d"
+                                                              (if (and agent-cwd (file-in-directory-p (map-elt region :file) agent-cwd))
+                                                                  (file-relative-name (map-elt region :file) agent-cwd)
+                                                                (map-elt region :file))
+                                                              (map-elt region :line-start)
+                                                              (map-elt region :line-end))
+                                               :file (map-elt region :file)
+                                               :line-start (map-elt region :line-start)
+                                               :line-end (map-elt region :line-end)
+                                               :hint "open file"))
                                    (numbered-preview
                                     (when-let* ((buffer (get-file-buffer (map-elt region :file))))
                                       (let ((char-start (map-elt region :char-start))

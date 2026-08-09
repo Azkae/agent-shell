@@ -5269,5 +5269,79 @@ is handed, so re-tagging the whole block per chunk would hand
       (agent-shell--tag-untagged-output (point-min) (point-max))
       (should (equal '() signalled)))))
 
+(ert-deftest agent-shell--make-unhandled-notification-body-links-test ()
+  "The feature request link is markdown the renderer turns clickable.
+
+The body is written as markdown rather than propertized by hand, so
+this guards the assumption that `agent-shell-markdown' picks the link
+up: the markup must be gone and the URL recoverable from the text."
+  (let ((rendered (agent-shell-markdown-convert
+                   (agent-shell--make-unhandled-notification-body
+                    '((method . "some/unknown"))))))
+    (should (string-match-p "please file a feature request" rendered))
+    (should-not (string-match-p "\\[please file a feature request\\]" rendered))
+    (should (equal "https://github.com/xenodium/agent-shell/issues/new/choose"
+                   (get-text-property (string-match "please file" rendered)
+                                      'agent-shell-markdown-url rendered)))))
+
+(ert-deftest agent-shell--make-file-link-uses-label-verbatim-test ()
+  "A file link keeps its label exactly.
+
+These go into the prompt, whose buffer text is sent to the agent, so
+`agent-shell--make-button' must not pad or bracket them the way it does
+a real button."
+  (let ((link (agent-shell--make-file-link :label "@/tmp/notes.org"
+                                           :file "/tmp/notes.org"
+                                           :hint "open")))
+    (should (equal "@/tmp/notes.org" (substring-no-properties link)))
+    (should (get-text-property 0 'keymap link))
+    (should (eq 'hand (get-text-property 0 'pointer link)))))
+
+(ert-deftest agent-shell--visit-file-without-line-range-test ()
+  "Visiting without a line range just opens the file."
+  (let ((file (make-temp-file "agent-shell-tests")))
+    (unwind-protect
+        (save-window-excursion
+          (agent-shell--visit-file file nil nil)
+          ;; Compare truenames: `find-file' may resolve symlinks
+          ;; (/var vs /private/var on macOS) depending on config.
+          (should (equal (file-truename file)
+                         (file-truename (buffer-file-name)))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell--visit-file-with-line-range-selects-region-test ()
+  "Visiting with a line range selects those lines."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\nthree\nfour\n")))
+    (unwind-protect
+        (save-window-excursion
+          (agent-shell--visit-file file 2 3)
+          (should (equal (file-truename file)
+                         (file-truename (buffer-file-name))))
+          (should (equal "two\nthree"
+                         (buffer-substring-no-properties (point) (mark)))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell--make-button-boxed-test ()
+  "A boxed button decorates its text; an unboxed one does not."
+  (should (string-match-p "@/tmp/x"
+                          (substring-no-properties
+                           (agent-shell--make-button :text "@/tmp/x" :boxed nil
+                                                     :action #'ignore))))
+  (should-not (equal "@/tmp/x"
+                     (substring-no-properties
+                      (agent-shell--make-button :text "@/tmp/x"
+                                                :action #'ignore))))
+  ;; Unboxed text keeps whatever face it arrived with, rather than
+  ;; merging against a nil box face.
+  (should (equal 'agent-shell-link
+                 (get-text-property 0 'face
+                                    (agent-shell--make-button
+                                     :text (propertize "x" 'face 'agent-shell-link)
+                                     :boxed nil :action #'ignore)))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

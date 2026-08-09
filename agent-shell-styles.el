@@ -32,7 +32,7 @@
 (require 'seq)
 (require 'agent-shell-faces)
 
-(declare-function agent-shell--add-text-properties "agent-shell")
+(declare-function agent-shell--add-text-properties "agent-shell-ui")
 
 (defun agent-shell--short-kind-label (kind)
   "Return a short label for tool call KIND string."

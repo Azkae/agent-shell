@@ -778,6 +778,100 @@ group members."
       (should (string-match-p "some tool output"
                               (buffer-substring-no-properties (point-min) (point-max)))))))
 
+;;; actions
+
+(ert-deftest agent-shell-ui-make-foldable-text-shares-one-map-test ()
+  "Fragment chrome gets the shared map, never a keymap of its own.
+
+Sharing one map is what makes rebinding it reach every fragment already
+on screen."
+  (let ((text (agent-shell-ui-make-foldable-text
+               :text "▼ "
+               :hint "toggle")))
+    (should (eq agent-shell-ui-fragment-map
+                (get-text-property 0 'keymap text)))
+    (should (eq 'hand (get-text-property 0 'pointer text)))
+    (should (get-text-property 0 'cursor-sensor-functions text))))
+
+(ert-deftest agent-shell-ui-fragment-body-carries-no-map-test ()
+  "A fragment's body reads rather than folds.
+
+That guarantee now comes from where the map is applied, not from a
+check inside a command: the chrome carries it and the body does not,
+so RET in the body is left alone."
+  (let ((buf (agent-shell-ui-tests--make-buffer-with-fragments
+              '(((:namespace-id . "ns") (:block-id . "1")
+                 (:label-left . "A") (:body . "body a") (:expanded . t))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (text-property-search-forward
+                   'agent-shell-ui-section 'body
+                   (lambda (want got) (eq want got))))
+          (should-not (get-text-property (point) 'keymap)))
+      (kill-buffer buf))))
+
+(ert-deftest agent-shell-ui-toggle-from-rendered-label-test ()
+  "Folding from a rendered label works through the map on that label.
+
+Guards the real render path, not a hand-built string: the label must
+come out tagged `label-left' and carrying the fragment map, or RET
+never reaches `agent-shell-ui-toggle-fragment' at all."
+  (let ((buf (agent-shell-ui-tests--make-buffer-with-fragments
+              '(((:namespace-id . "ns") (:block-id . "1")
+                 (:label-left . "A") (:body . "body a") (:expanded . t))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (text-property-search-forward
+                   'agent-shell-ui-section 'label-left
+                   (lambda (want got) (eq want got))))
+          (goto-char (1- (point)))
+          (should (eq agent-shell-ui-fragment-map
+                      (get-text-property (point) 'keymap)))
+          (should-not (agent-shell-ui-tests--fragment-collapsed-p "ns" "1"))
+          (agent-shell-ui-toggle-fragment)
+          (should (agent-shell-ui-tests--fragment-collapsed-p "ns" "1")))
+      (kill-buffer buf))))
+
+(ert-deftest agent-shell-ui-action-hint-follows-rebound-key-test ()
+  "The cursor hint names whichever key the keymap actually binds.
+
+Issue #759: the hint used to hardcode RET, so rebinding the map left
+it lying.  Mouse bindings are skipped so the hint stays pressable."
+  (let ((agent-shell-ui-fragment-map (copy-keymap agent-shell-ui-fragment-map))
+        (echoed nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (setq echoed (apply #'format fmt args)))))
+      (agent-shell-ui--echo-action-hint "toggle")
+      (should (equal "Press RET to toggle" echoed))
+      (define-key agent-shell-ui-fragment-map (kbd "TAB") #'agent-shell-ui-toggle-fragment)
+      (define-key agent-shell-ui-fragment-map (kbd "RET") nil t)
+      (agent-shell-ui--echo-action-hint "toggle")
+      (should (equal "Press TAB to toggle" echoed)))))
+
+(ert-deftest agent-shell-ui-keys-reach-fragment-chrome-only-test ()
+  "The fold keys sit on the chrome, leaving the rest of the buffer alone.
+
+Scoping them to the text is what keeps RET submitting the prompt and
+typing inserting everywhere else.  On the chrome, typing resolves to
+`ignore', since that text is read-only and `self-insert-command' would
+otherwise signal."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (insert (agent-shell-ui-make-foldable-text
+             :text "label"
+             :hint "toggle"))
+    (insert "plain")
+    (goto-char (point-min))
+    (should (eq #'agent-shell-ui-toggle-fragment (key-binding (kbd "RET"))))
+    (should (eq #'ignore (key-binding [?x])))
+    ;; Off the chrome nothing is shadowed.  Here RET is `newline'; in a
+    ;; shell buffer it submits the prompt.
+    (goto-char (point-max))
+    (should (eq #'newline (key-binding (kbd "RET"))))
+    (should (eq #'self-insert-command (key-binding [?x])))))
+
 ;;; provide
 
 (provide 'agent-shell-ui-tests)

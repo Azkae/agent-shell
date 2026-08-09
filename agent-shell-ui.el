@@ -35,6 +35,7 @@
 (require 'agent-shell-work-buffer)
 (require 'map)
 (require 'cursor-sensor)
+(require 'seq)
 (require 'subr-x)
 (require 'text-property-search)
 
@@ -48,6 +49,48 @@ When run, the buffer is narrowed to the body region and
 For example, fragment qualified-ids appear in the echo area on
 hover.  These are implementation details of no use to users, so
 they stay hidden by default.")
+
+(defvar agent-shell-ui-fragment-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'agent-shell-ui-toggle-fragment)
+    (define-key map [mouse-1] #'agent-shell-ui-toggle-fragment)
+    (define-key map [remap self-insert-command] #'ignore)
+    map)
+  "Keymap active on a fragment's fold indicator and labels.
+
+Applied as a `keymap' text property by
+`agent-shell-ui-make-foldable-text', so it reaches that chrome and
+nothing else.  Scoping the keys to the text is what leaves the rest of
+the buffer alone: RET still submits the prompt, typing still inserts,
+and the mouse still selects.
+
+Typing on the chrome runs `ignore' rather than erroring, since that
+text is read-only.
+
+For example, to fold with TAB as well as RET:
+
+  (with-eval-after-load \\='agent-shell-ui
+    (define-key agent-shell-ui-fragment-map
+                (kbd \"TAB\") #\\='agent-shell-ui-toggle-fragment))
+
+Rebind with `define-key' rather than `setq': already rendered text
+holds on to this keymap object.")
+
+(defun agent-shell-ui--echo-action-hint (verb)
+  "Echo how to run an action described by VERB.
+
+Searches `agent-shell-ui-fragment-map' for whichever key runs
+`agent-shell-ui-toggle-fragment', skipping mouse bindings so the hint
+names something the user can press.
+
+For example, VERB \"toggle\" echoes \"Press RET to toggle\" with the
+default bindings, or \"Press TAB to toggle\" once that map binds TAB."
+  (when-let* ((keys (seq-remove
+                     (lambda (key) (mouse-event-p (aref key 0)))
+                     (where-is-internal
+                      #'agent-shell-ui-toggle-fragment
+                      (list agent-shell-ui-fragment-map)))))
+    (message "Press %s to %s" (key-description (seq-first keys)) verb)))
 
 (defun agent-shell-ui--fragment-help-echo (qualified-id)
   "Return the `help-echo' value for a fragment tagged QUALIFIED-ID.
@@ -534,13 +577,9 @@ are preserved across label updates."
         (delete-region region-start region-end)
         (goto-char region-start)
         (let ((insert-start (point)))
-          (insert (agent-shell-ui-add-action-to-text
-                   new-text
-                   (lambda ()
-                     (interactive)
-                     (agent-shell-ui--toggle-fragment-at-point))
-                   (lambda ()
-                     (message "Press RET to toggle"))))
+          (insert (agent-shell-ui-make-foldable-text
+                   :text new-text
+                   :hint "toggle"))
           (let ((insert-end (point)))
             (add-text-properties insert-start insert-end
                                  `(agent-shell-ui-section ,section
@@ -816,20 +855,12 @@ indents a member's header line under its group header."
           (progn
             (setq collapsable (and body has-labels))
             (setq indicator-start (point))
-            (insert (agent-shell-ui-add-action-to-text
-                     (if expanded "▼ " "▶ ")
-                     (lambda ()
-                       (interactive)
-                       (agent-shell-ui--toggle-fragment-at-point))
-                     (lambda ()
-                       (message "Press RET to toggle"))))
+            (insert (agent-shell-ui-make-foldable-text
+                     :text (if expanded "▼ " "▶ ")
+                     :hint "toggle"))
             (setq indicator-end (point))
             (add-text-properties indicator-start indicator-end
                                  `(agent-shell-ui-section indicator
-                                                          keymap ,(agent-shell-ui-make-action-keymap
-                                                                   (lambda ()
-                                                                     (interactive)
-                                                                     (agent-shell-ui--toggle-fragment-at-point)))
                                                           read-only t
                                                           front-sticky (read-only))))
         (setq collapsable nil)
@@ -850,13 +881,9 @@ indents a member's header line under its group header."
 
     (when label-left
       (setq label-left-start (point))
-      (insert (agent-shell-ui-add-action-to-text
-               label-left
-               (lambda ()
-                 (interactive)
-                 (agent-shell-ui--toggle-fragment-at-point))
-               (lambda ()
-                 (message "Press RET to toggle"))))
+      (insert (agent-shell-ui-make-foldable-text
+               :text label-left
+               :hint "toggle"))
       (setq label-left-end (point))
       (add-text-properties label-left-start label-left-end
                            `(agent-shell-ui-section label-left
@@ -869,13 +896,9 @@ indents a member's header line under its group header."
       (when need-space
         (insert " "))
       (setq label-right-start (point))
-      (insert (agent-shell-ui-add-action-to-text
-               label-right
-               (lambda ()
-                 (interactive)
-                 (agent-shell-ui--toggle-fragment-at-point))
-               (lambda ()
-                 (message "Press RET to toggle"))))
+      (insert (agent-shell-ui-make-foldable-text
+               :text label-right
+               :hint "toggle"))
       (setq label-right-end (point))
       (add-text-properties label-right-start label-right-end
                            `(agent-shell-ui-section label-right
@@ -1361,38 +1384,46 @@ block's beginning instead of the previous block."
       (goto-char found)
       found)))
 
-(defun agent-shell-ui-make-action-keymap (action)
-  "Create keymap with ACTION."
-  (let ((map (make-sparse-keymap)))
-    (define-key map [mouse-1] action)
-    (define-key map (kbd "RET") action)
-    (define-key map [remap self-insert-command] 'ignore)
-    map))
+(defun agent-shell--add-text-properties (string &rest properties)
+  "Add text PROPERTIES to entire STRING and return the propertized string.
+PROPERTIES should be a plist of property-value pairs."
+  (let ((str (copy-sequence string))
+        (len (length string)))
+    (while properties
+      (let ((prop (car properties))
+            (value (cadr properties)))
+        (if (memq prop '(face font-lock-face))
+            ;; Merge face properties
+            (let ((existing (get-text-property 0 prop str)))
+              (put-text-property 0 len prop
+                                 (if existing
+                                     (list value existing)
+                                   value)
+                                 str))
+          ;; Regular property replacement
+          (put-text-property 0 len prop value str))
+        (setq properties (cddr properties))))
+    str))
 
-(defun agent-shell-ui-add-action-to-text (text action &optional on-entered face)
-  "Add ACTION lambda to propertized TEXT and return modified text.
-ON-ENTERED is a function to call when the cursor enters the text.
-FACE when non-nil applies the specified face to the text."
-  (add-text-properties 0 (length text)
-                       `(keymap ,(agent-shell-ui-make-action-keymap action))
-                       text)
-  (when on-entered
-    (add-text-properties 0 (length text)
-                         (list 'cursor-sensor-functions
-                               (list (lambda (_window _old-pos sensor-action)
-                                       (when (eq sensor-action 'entered)
-                                         (funcall on-entered)))))
-                         text))
-  (when face
-    (add-text-properties 0 (length text)
-                         `(font-lock-face ,face
-                           face ,face)
-                         text))
-  (add-text-properties 0 (length text)
-                       '(pointer hand
-                         rear-nonsticky t)
-                       text)
-  text)
+(cl-defun agent-shell-ui-make-foldable-text (&key text hint)
+  "Return TEXT propertized as acting when invoked at point.
+
+Applies `agent-shell-ui-fragment-map', so TEXT folds its fragment when
+invoked, along with the hand pointer that marks it as acting.
+
+HINT is a verb describing the action, echoed when the cursor enters
+TEXT.  For example, \"toggle\" echoes \"Press RET to toggle\" with the
+default bindings."
+  (apply #'agent-shell--add-text-properties
+         text
+         (append (list 'keymap agent-shell-ui-fragment-map)
+                 (when hint
+                   (list 'cursor-sensor-functions
+                         (list (lambda (_window _old-pos sensor-action)
+                                 (when (eq sensor-action 'entered)
+                                   (agent-shell-ui--echo-action-hint hint))))))
+                 (list 'pointer 'hand
+                       'rear-nonsticky t))))
 
 (defvar-local agent-shell-ui--isearch-opened-fragments nil
   "List of fragment qualified-ids that were opened during isearch.")
