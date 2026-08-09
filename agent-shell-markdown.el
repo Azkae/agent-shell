@@ -3296,39 +3296,73 @@ This is the heuristic git uses to tell binary from text."
 Return non-nil if handled, nil otherwise.
 
 Text/navigable files open in Emacs, jumping to the `#Lnnn' line when URL
-carries one.  Binary files (which Emacs can't usefully display) instead
+carries one and selecting the lines when it carries a `#Lnnn-Lnnn'
+range.  Binary files (which Emacs can't usefully display) instead
 prompt to open with the operating system's default program, ignoring any
-`#Lnnn' line (a line number is meaningless for binary)."
+line (a line number is meaningless for binary)."
   (when-let* ((parsed (agent-shell-markdown--parse-local-link url)))
-    (let ((file (car parsed))
-          (line (cdr parsed)))
-      (if (agent-shell-markdown--binary-file-p file)
-          (agent-shell-markdown--open-externally file)
-        (find-file file)
-        (when line
-          (goto-char (point-min))
-          (forward-line (1- line)))))
+    (if (agent-shell-markdown--binary-file-p (map-elt parsed :file))
+        (agent-shell-markdown--open-externally (map-elt parsed :file))
+      (find-file (map-elt parsed :file))
+      (when-let* ((line-start (map-elt parsed :line-start)))
+        (goto-char (point-min))
+        (forward-line (1- line-start))
+        (when-let* ((line-end (map-elt parsed :line-end)))
+          (push-mark (save-excursion
+                       (goto-char (point-min))
+                       (forward-line (1- line-end))
+                       (end-of-line)
+                       (point))
+                     t t))))
     t))
 
-(defun agent-shell-markdown--parse-local-link (url)
-  "Parse URL as a local file link.
-Return a (FILE . LINE) cons when URL points to an existing local
-file (LINE may be nil), or nil otherwise.
+(defconst agent-shell-markdown--lines-regexp
+  (rx (one-or-more digit)
+      (optional "-" (optional "L") (one-or-more digit)))
+  "Regexp for the line part of a local link, a number or a range.
+Matches \"10\", \"10-24\" and GitHub's \"10-L24\".")
+
+(defun agent-shell-markdown--parse-lines (lines)
+  "Parse LINES, the line part of a local link, into a (START . END) cons.
+
+END is nil unless LINES names a range.
 
 For example:
 
-  \"foo.el#L10\"             => (\"/abs/foo.el\" . 10)
-  \"foo.el\"                 => (\"/abs/foo.el\" . nil)
-  \"file:src/bar.el:5\"      => (\"/abs/src/bar.el\" . 5)
-  \"file:///tmp/baz.el#L20\" => (\"/tmp/baz.el\" . 20)
-  \"https://example.com\"    => nil"
+  \"10\"     => (10)
+  \"10-24\"  => (10 . 24)
+  \"10-L24\" => (10 . 24)"
+  (when (string-match (rx bos (group (one-or-more digit))
+                          (optional "-" (optional "L")
+                                    (group (one-or-more digit)))
+                          eos)
+                      lines)
+    (cons (string-to-number (match-string 1 lines))
+          (when (match-string 2 lines)
+            (string-to-number (match-string 2 lines))))))
+
+(defun agent-shell-markdown--parse-local-link (url)
+  "Parse URL as a local file link.
+
+Return an alist with :file, :line-start and :line-end when URL points to
+an existing local file, or nil otherwise.  Both line keys are nil when
+URL names no line, and :line-end is nil unless it names a range.
+
+For example, with the file part abbreviated to F:
+
+  \"foo.el#L10\"          => ((:file . F) (:line-start . 10) (:line-end))
+  \"foo.el#L10-L24\"      => ((:file . F) (:line-start . 10) (:line-end . 24))
+  \"foo.el#L10-24\"       => ((:file . F) (:line-start . 10) (:line-end . 24))
+  \"foo.el\"              => ((:file . F) (:line-start) (:line-end))
+  \"file:bar.el:5-8\"     => ((:file . F) (:line-start . 5) (:line-end . 8))
+  \"https://example.com\" => nil"
   (when-let* ((match
                (cond
                 ((string-match
                   (rx bos "file://"
                       (group (+? anything))
-                      (optional (or (seq "#L" (group (one-or-more digit)))
-                                    (seq ":" (group (one-or-more digit)))))
+                      (optional (or (seq "#L" (group (regexp agent-shell-markdown--lines-regexp)))
+                                    (seq ":" (group (regexp agent-shell-markdown--lines-regexp)))))
                       eos)
                   url)
                  (cons (match-string 1 url)
@@ -3336,8 +3370,8 @@ For example:
                 ((string-match
                   (rx bos "file:"
                       (group (not (any "/")) (+? anything))
-                      (optional (or (seq "#L" (group (one-or-more digit)))
-                                    (seq ":" (group (one-or-more digit)))))
+                      (optional (or (seq "#L" (group (regexp agent-shell-markdown--lines-regexp)))
+                                    (seq ":" (group (regexp agent-shell-markdown--lines-regexp)))))
                       eos)
                   url)
                  (cons (match-string 1 url)
@@ -3346,7 +3380,7 @@ For example:
                   (rx bos
                       (group (? (optional "/") alpha ":/")
                              (one-or-more (not (any ":#"))))
-                      "#L" (group (one-or-more digit))
+                      "#L" (group (regexp agent-shell-markdown--lines-regexp))
                       eos)
                   url)
                  (cons (match-string 1 url) (match-string 2 url)))
@@ -3354,7 +3388,7 @@ For example:
                   (rx bos
                       (group (? (optional "/") alpha ":/")
                              (one-or-more (not (any ":#"))))
-                      ":" (group (one-or-more digit))
+                      ":" (group (regexp agent-shell-markdown--lines-regexp))
                       eos)
                   url)
                  (cons (match-string 1 url) (match-string 2 url)))
@@ -3362,9 +3396,11 @@ For example:
                  (cons url nil))))
               (filepath (expand-file-name (car match))))
     (when (file-exists-p filepath)
-      (cons filepath
-            (when (cdr match)
-              (string-to-number (cdr match)))))))
+      (let ((lines (when (cdr match)
+                     (agent-shell-markdown--parse-lines (cdr match)))))
+        (list (cons :file filepath)
+              (cons :line-start (car lines))
+              (cons :line-end (cdr lines)))))))
 
 (cl-defun agent-shell-markdown--url-copy-file (&key url file (timeout 5.0) content-type-prefix)
   "Download URL to FILE, returning FILE on success or nil on failure.

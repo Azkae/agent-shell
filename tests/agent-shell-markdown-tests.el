@@ -2593,6 +2593,51 @@ Text/navigable files open in Emacs; binary files open externally."
       (delete-file text)
       (delete-file binary))))
 
+(ert-deftest agent-shell-markdown--parse-local-link-lines-test ()
+  "Test `agent-shell-markdown--parse-local-link' reads lines and ranges.
+
+Agents routinely emit GitHub-style ranges, so `#L10-L24' and the
+plainer `#L10-24' both have to land."
+  (let ((file (make-temp-file "agent-shell-lines" nil ".el" "one\ntwo\nthree\nfour\nfive\n")))
+    (unwind-protect
+        (progn
+          (should (equal (list (cons :line-start nil) (cons :line-end nil))
+                         (seq-drop (agent-shell-markdown--parse-local-link file) 1)))
+          (should (equal (list (cons :line-start 2) (cons :line-end nil))
+                         (seq-drop (agent-shell-markdown--parse-local-link
+                                    (concat file "#L2")) 1)))
+          (should (equal (list (cons :line-start 2) (cons :line-end 4))
+                         (seq-drop (agent-shell-markdown--parse-local-link
+                                    (concat file "#L2-L4")) 1)))
+          (should (equal (list (cons :line-start 2) (cons :line-end 4))
+                         (seq-drop (agent-shell-markdown--parse-local-link
+                                    (concat file "#L2-4")) 1)))
+          (should (equal (list (cons :line-start 3) (cons :line-end 5))
+                         (seq-drop (agent-shell-markdown--parse-local-link
+                                    (concat file ":3-5")) 1)))
+          ;; Garbage after the digits is still rejected outright.
+          (should-not (agent-shell-markdown--parse-local-link (concat file "#L2xy"))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown--open-local-link-selects-range-test ()
+  "Test `agent-shell-markdown--open-local-link' selects a linked range.
+
+Without a range it only moves point, leaving the mark alone."
+  (let ((file (make-temp-file "agent-shell-range" nil ".el" "one\ntwo\nthree\nfour\nfive\n")))
+    (unwind-protect
+        (save-window-excursion
+          (should (agent-shell-markdown--open-local-link (concat file "#L2-L4")))
+          (should (equal 2 (line-number-at-pos (point))))
+          (should (equal "two\nthree\nfour"
+                         (buffer-substring-no-properties (point) (mark))))
+          (deactivate-mark)
+          (should (agent-shell-markdown--open-local-link (concat file "#L3")))
+          (should (equal 3 (line-number-at-pos (point))))
+          (should-not (region-active-p)))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
 (defun agent-shell-markdown-tests--source-blocks (markdown)
   "Return the `:source-blocks' descriptors a renderer sees for MARKDOWN.
 Each :block marker range is replaced by the text it spans, so the
