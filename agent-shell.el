@@ -7574,12 +7574,38 @@ Example:
     (agent-shell--data-to-cache-file data extension)))
 
 (defun agent-shell--tool-call-update-output-markdown (acp-update)
-  "Return markdown output for an ACP tool call update ACP-UPDATE."
-  (or (map-nested-elt acp-update '(rawOutput formatted_output))
-      (mapconcat #'agent-shell--content-block-to-markdown
-                 (seq-keep (lambda (item) (map-elt item 'content))
-                           (map-elt acp-update 'content))
-                 "\n\n")))
+  "Return markdown output for ACP-UPDATE, a `tool_call_update' update.
+
+Renders the update's `content' blocks (where the ACP spec carries tool
+output) via `agent-shell--content-block-to-markdown'.  Falls back to
+`rawOutput.formatted_output' when there are no content blocks.
+
+Returns an empty string when neither carries output.
+
+Examples:
+
+  (agent-shell--tool-call-update-output-markdown
+   \\='((content . [((type . \"content\")
+                  (content . ((type . \"text\") (text . \"hello\"))))])))
+  => \"hello\"
+
+  (agent-shell--tool-call-update-output-markdown
+   \\='((rawOutput . ((formatted_output . \"total 0\\n\")))))
+  => \"total 0\\n\""
+  (let ((content (mapconcat #'agent-shell--content-block-to-markdown
+                            (seq-keep (lambda (item) (map-elt item 'content))
+                                      (map-elt acp-update 'content))
+                            "\n\n"))
+        ;; Codex reports terminal output via rawOutput.formatted_output
+        ;; and leaves content empty, so completed shell command blocks
+        ;; render blank without this fallback.
+        ;; See https://github.com/xenodium/agent-shell/pull/763
+        (raw-output (map-nested-elt acp-update '(rawOutput formatted_output))))
+    (cond ((not (string-empty-p content)) content)
+          ;; `rawOutput' is agent-defined free-form JSON, so only
+          ;; render formatted_output when it's actually a string.
+          ((stringp raw-output) raw-output)
+          (t ""))))
 
 (defun agent-shell--content-block-to-markdown (acp-content-block)
   "Return markdown for a `session/update' ACP-CONTENT-BLOCK.

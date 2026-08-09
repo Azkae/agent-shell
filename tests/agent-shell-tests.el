@@ -504,14 +504,29 @@ image-rendering path as `![alt](uri)'."
                  "\n\n![image](file:///tmp/shot.png)\n\n")))
 
 (ert-deftest agent-shell--tool-call-update-output-markdown-test ()
-  "Test tool call output extraction from ACP updates."
+  "Test `agent-shell--tool-call-update-output-markdown'."
+  ;; Content blocks win over rawOutput when both are present.
   (should (equal
            (agent-shell--tool-call-update-output-markdown
             '((rawOutput . ((formatted_output . "stdout\nstderr\n")))
               (content . [((type . "content")
                            (content . ((type . "text")
-                                       (text . "legacy content"))))])))
+                                       (text . "block content"))))])))
+           "block content"))
+  ;; Codex sends output via rawOutput and leaves content empty.
+  (should (equal
+           (agent-shell--tool-call-update-output-markdown
+            '((rawOutput . ((formatted_output . "stdout\nstderr\n")))))
            "stdout\nstderr\n"))
+  ;; `rawOutput' is agent-defined, so non-string payloads are ignored.
+  (should (equal
+           (agent-shell--tool-call-update-output-markdown
+            '((rawOutput . ((formatted_output . 42)))))
+           ""))
+  (should (equal
+           (agent-shell--tool-call-update-output-markdown
+            '((rawOutput . "plain string raw output")))
+           ""))
   (should (equal
            (agent-shell--tool-call-update-output-markdown
             '((content . [((type . "content")
