@@ -3012,10 +3012,8 @@ Clears STATE's `:expanded-activity-group'."
            (let* ((diffs (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :diffs)))
                   (output (concat
                            "\n\n"
-                           (mapconcat #'agent-shell--content-block-to-markdown
-                                      (seq-keep (lambda (item) (map-elt item 'content))
-                                                (map-nested-elt acp-notification '(params update content)))
-                                      "\n\n")
+                           (agent-shell--tool-call-update-output-markdown
+                            (map-nested-elt acp-notification '(params update)))
                            "\n\n"))
                   (diff-text (agent-shell--format-diffs-as-text diffs))
                   (body-text (if diff-text
@@ -7526,6 +7524,14 @@ Example:
                            (_ (string-remove-prefix "image/" mime-type))))
               ((seq-contains-p image-file-name-extensions extension)))
     (agent-shell--data-to-cache-file data extension)))
+
+(defun agent-shell--tool-call-update-output-markdown (acp-update)
+  "Return markdown output for an ACP tool call update ACP-UPDATE."
+  (or (map-nested-elt acp-update '(rawOutput formatted_output))
+      (mapconcat #'agent-shell--content-block-to-markdown
+                 (seq-keep (lambda (item) (map-elt item 'content))
+                           (map-elt acp-update 'content))
+                 "\n\n")))
 
 (defun agent-shell--content-block-to-markdown (acp-content-block)
   "Return markdown for a `session/update' ACP-CONTENT-BLOCK.
