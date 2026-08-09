@@ -503,6 +503,24 @@ image-rendering path as `![alt](uri)'."
                     (data . "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=")))
                  "\n\n![image](file:///tmp/shot.png)\n\n")))
 
+(ert-deftest agent-shell--tool-call-update-output-markdown-test ()
+  "Test tool call output extraction from ACP updates."
+  (should (equal
+           (agent-shell--tool-call-update-output-markdown
+            '((rawOutput . ((formatted_output . "stdout\nstderr\n")))
+              (content . [((type . "content")
+                           (content . ((type . "text")
+                                       (text . "legacy content"))))])))
+           "stdout\nstderr\n"))
+  (should (equal
+           (agent-shell--tool-call-update-output-markdown
+            '((content . [((type . "content")
+                           (content . ((type . "text") (text . "first"))))
+                          ((type . "content")
+                           (content . ((type . "text") (text . "second"))))])))
+           "first\n\nsecond"))
+  (should (equal (agent-shell--tool-call-update-output-markdown nil) "")))
+
 (ert-deftest agent-shell--image-data-to-file-test ()
   "Test `agent-shell--image-data-to-file'.
 
