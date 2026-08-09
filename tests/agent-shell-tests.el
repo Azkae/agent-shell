@@ -4993,6 +4993,10 @@ such a body layers its own faces ahead of the base one."
                                       (text . "plain **bold** `code`"))))))
       (should (equal "plain **bold** `code`" (substring-no-properties rendered)))
       (should (eq 'agent-shell-thought-body (get-text-property 0 'face rendered)))
+      ;; Also on `font-lock-face', the property that survives
+      ;; fontification clearing `face' in a body the renderer never saw.
+      (should (eq 'agent-shell-thought-body
+                  (get-text-property 0 'font-lock-face rendered)))
       ;; Rendered, unstyled text keeps the base face alone; markup keeps
       ;; its own face ahead of the base one.
       (let ((markdown (agent-shell-markdown-convert rendered)))

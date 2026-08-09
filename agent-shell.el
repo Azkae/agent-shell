@@ -2850,9 +2850,17 @@ Clears STATE's `:expanded-activity-group'."
                             (propertize "Thinking" 'font-lock-face 'agent-shell-section-heading))
               ;; Base face for the body.  The markdown styling rendered on
               ;; top layers its own faces ahead of it, so bold, links and
-              ;; code spans in a thought keep their faces.
+              ;; code spans in a thought keep their faces.  Set on both
+              ;; properties for the reason
+              ;; `agent-shell-markdown--mirror-face-to-font-lock-face'
+              ;; gives: fontification clears a plain `face' (it covers a
+              ;; collapsed body long before the renderer, and its mirror,
+              ;; ever sees it), while `font-lock-face' only renders while
+              ;; `font-lock-mode' is on.
               :body (agent-shell--add-text-properties
-                     content 'face 'agent-shell-thought-body)
+                     content
+                     'face 'agent-shell-thought-body
+                     'font-lock-face 'agent-shell-thought-body)
               :append (equal (map-elt state :last-entry-type)
                              "agent_thought_chunk")
               :expanded agent-shell-thought-process-expand-by-default
