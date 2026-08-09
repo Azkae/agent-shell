@@ -649,7 +649,7 @@ You can select and start any of the known agent shells (see =agent-shell-agent-c
 
 *** Viewport interaction
 
-Viewport is an alternative interface for composing prompts and viewing one request/response interaction at a time.  It uses a separate buffer named after its associated shell with = [viewport]= appended.  This buffer switches between =agent-shell-viewport-edit-mode= while composing and =agent-shell-viewport-view-mode= while reading.
+Viewport is an alternative interface for composing prompts and viewing one request/response interaction at a time.  It uses a separate buffer named after its associated shell with =" [viewport]"= appended.  This buffer switches between =agent-shell-viewport-edit-mode= while composing and =agent-shell-viewport-view-mode= while reading.
 
 Use one of these entry points to create and initialize the viewport buffer:
 
@@ -665,7 +665,11 @@ In edit mode, =C-c C-c= sends or queues the prompt and switches to view mode whe
 
 In view mode, use =r= to compose a reply, =R= to quote the response in a reply, =b= / =f= to move between interactions, =p= / =n= to move between items, =?= for help, and =q= to bury the viewport.
 
+#+begin_quote
+[!NOTE]
+
 Do not invoke =agent-shell-viewport-edit-mode= or =agent-shell-viewport-view-mode= directly in an agent shell buffer.  They are major modes installed by the entry points above on the separate viewport buffer, not commands for converting the shell buffer.
+#+end_quote
 
 *** Specific Agent Commands
 
@@ -852,7 +856,7 @@ When the active agent advertises the corresponding session option, you can switc
 
 The current selections are shown in the header right after the agent name; click any segment to open a popup menu. The thought level segment only appears for models that expose it (e.g. Claude Sonnet/Opus with effort levels; Codex's reasoning_effort).
 
-From the viewport (=agent-shell-viewport-view-mode= / =agent-shell-viewport-edit-mode=), the same controls are bound to:
+From the [[*Viewport interaction][viewport]] (=agent-shell-viewport-view-mode= / =agent-shell-viewport-edit-mode=), the same controls are bound to:
 
 - View mode: =v= (model), =s= (mode), =t= (thought level).
 - Edit mode: =C-c C-v=, =C-c C-m=, =C-c C-t=.
