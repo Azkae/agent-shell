@@ -647,6 +647,26 @@ By default, =agent-shell= includes configurations for all supported agents (Clau
 
 You can select and start any of the known agent shells (see =agent-shell-agent-configs=) via the =agent-shell= interactive command and enables reusing existing shells when available. With a prefix argument (=C-u M-x agent-shell=), it forces starting a new shell session, thus instantiating multiple agent shells.
 
+*** Viewport interaction
+
+Viewport is an alternative interface for composing prompts and viewing one request/response interaction at a time.  It uses a separate buffer named after its associated shell with = [viewport]= appended.  This buffer switches between =agent-shell-viewport-edit-mode= while composing and =agent-shell-viewport-view-mode= while reading.
+
+Use one of these entry points to create and initialize the viewport buffer:
+
+- From an agent shell, type =C-c C-o= (=agent-shell-other-buffer=).  At the live prompt this opens the viewport for composing; from an earlier interaction it opens the viewport at that interaction.  Use =C-c C-o= again to return to the shell (=o= also works from viewport view mode).
+- Run =M-x agent-shell-prompt-compose= to compose in a dedicated buffer.  With the default configuration, =C-c C-c= sends or queues the prompt and dismisses the compose window.
+- Set =agent-shell-prefer-viewport-interaction= to make the normal =agent-shell= command and related commands prefer the viewport:
+
+#+begin_src emacs-lisp
+(setopt agent-shell-prefer-viewport-interaction t)
+#+end_src
+
+In edit mode, =C-c C-c= sends or queues the prompt and switches to view mode when viewport interaction is preferred.  Use =C-u C-c C-c= to send or queue while keeping the compose buffer open, =C-c C-p= to peek at the latest interaction without losing the draft, =C-c C-k= to cancel, and =C-c C-h= for help.
+
+In view mode, use =r= to compose a reply, =R= to quote the response in a reply, =b= / =f= to move between interactions, =p= / =n= to move between items, =?= for help, and =q= to bury the viewport.
+
+Do not invoke =agent-shell-viewport-edit-mode= or =agent-shell-viewport-view-mode= directly in an agent shell buffer.  They are major modes installed by the entry points above on the separate viewport buffer, not commands for converting the shell buffer.
+
 *** Specific Agent Commands
 
 Start a specific agent shell session directly:
