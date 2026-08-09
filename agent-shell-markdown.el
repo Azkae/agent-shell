@@ -2526,7 +2526,17 @@ via different paths and drift sub-pixel on their right edge."
                  (content-px (agent-shell-markdown--table-measure-string str window))
                  (pad-px (- target-px content-px)))
             (if (<= pad-px 0)
-                str
+                ;; Pixel measurement says the content already fills (or
+                ;; overflows) its pixel budget.  WIDTH is a character
+                ;; count computed for the column, though, so never emit a
+                ;; cell narrower than that: fall back to ASCII padding as
+                ;; a floor.  Keeps a transient bad measurement during
+                ;; streaming (which would otherwise return the cell
+                ;; unpadded and misalign the right border) degrading to
+                ;; char-accurate alignment instead of none.  A genuinely
+                ;; column-filling cell has `string-width' >= WIDTH, so the
+                ;; fallback returns it unchanged.
+                (agent-shell-markdown--pad-table-string-ascii :str str :width width)
               (let* ((full-spaces (floor (/ (float pad-px) char-px)))
                      (remaining-px (- pad-px (* full-spaces char-px))))
                 (concat str

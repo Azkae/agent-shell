@@ -1870,6 +1870,36 @@ after" nil)))))
                  (agent-shell-markdown--pad-table-string
                   :str "" :width 4 :force-pixel t))))
 
+(ert-deftest agent-shell-markdown-pad-table-string-floors-on-degenerate-measurement ()
+  ;; The pixel path pads by comparing the cell's measured pixel width
+  ;; against WIDTH (a character count) times the per-char pixel width.
+  ;; When `window-text-pixel-size' returns a bogus (too-large) value --
+  ;; which can happen transiently mid-stream, before redisplay settles --
+  ;; `pad-px' goes <= 0.  It used to return the cell *unpadded*, so the
+  ;; right border drifted and the stale layout stuck (its width stamp
+  ;; matched the display, so the re-layout pass skipped it).  The floor
+  ;; guarantees a cell is never emitted narrower than its column's
+  ;; character width: a degenerate measurement degrades to ASCII-accurate
+  ;; alignment instead of none.
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+            ((symbol-function 'window-live-p) (lambda (_w) t))
+            ((symbol-function 'agent-shell-markdown--table-char-pixel-width)
+             (lambda (_window) 10))
+            ;; Bogus: report the content far wider than any column budget,
+            ;; forcing pad-px <= 0.
+            ((symbol-function 'agent-shell-markdown--table-measure-string)
+             (lambda (_str _window) 100000)))
+    ;; Short cell: floored to WIDTH columns rather than returned raw.
+    (let ((padded (agent-shell-markdown--pad-table-string
+                   :str "hi" :width 10 :window 'fake :force-pixel t)))
+      (should (equal padded "hi        "))
+      (should (= (string-width padded) 10)))
+    ;; A cell already at/over WIDTH is left untouched -- the floor pads,
+    ;; it never truncates.
+    (should (equal "abcdefghij"
+                   (agent-shell-markdown--pad-table-string
+                    :str "abcdefghij" :width 5 :window 'fake :force-pixel t)))))
+
 (ert-deftest agent-shell-markdown-table-wrap-text-respects-vs-16-width ()
   ;; `⚠' alone has `string-width' 1, but `⚠\\uFE0F' (`⚠️') renders 2
   ;; cells (VS-16 forces emoji presentation).  `string-width' reports
