@@ -714,21 +714,59 @@ equal to GROUP-QUALIFIED-ID; the run stops at the first non-member."
                 (setq pos (map-elt block :end))))))
         (nreverse children)))))
 
+(defun agent-shell-ui--group-children-end (group-qualified-id from)
+  "Return the end of the last child in group with GROUP-QUALIFIED-ID.
+Nil when the group has no children.
+
+The same position `agent-shell-ui--group-children' reports for its last
+element, found by walking the children's `agent-shell-ui-state'
+intervals forward from FROM instead of resolving each child's block
+range.  FROM is the group header block's end, where the children start
+\(a header is labels-only, so its block ends before the separator
+preceding the first child).
+
+Callers needing only that one position use this: enumerating costs a
+block walk per child, and runs on every insertion and on every update
+under a collapsed group (issue #757)."
+  (save-mark-and-excursion
+    (goto-char from)
+    (let ((end from))
+      (catch 'done
+        (while t
+          (skip-chars-forward " \t\n")
+          (when (eobp)
+            (throw 'done nil))
+          (unless (equal (map-elt (get-text-property (point) 'agent-shell-ui-state)
+                                  :group-id)
+                         group-qualified-id)
+            (throw 'done nil))
+          ;; Step over this member's state run.  A non-advancing change
+          ;; position would spin forever, so stop on one.
+          (let ((next (next-single-property-change (point) 'agent-shell-ui-state
+                                                   nil (point-max))))
+            (unless (> next (point))
+              (throw 'done nil))
+            (goto-char next)
+            (setq end next))))
+      (unless (= end from)
+        end))))
+
 (cl-defun agent-shell-ui--group-child-region (&key group-qualified-id)
   "Return (:start :end) spanning group GROUP-QUALIFIED-ID's members, or nil.
 Spans from just after the header to the end of the last member."
   (when-let* ((header (agent-shell-ui--group-header-range group-qualified-id))
-              (children (agent-shell-ui--group-children :group-qualified-id group-qualified-id)))
+              (end (agent-shell-ui--group-children-end group-qualified-id
+                                                      (map-elt header :end))))
     (list (cons :start (map-elt header :end))
-          (cons :end (map-elt (car (last children)) :end)))))
+          (cons :end end))))
 
 (cl-defun agent-shell-ui--group-insertion-point (&key group-qualified-id)
   "Return the buffer position for a new member of group GROUP-QUALIFIED-ID.
 After the current last member, or just after the header when empty."
   (when-let* ((header (agent-shell-ui--group-header-range group-qualified-id)))
-    (if-let* ((children (agent-shell-ui--group-children :group-qualified-id group-qualified-id)))
-        (map-elt (car (last children)) :end)
-      (map-elt header :end))))
+    (or (agent-shell-ui--group-children-end group-qualified-id
+                                           (map-elt header :end))
+        (map-elt header :end))))
 
 (cl-defun agent-shell-ui--insert-group-header (&key namespace-id group-id group-label (expanded t) navigation)
   "Insert a header for NAMESPACE-ID/GROUP-ID unless one already exists.

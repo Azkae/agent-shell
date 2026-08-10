@@ -575,6 +575,33 @@ separators stayed hidden, collapsing members onto the folded header line."
       ;; leading char), so member content can't leak onto the header line.
       (should (get-text-property (1+ (map-elt c :start)) 'invisible)))))
 
+(ert-deftest agent-shell-ui-group-children-end-matches-enumeration-test ()
+  "`--group-children-end' agrees with enumerating members, and stops at non-members.
+It replaces `--group-children' where only the last member's end is
+needed, so the two must resolve the same position."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (dolist (m '("m1" "m2" "m3"))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :namespace-id "ns" :block-id m :group-id "grp" :group-label "T"
+        :label-left "run" :label-right m :body "output")
+       :navigation 'always))
+    ;; A block after the group, so the run has something to stop at.
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model
+      :namespace-id "ns" :block-id "after" :label-left "After")
+     :navigation 'always)
+    (let ((header (agent-shell-ui--group-header-range "ns-grp"))
+          (children (agent-shell-ui--group-children :group-qualified-id "ns-grp")))
+      (should (equal '("ns-m1" "ns-m2" "ns-m3")
+                     (mapcar (lambda (c) (map-elt c :qualified-id)) children)))
+      (should (equal (map-elt (car (last children)) :end)
+                     (agent-shell-ui--group-children-end "ns-grp"
+                                                        (map-elt header :end))))
+      ;; Empty group: nil, so callers fall back to the header's end.
+      (should-not (agent-shell-ui--group-children-end "ns-grp" (point-max))))))
+
 (ert-deftest agent-shell-ui-group-navigation-skips-collapsed-members-test ()
   "Forward navigation steps into visible members but skips folded ones."
   (cl-flet ((walk ()
