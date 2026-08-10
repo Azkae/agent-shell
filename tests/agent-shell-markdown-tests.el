@@ -756,6 +756,32 @@ print(\"hi\")
 
 " (agent-shell-markdown-source-block))))))
 
+(ert-deftest agent-shell-markdown-highlight-code-delays-mode-hooks-locally ()
+  "Highlighting code should not delay mode hooks in another buffer."
+  (with-temp-buffer
+    (let ((delay-mode-hooks nil)
+          (observer (current-buffer))
+          highlighted-mode-hook-ran
+          observer-hook-ran)
+      (add-hook 'agent-shell-markdown-tests-observer-hook
+                (lambda () (setq observer-hook-ran t)) nil t)
+      (cl-letf (((symbol-function 'agent-shell-markdown-tests-mode)
+                 (lambda ()
+                   (kill-all-local-variables)
+                   (add-hook 'agent-shell-markdown-tests-mode-hook
+                             (lambda ()
+                               (setq highlighted-mode-hook-ran t))
+                             nil t)
+                   (with-current-buffer observer
+                     (run-mode-hooks
+                      'agent-shell-markdown-tests-observer-hook))
+                   (run-mode-hooks
+                    'agent-shell-markdown-tests-mode-hook))))
+        (agent-shell-markdown--highlight-code
+         "" "agent-shell-markdown-tests"))
+      (should-not highlighted-mode-hook-ran)
+      (should observer-hook-ran))))
+
 (ert-deftest agent-shell-markdown-convert-source-block-body-tagged ()
   ;; Body chars carry `agent-shell-markdown-frozen t' so subsequent calls
   ;; treat them as an avoid-range (streaming-safe).  Rendered output

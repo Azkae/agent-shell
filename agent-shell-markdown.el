@@ -3240,10 +3240,10 @@ unchanged."
             ((fboundp mode)))
       (with-temp-buffer
         (insert code)
-        (let ((inhibit-message t)
-              (delay-mode-hooks t))
-          (funcall mode)
-          (font-lock-ensure))
+        (let ((inhibit-message t))
+          (delay-mode-hooks
+            (funcall mode)
+            (font-lock-ensure)))
         (buffer-string))
     code))
 
