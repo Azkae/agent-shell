@@ -4252,7 +4252,7 @@ agent activity; consecutive user chunks stay in the same turn."
       (agent-shell--append-restore-notification state notif))
     (should (= 1 (length (agent-shell-tests--pending-restore-prompt-turns state))))))
 
-(defun agent-shell-tests--render-pending-restore-with-last-entry (last-entry-type)
+(cl-defun agent-shell-tests--render-pending-restore (&key last-entry-type typed-input undo)
   "Restore a single replayed turn ending in LAST-ENTRY-TYPE.
 
 Drives `agent-shell--render-pending-restore' as a `session/load' whose
@@ -4261,10 +4261,14 @@ to insert that turn's text and leave `:last-entry-type' at
 LAST-ENTRY-TYPE, mimicking what the real notification dispatch leaves
 behind.
 
+TYPED-INPUT is type-ahead entered at the early prompt before the load
+completes.  UNDO undoes once after the replay settles.
+
 Returns the resulting buffer string, with the live prompt trailing."
   (let ((fake-process (start-process "fake-agent" nil "cat")))
     (unwind-protect
         (with-temp-buffer
+          (buffer-enable-undo)
           (set-process-buffer fake-process (current-buffer))
           (let ((state (list (cons :buffer (current-buffer))
                              (cons :active-requests nil)
@@ -4287,13 +4291,23 @@ Returns the resulting buffer string, with the live prompt trailing."
                          (insert "Claude> replayed")
                          (map-put! state :last-entry-type last-entry-type))))
               ;; A live prompt awaiting input, as left by shell-maker
-              ;; before the load completes.  Its start marker has
-              ;; insertion type nil so replayed history lands above it.
+              ;; before the load completes.  Both markers have insertion
+              ;; type nil (as `shell-maker--output-filter' leaves them):
+              ;; replayed history lands above the start marker and
+              ;; type-ahead lands after the end marker.
               (let ((prompt-start (copy-marker (point) nil)))
                 (insert "Claude> ")
                 (setq-local comint-last-prompt
-                            (cons prompt-start (copy-marker (point) t))))
-              (agent-shell--render-pending-restore state))
+                            (cons prompt-start (copy-marker (point) nil))))
+              (when typed-input
+                (insert typed-input)
+                (undo-boundary))
+              (agent-shell--render-pending-restore state)
+              (when undo
+                ;; Stands in for the command loop, which boundaries the
+                ;; undo list before running the undo command.
+                (undo-boundary)
+                (undo)))
             (buffer-substring-no-properties (point-min) (point-max))))
       (when (process-live-p fake-process)
         (delete-process fake-process)))))
@@ -4305,14 +4319,30 @@ interrupted request, whose final entry is the interruption notice) left
 the turn open.  The live prompt then rendered on the same line as the
 restored user text, and the next unrelated notification emitted the
 end-of-prompt marker unnarrowed, landing it after the live prompt."
-  (should (equal (agent-shell-tests--render-pending-restore-with-last-entry
-                  "user_message_chunk")
+  (should (equal (agent-shell-tests--render-pending-restore
+                  :last-entry-type "user_message_chunk")
                  (concat "Claude> replayed<shell-maker-end-of-prompt>\n\n"
                          "Claude> ")))
   ;; A replay ending on agent output was already closed while replaying,
   ;; so nothing is appended.
-  (should (equal (agent-shell-tests--render-pending-restore-with-last-entry
-                  "agent_message_chunk")
+  (should (equal (agent-shell-tests--render-pending-restore
+                  :last-entry-type "agent_message_chunk")
+                 "Claude> replayedClaude> ")))
+
+(ert-deftest agent-shell--render-pending-restore-undoes-type-ahead-only-test ()
+  "Test undo after a restore removes type-ahead and nothing else.
+Regression: replay lands above the early prompt, pushing type-ahead
+down without adjusting the undo entries recorded for it (Emacs doesn't
+adjust the absolute positions they hold).  Undo deleted a stretch of
+restored history instead of what was typed."
+  (should (equal (agent-shell-tests--render-pending-restore
+                  :last-entry-type "agent_message_chunk"
+                  :typed-input "hi there")
+                 "Claude> replayedClaude> hi there"))
+  (should (equal (agent-shell-tests--render-pending-restore
+                  :last-entry-type "agent_message_chunk"
+                  :typed-input "hi there"
+                  :undo t)
                  "Claude> replayedClaude> ")))
 
 (ert-deftest agent-shell--use-session-load-p-modes ()

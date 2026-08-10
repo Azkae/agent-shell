@@ -4643,6 +4643,32 @@ prompt).  Output carries a `field' of `output'; typed input does not."
          (or (= end max)
              (not (text-property-any end max 'field 'output))))))
 
+(defun agent-shell--reset-undo-history ()
+  "Reset `buffer-undo-list' to undo the active prompt's input only.
+
+Undo entries hold absolute buffer positions, which Emacs does not adjust
+when text lands elsewhere in the buffer.  Rendering above the active
+prompt (a replayed session or a notification arriving out of turn)
+pushes unsubmitted input down, leaving every entry recorded for it
+pointing at the wrong text: undoing would delete a stretch of agent
+output instead of what was typed.
+
+Everything but the active prompt is either agent output or input frozen
+on submission, so drop the history and re-record the input area as a
+single insertion.  With `Claude> hello' ending the buffer and `hello'
+spanning 30 to 35, leaves `buffer-undo-list' as ((30 . 35)).  Leaves it
+empty when no input is pending.
+
+No-op where undo is disabled, either by the buffer (`buffer-disable-undo')
+or by a caller rendering under a `buffer-undo-list' bound to t."
+  (unless (eq buffer-undo-list t)
+    (setq buffer-undo-list
+          (when-let* ((prompt comint-last-prompt)
+                      ((agent-shell--live-input-prompt-p prompt))
+                      (input-start (marker-position (cdr prompt)))
+                      ((< input-start (point-max))))
+            (list (cons input-start (point-max)))))))
+
 (cl-defun agent-shell--update-bootstrapping-fragment (&rest args)
   "Update a `bootstrapping'-namespace fragment above the shell prompt.
 
@@ -4884,7 +4910,13 @@ with GROUP-EXPANDED as the group's initial fold state."
         (setq mark-active saved-mark-active)
         (when window
           (set-window-start window saved-window-start t)))
-      (set-marker saved-point nil))))
+      (set-marker saved-point nil))
+    ;; Rendering above the prompt pushed any unsubmitted input down, so the
+    ;; undo entries recorded for it now point at the shifted-down text.
+    ;; Runs outside the `buffer-undo-list' binding above, which would
+    ;; otherwise swallow the reset.
+    (when above-last-prompt
+      (agent-shell--reset-undo-history))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
   "Update plain text entry in the shell buffer.
@@ -6991,7 +7023,10 @@ pending-restore state once replay completes."
       (map-put! state :active-requests
                 (cons (list (cons :method "session/load")) saved-active-requests))
       (unwind-protect
-          (let ((prompt-start (and comint-last-prompt
+          ;; A replay renders history the user never typed, so keep all of
+          ;; it out of undo history (see `agent-shell--reset-undo-history').
+          (let ((buffer-undo-list t)
+                (prompt-start (and comint-last-prompt
                                    (marker-position (car comint-last-prompt))
                                    (agent-shell--live-input-prompt-p comint-last-prompt)
                                    (car comint-last-prompt))))
@@ -7063,6 +7098,9 @@ pending-restore state once replay completes."
       ;; the agent and conflating the prompt/input faces.
       (when-let* ((process (get-buffer-process (current-buffer))))
         (set-marker (process-mark process) (point-max)))
+      ;; The restored history landed above the early prompt, shifting any
+      ;; type-ahead down along with the undo entries recorded for it.
+      (agent-shell--reset-undo-history)
       ;; The replayed conversation, including the live prompt, is now
       ;; fully laid down; notify observers that the shell has settled.
       (agent-shell--emit-event :event 'session-restored))))
