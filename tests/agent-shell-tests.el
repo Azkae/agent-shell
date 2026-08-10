@@ -1041,6 +1041,40 @@ The fallback triggers when `agent-shell--build-content-blocks' fails."
         (should (equal (map-elt (map-elt data :usage) :total-tokens)
                        1500))))))
 
+(ert-deftest agent-shell--send-command-emits-input-submitted-with-prompt-test ()
+  "Test `input-submitted' carries the expanded prompt text."
+  (let ((received-events nil)
+        (agent-shell--state (list (cons :buffer (current-buffer))
+                                  (cons :event-subscriptions nil)
+                                  (cons :client 'test-client)
+                                  (cons :session (list (cons :id "test-session") (cons :title nil)))
+                                  (cons :last-entry-type nil)
+                                  (cons :tool-calls nil)
+                                  (cons :idle-timer nil)))
+        (agent-shell-show-busy-indicator nil))
+    (cl-letf (((symbol-function 'agent-shell--state)
+               (lambda () agent-shell--state))
+              ((symbol-function 'agent-shell--send-request)
+               (lambda (&rest _)))
+              ((symbol-function 'shell-maker-finish-output)
+               (lambda (&rest _))))
+      (agent-shell-subscribe-to
+       :shell-buffer (current-buffer)
+       :event 'input-submitted
+       :on-event (lambda (event)
+                   (push event received-events)))
+      (agent-shell--send-command
+       :prompt (concat "Explain "
+                       (propertize "region.el:1-10"
+                                   'agent-shell-region-id "region-1"
+                                   'agent-shell-region-text "(defun hello ())"))
+       :shell-buffer (current-buffer))
+      (should (= (length received-events) 1))
+      (let ((prompt (map-nested-elt (car received-events) '(:data :prompt))))
+        ;; Truncated regions are expanded, and no text properties leak out.
+        (should (equal prompt "Explain (defun hello ())"))
+        (should-not (text-properties-at 0 prompt))))))
+
 (ert-deftest agent-shell--send-command-preserves-viewport-edit-draft-test ()
   "Sending a command must not disturb an in-progress viewport edit draft.
 

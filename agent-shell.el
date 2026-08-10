@@ -5928,6 +5928,8 @@ Session events:
     :data contains :title
   `session-restored'      - Reloaded session fully replayed and settled
   `input-submitted'       - User submitted input to the agent
+    :data contains :prompt (the text sent to the agent, with any
+    truncated regions expanded)
   `idle'                  - Agent idle for variable `agent-shell-idle-timeout'
     seconds :data contains :idle-event and :buffer
 
@@ -7791,7 +7793,8 @@ Each marked span is replaced by its `agent-shell-region-text' value."
        :heartbeat (map-elt agent-shell--state :heartbeat)))
 
     (agent-shell--cancel-idle-timer)
-    (agent-shell--emit-event :event 'input-submitted)
+    (agent-shell--emit-event :event 'input-submitted
+                             :data (list (cons :prompt (substring-no-properties expanded-prompt))))
 
     (map-put! agent-shell--state :last-entry-type nil)
 
