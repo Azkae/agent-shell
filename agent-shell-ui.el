@@ -177,6 +177,7 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                          (map-elt model :expanded)
                                        expanded))
                  (block-start nil)
+                 (body-range nil)
                  (padding-start nil)
                  (padding-end nil)
                  (group-header nil)
@@ -261,12 +262,17 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                       (cond
                        ;; Append to existing body — preserves rendered content.
                        ((and append existing-body-range)
-                        (agent-shell-ui--append-body
-                         existing-body-range new-body qualified-id collapsed))
+                        (setq body-range
+                              (or (agent-shell-ui--append-body
+                                   existing-body-range new-body qualified-id collapsed)
+                                  ;; Empty chunk wrote nothing, so the body
+                                  ;; range is the one we already have.
+                                  existing-body-range)))
                        ;; Replace existing body in place.
                        (existing-body-range
-                        (agent-shell-ui--replace-body
-                         existing-body-range new-body qualified-id collapsed))
+                        (setq body-range
+                              (agent-shell-ui--replace-body
+                               existing-body-range new-body qualified-id collapsed)))
                        ;; Body arriving for the first time on a labels-only
                        ;; block — fall back to delete-and-regenerate so the
                        ;; indicator transitions from placeholder to triangle
@@ -341,19 +347,28 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                          (list (cons :start block-start)
                                                (cons :end (marker-position block-end)))
                                        (agent-shell-ui--block-range :position block-start))))
+              ;; Sections the update didn't touch are left out rather than
+              ;; searched for: each search walks the block's accumulated
+              ;; intervals, so on a streamed body that cost grew per chunk
+              ;; (issue #757).  A body written above reports the range it
+              ;; wrote; only a regenerated block has to be searched.
               (list (cons :block block-range)
-                    (cons :body (agent-shell-ui--nearest-range-matching-property
-                                 :property 'agent-shell-ui-section :value 'body
-                                 :from (map-elt block-range :start)
-                                 :to (map-elt block-range :end)))
-                    (cons :label-left (agent-shell-ui--nearest-range-matching-property
-                                       :property 'agent-shell-ui-section :value 'label-left
+                    (cons :body (or body-range
+                                    (when new-body
+                                      (agent-shell-ui--nearest-range-matching-property
+                                       :property 'agent-shell-ui-section :value 'body
                                        :from (map-elt block-range :start)
-                                       :to (map-elt block-range :end)))
-                    (cons :label-right (agent-shell-ui--nearest-range-matching-property
-                                        :property 'agent-shell-ui-section :value 'label-right
-                                        :from (map-elt block-range :start)
-                                        :to (map-elt block-range :end)))
+                                       :to (map-elt block-range :end)))))
+                    (cons :label-left (when new-label-left
+                                        (agent-shell-ui--nearest-range-matching-property
+                                         :property 'agent-shell-ui-section :value 'label-left
+                                         :from (map-elt block-range :start)
+                                         :to (map-elt block-range :end))))
+                    (cons :label-right (when new-label-right
+                                         (agent-shell-ui--nearest-range-matching-property
+                                          :property 'agent-shell-ui-section :value 'label-right
+                                          :from (map-elt block-range :start)
+                                          :to (map-elt block-range :end))))
                     (cons :padding (when (and padding-start padding-end)
                                      (list (cons :start padding-start)
                                            (cons :end padding-end))))
@@ -473,7 +488,12 @@ state, because label-less fragments don't follow `state :collapsed'
           (agent-shell-ui--apply-body-section-properties
            insert-start insert-end qualified-id state body-invisible)
           (agent-shell-ui--apply-trailing-whitespace-invisible
-           body-start insert-end))))))
+           body-start insert-end)
+          ;; The body grew by exactly what we inserted, so the caller can
+          ;; take the new range from here instead of searching the block's
+          ;; accumulated intervals for it again (issue #757).
+          (list (cons :start body-start)
+                (cons :end insert-end)))))))
 
 (defun agent-shell-ui--replace-body (body-range new-body qualified-id _collapsed)
   "Replace the body region described by BODY-RANGE with NEW-BODY.
@@ -506,7 +526,12 @@ matches the body's current visibility, not caller-supplied state."
             (agent-shell-ui--apply-body-section-properties
              insert-start insert-end qualified-id state body-invisible)
             (agent-shell-ui--apply-trailing-whitespace-invisible
-             insert-start insert-end)))))))
+             insert-start insert-end)))))
+    ;; Point sits at the end of what we wrote (or at BODY-START when the
+    ;; new body was empty), so the caller can take the new range from here
+    ;; rather than searching the block for it again (issue #757).
+    (list (cons :start body-start)
+          (cons :end (point)))))
 
 (defun agent-shell-ui--label-rendered-p (text section start end)
   "Return non-nil when the region START to END already renders TEXT.
