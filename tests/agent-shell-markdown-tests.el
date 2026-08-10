@@ -1222,6 +1222,33 @@ Outro"))))
       (should (equal (substring-no-properties (buffer-string))
                      "• A\n• B\n• C\n")))))
 
+(ert-deftest agent-shell-markdown-list-joins-blank-separated-items-when-streamed ()
+  ;; Same as above, but arriving a few chars at a time, which is what
+  ;; `agent-shell-markdown--whitespace-normalization-start' has to keep
+  ;; working: a gap not yet collapsed looks just like a block boundary,
+  ;; so a look-back stopping at the first one starts inside the list and
+  ;; frames the newest item as its own block, splitting the list.  The
+  ;; two-blank-line source checks that a gap of several lines still
+  ;; counts as one boundary.
+  (let ((agent-shell-markdown-list-bullets '("•")))
+    (dolist (source '("- A\n\n- B\n\n- C\n"
+                      "- A\n\n\n- B\n\n\n- C\n"
+                      "intro\n\n- A\n\n- B\n\n- C\ntail\n"))
+      (dolist (chunk-size '(1 3 7))
+        (with-temp-buffer
+          (let ((i 0))
+            (while (< i (length source))
+              (goto-char (point-max))
+              (insert (substring source i
+                                 (min (length source) (+ i chunk-size))))
+              (setq i (+ i chunk-size))
+              (agent-shell-markdown-replace-markup)))
+          (should (equal (substring-no-properties (buffer-string))
+                         (with-temp-buffer
+                           (insert source)
+                           (agent-shell-markdown-replace-markup)
+                           (substring-no-properties (buffer-string))))))))))
+
 (ert-deftest agent-shell-markdown-list-joins-bold-numbered-items ()
   ;; Bold-prefixed points like `**1. X**' become ordered list items once
   ;; the bold markup is stripped, so a blank line the author left between

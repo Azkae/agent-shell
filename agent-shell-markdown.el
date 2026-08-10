@@ -453,13 +453,17 @@ body un-fontified."
       ;; Normalize list spacing before framing: join items the source
       ;; separated with blank lines so a list always renders as one tidy
       ;; group.  Widened, like the framing below, so it sees the whole
-      ;; list across the watermark.
-      (agent-shell-markdown--collapse-list-blank-lines)
-      ;; Frame rendered blocks with a blank line where they butt against
-      ;; prose.  Runs outside the watermark narrow, since a block's lower
-      ;; boundary sits behind the watermark by the time its successor
-      ;; streams in.
-      (agent-shell-markdown--pad-rendered-blocks)
+      ;; list across the watermark.  Both start at a block boundary near
+      ;; the watermark rather than `point-min', which cost the whole
+      ;; accumulated body per chunk (issue #757).
+      (let ((normalization-start
+             (agent-shell-markdown--whitespace-normalization-start watermark)))
+        (agent-shell-markdown--collapse-list-blank-lines normalization-start)
+        ;; Frame rendered blocks with a blank line where they butt against
+        ;; prose.  Runs outside the watermark narrow, since a block's lower
+        ;; boundary sits behind the watermark by the time its successor
+        ;; streams in.
+        (agent-shell-markdown--pad-rendered-blocks normalization-start))
       (agent-shell-markdown--update-watermark
        :source-blocks source-blocks
        :external-candidates (seq-keep (lambda (result) (map-elt result :watermark))
@@ -1729,8 +1733,103 @@ in."
                                      (line-beginning-position))
                      'agent-shell-markdown-list-rendered))
 
-(defun agent-shell-markdown--collapse-list-blank-lines ()
+(defun agent-shell-markdown--whitespace-normalization-start (watermark)
+  "Return where whitespace normalization may start scanning for WATERMARK.
+
+Normalization is the pair of passes adjusting the blank lines between
+rendered blocks: `--collapse-list-blank-lines' removes the gaps inside a
+list, and `--pad-rendered-blocks' adds one where a block butts against
+prose.
+
+Backs up two block boundaries from WATERMARK, giving up after 50 lines.
+Either way, an unsatisfied look-back returns `point-min'.  See
+`agent-shell-markdown--whitespace-normalization-boundary-p' for what
+bounds a block.
+
+Both passes run widened, so they otherwise scan from `point-min',
+costing the whole accumulated body on every streamed chunk (issue
+#757).  Content
+further above is settled: framing is idempotent, and the passes rewrite
+everything below where they start.
+
+Boundaries are untagged blank lines because no rendered block spans one,
+so `--pad-regions' cannot mistake the start for the middle of a block (a
+fenced block's own blank lines are tagged, and are skipped past).
+Starting on the boundary rather than below it also leaves
+`--frame-block' a real line above to inspect.  A run of blank lines is
+one boundary, not one per line, so a list spaced with several blank
+lines still looks back past its previous item.
+
+Two boundaries, not one: a gap between list items that has not been
+collapsed yet is itself an untagged blank line, so the first boundary
+above the watermark can be that gap, which sits inside the list.
+Starting there, `--pad-regions' sees only the newest item, frames it as
+a block of its own, and inserts a blank line splitting the list in two.
+Two clears that gap and lands above the whole block, and two is enough
+because only the newest gap is ever left un-collapsed.
+
+The 50-line cap is a performance guard: a body holding no boundary at
+all (an unbroken list, one long line) would otherwise pay a full
+backward walk per chunk and then scan from `point-min' anyway, which is
+slower than not looking back.
+
+For example, with a list streaming in below prose (`|' marks the
+watermark, on the last line):
+
+  Intro line
+             <- 2nd boundary, returned
+  • A
+  • B
+             <- 1st boundary, the gap above the newest item
+  |- C"
+  (save-excursion
+    (goto-char (min watermark (point-max)))
+    (forward-line 0)
+    (let ((remaining 2)
+          (budget 50)
+          (boundary (point-min)))
+      (while (and (> (point) (point-min))
+                  (> remaining 0)
+                  (> budget 0))
+        (setq budget (1- budget))
+        (if (not (agent-shell-markdown--whitespace-normalization-boundary-p
+                  (point)))
+            (forward-line -1)
+          (setq remaining (1- remaining))
+          ;; Climb to the run's first line: a gap of several blank lines
+          ;; is one boundary, and scanning has to start above the whole
+          ;; gap rather than partway into it.
+          (while (and (> (point) (point-min))
+                      (agent-shell-markdown--whitespace-normalization-boundary-p
+                       (line-beginning-position 0)))
+            (forward-line -1))
+          (setq boundary (point))
+          (when (> remaining 0)
+            (forward-line -1))))
+      ;; Fewer boundaries above than asked for, or the budget ran out: the
+      ;; look-back is not satisfied, so scan from the top rather than from a
+      ;; boundary that may sit below content still due to settle.
+      (if (> remaining 0)
+          (point-min)
+        boundary))))
+
+(defun agent-shell-markdown--whitespace-normalization-boundary-p (pos)
+  "Return non-nil when the line holding POS bounds a rendered block.
+That is, a blank line carrying none of the tags
+`agent-shell-markdown--pad-rendered-blocks' frames, so a fenced block's
+own blank lines are not boundaries.  See
+`agent-shell-markdown--whitespace-normalization-start'."
+  (and (agent-shell-markdown--blank-line-at-p pos)
+       (not (seq-some (lambda (property)
+                        (get-text-property pos property))
+                      '(agent-shell-markdown-source-block-rendered
+                        agent-shell-markdown-table-source
+                        agent-shell-markdown-list-rendered)))))
+
+(defun agent-shell-markdown--collapse-list-blank-lines (&optional start)
   "Delete blank lines between two rendered list items so a list is tight.
+
+Scans from START, or `point-min' when nil.
 
 A list renders as one group no matter how the source spaced its
 items: any blank run sitting directly between two
@@ -1753,7 +1852,7 @@ becomes:
   • Two"
   (let ((inhibit-field-text-motion t))
     (save-excursion
-      (goto-char (point-min))
+      (goto-char (or start (point-min)))
       (while (not (eobp))
         (if (agent-shell-markdown--blank-line-at-p (point))
             ;; At a blank run: find its extent, then delete it only when a
@@ -1871,16 +1970,18 @@ one partway through the first line."
                                 (point-max))))))
     end))
 
-(defun agent-shell-markdown--pad-regions (property continues-p)
+(defun agent-shell-markdown--pad-regions (property continues-p &optional start)
   "Frame every block of PROPERTY-tagged lines with blank lines.
 CONTINUES-P is forwarded to `agent-shell-markdown--frame-block' to
 gate the bottom gap.  A block spans consecutive PROPERTY lines (see
 `agent-shell-markdown--block-end'), so a multi-line construct is
 framed as a whole rather than split with a blank stranded inside.
+Scans from START, or `point-min' when nil; START must sit outside a
+tagged block, or its remainder would be framed as if it were one.
 See `agent-shell-markdown--pad-rendered-blocks'."
   (save-excursion
-    (goto-char (point-min))
-    (let ((pos (point-min)))
+    (let ((pos (or start (point-min))))
+      (goto-char pos)
       (while (< pos (point-max))
         (if (get-text-property pos property)
             (let* ((end (agent-shell-markdown--block-end pos property))
@@ -1894,8 +1995,10 @@ See `agent-shell-markdown--pad-rendered-blocks'."
                          pos property nil (point-max))
                         (point-max))))))))
 
-(defun agent-shell-markdown--pad-rendered-blocks ()
+(defun agent-shell-markdown--pad-rendered-blocks (&optional start)
   "Frame each rendered block with a blank line where it butts against prose.
+
+Scans from START, or `point-min' when nil.
 
 Rendered source blocks (tagged
 `agent-shell-markdown-source-block-rendered'), tables (tagged
@@ -1928,16 +2031,18 @@ gains a blank line above and below it:
   ;; don't stop at agent-shell's `field' boundaries between output lines.
   (let ((inhibit-field-text-motion t))
     (agent-shell-markdown--pad-regions
-     'agent-shell-markdown-source-block-rendered nil)
+     'agent-shell-markdown-source-block-rendered nil start)
     (agent-shell-markdown--pad-regions
      'agent-shell-markdown-table-source
      (lambda () (looking-at-p
-                 agent-shell-markdown--table-pending-line-regexp)))
+                 agent-shell-markdown--table-pending-line-regexp))
+     start)
     (agent-shell-markdown--pad-regions
      'agent-shell-markdown-list-rendered
      (lambda ()
        (or (looking-at-p agent-shell-markdown--list-item-pending-regexp)
-           (looking-at-p agent-shell-markdown--list-item-frontier-regexp))))))
+           (looking-at-p agent-shell-markdown--list-item-frontier-regexp)))
+     start)))
 
 (cl-defun agent-shell-markdown--find-tables (&key avoid-ranges)
   "Return tables to (re-)render in current buffer.
