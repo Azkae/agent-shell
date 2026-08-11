@@ -80,7 +80,7 @@ Carries `shell-maker--marker', as shell-maker's real marker does."
     (let ((me (agent-shell-chat-mode-tests--me-overlays))
           (agent (agent-shell-chat-mode-tests--agent-overlays)))
       (should (= 1 (length me)))
-      (should (string-match-p "Me" (overlay-get (car me) 'display)))
+      (should (string-match-p "Me" (overlay-get (car me) 'before-string)))
       (should (= 1 (length agent)))
       (should (string-match-p "Claude" (overlay-get (car agent) 'before-string))))))
 
@@ -91,11 +91,78 @@ Carries `shell-maker--marker', as shell-maker's real marker does."
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel)
       (should (string-match-p
-               "Me" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'display))))
+               "Me" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'before-string))))
     (let ((agent-shell-prompt-bar-mode t))
       (agent-shell-chat--relabel)
       (should (equal
-               "" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'display))))))
+               "" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'before-string))))))
+
+(ert-deftest agent-shell-chat-agent-keeps-input-terminator-test ()
+  "The agent overlay leaves the input's line terminator visible.
+Hiding that newline with `display' would merge the input line into the
+response for line motion such as `end-of-visual-line'."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello")
+    (let ((terminator (point)))
+      (insert "\n")
+      (agent-shell-chat-mode-tests--marker)
+      (insert "reply\n")
+      (agent-shell-chat--relabel)
+      (let ((agent (car (agent-shell-chat-mode-tests--agent-overlays))))
+        ;; The overlay begins past the terminator, so it is not covered.
+        (should (> (overlay-start agent) terminator))
+        (should-not (get-char-property terminator 'display))))))
+
+(ert-deftest agent-shell-chat-agent-keeps-terminator-restored-test ()
+  "A restored turn keeps the input terminator that follows the marker.
+Restored input abuts the marker (\"input<marker>\\n\") rather than
+preceding it (\"input\\n<marker>\"); the terminator after the marker must
+stay visible so line motion does not merge the input into the response."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "restored input?")
+    (agent-shell-chat-mode-tests--marker)
+    (let ((terminator (point)))
+      (insert "\n\nreply\n")
+      (agent-shell-chat--relabel)
+      (let ((agent (car (agent-shell-chat-mode-tests--agent-overlays))))
+        ;; The overlay begins past the terminator, leaving it visible.
+        (should (> (overlay-start agent) terminator))
+        (should-not (get-char-property terminator 'display))))))
+
+(ert-deftest agent-shell-chat-me-keeps-response-terminator-test ()
+  "The `Me' overlay after a response keeps the response's last line terminator.
+Hiding it would merge the last output line into the label for line motion
+such as `end-of-visual-line'."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "the reply")
+    (let ((terminator (point)))
+      (insert "\n\n")
+      (agent-shell-chat-mode-tests--prompt "Claude> ")
+      (agent-shell-chat--relabel)
+      ;; The live prompt's overlay begins past the response terminator.
+      (let ((me (car (last (agent-shell-chat-mode-tests--me-overlays)))))
+        (should (> (overlay-start me) terminator))
+        (should-not (get-char-property terminator 'display))))))
+
+(ert-deftest agent-shell-chat-label-is-before-string-test ()
+  "The `Me' label renders as a `before-string' with an empty `display'.
+Like the agent label, this keeps the cursor from landing on it during
+vertical motion (a `display' string is backed by buffer positions)."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "reply\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (agent-shell-chat--relabel)
+    (dolist (me (agent-shell-chat-mode-tests--me-overlays))
+      (should (equal "" (overlay-get me 'display)))
+      (should (string-match-p "Me" (overlay-get me 'before-string))))))
 
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
@@ -130,7 +197,7 @@ Carries `shell-maker--marker', as shell-maker's real marker does."
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel)
-      (let ((display (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'display)))
+      (let ((display (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'before-string)))
         (should (string-match-p "❯" display))
         ;; The marker must not inherit the covered prompt face.
         (should (eq 'default
@@ -146,7 +213,7 @@ so it does not vanish mid-type when a relabel runs."
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel))
     (let ((me (car (agent-shell-chat-mode-tests--me-overlays))))
-      (should (string-match-p "❯" (overlay-get me 'display)))
+      (should (string-match-p "❯" (overlay-get me 'before-string)))
       ;; No indent overlay claims the live prompt's in-progress input.
       (should-not (seq-filter (lambda (overlay)
                                 (eq (overlay-get overlay 'category)
@@ -183,10 +250,10 @@ It claims no input and gets no indent overlay; only the live prompt shows `❯'.
     (let ((me (agent-shell-chat-mode-tests--me-overlays)))
       (should (= 2 (length me)))
       ;; Stale empty submission: `Me', no `❯'.
-      (should (string-match-p "Me" (overlay-get (nth 0 me) 'display)))
-      (should-not (string-match-p "❯" (overlay-get (nth 0 me) 'display)))
+      (should (string-match-p "Me" (overlay-get (nth 0 me) 'before-string)))
+      (should-not (string-match-p "❯" (overlay-get (nth 0 me) 'before-string)))
       ;; Live prompt: `Me' and `❯'.
-      (should (string-match-p "❯" (overlay-get (nth 1 me) 'display)))
+      (should (string-match-p "❯" (overlay-get (nth 1 me) 'before-string)))
       ;; Neither empty prompt claims input.
       (should-not (seq-filter (lambda (overlay)
                                 (eq (overlay-get overlay 'category)
@@ -206,8 +273,8 @@ It claims no input and gets no indent overlay; only the live prompt shows `❯'.
       ;; The stacked labels drop their leading pad (the previous label's
       ;; trailing pad already gives the one blank line), so they do not begin
       ;; with a newline.
-      (should (string-prefix-p " Me" (overlay-get (nth 1 me) 'display)))
-      (should (string-prefix-p " Me" (overlay-get (nth 2 me) 'display))))))
+      (should (string-prefix-p " Me" (overlay-get (nth 1 me) 'before-string)))
+      (should (string-prefix-p " Me" (overlay-get (nth 2 me) 'before-string))))))
 
 (ert-deftest agent-shell-chat-empty-response-no-overlap-test ()
   "An empty agent response keeps the agent and `Me' overlays from overlapping.
@@ -224,7 +291,7 @@ The `Me' label drops its leading pad so one blank line separates them."
       ;; The agent overlay ends where the live `Me' overlay begins: no overlap.
       (should (<= (overlay-end agent) (overlay-start me)))
       ;; The `Me' label follows the marker directly, so no leading blank line.
-      (should (string-prefix-p " Me" (overlay-get me 'display))))))
+      (should (string-prefix-p " Me" (overlay-get me 'before-string))))))
 
 (ert-deftest agent-shell-chat-code-block-padding-preserved-test ()
   "A prompt after a code block panel keeps the panel's tinted padding.
