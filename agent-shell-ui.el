@@ -121,7 +121,7 @@ fragment."
   "Create a group-header model alist.
 
 A group header is a collapsible fragment with no body of its own; its
-members are separate fragments referencing it by qualified-id via
+children are separate fragments referencing it by qualified-id via
 `agent-shell-ui-make-fragment-model' GROUP-ID.  NAMESPACE-ID, BLOCK-ID,
 LABEL-LEFT, and LABEL-RIGHT render the header line.  EXPANDED sets the
 initial fold state.  v1 is two-level: a group may not itself be nested."
@@ -172,7 +172,7 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                  (new-label-left (map-elt model :label-left))
                  (new-label-right (map-elt model :label-right))
                  (new-body (map-elt model :body))
-                 (group-member-id (map-elt model :group-id))
+                 (group-id (map-elt model :group-id))
                  (effective-expanded (if (eq (map-elt model :kind) 'group)
                                          (map-elt model :expanded)
                                        expanded))
@@ -201,9 +201,9 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                  (existing-start (cond (cached (marker-position
                                                 (map-elt cached :start)))
                                        (match (prop-match-beginning match)))))
-            ;; Resolve group membership.  A NEW member materializes its
+            ;; Resolve the parent group.  A NEW child materializes its
             ;; header (auto-create) and routes into the group's region.  An
-            ;; EXISTING member keeps whatever group it already belongs to;
+            ;; EXISTING child keeps whatever group it already belongs to;
             ;; an update must never create a header or re-route, otherwise a
             ;; caller whose group-id advanced (e.g. a message streamed between
             ;; a tool call and its completion) would spawn an empty group.
@@ -218,10 +218,10 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                     (list (cons :group-qualified-id existing-group)
                                           (cons :group-indent
                                                 (or (map-elt state :group-indent) "  ")))))))
-             (group-member-id
+             (group-id
               (setq group-header (agent-shell-ui--insert-group-header
                                   :namespace-id namespace-id
-                                  :group-id group-member-id
+                                  :group-id group-id
                                   :group-label (map-elt model :group-label)
                                   :expanded (map-elt model :group-expanded)
                                   :navigation navigation))
@@ -320,8 +320,8 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                             (or new-label-right
                                                 (map-elt existing-labels :label-right)))
                                       (cons :body new-body)
-                                      ;; Preserve group membership + indent so
-                                      ;; the regenerated member stays nested.
+                                      ;; Preserve the parent group + indent so
+                                      ;; the regenerated child stays nested.
                                       (cons :group-qualified-id
                                             (map-elt model :group-qualified-id))
                                       (cons :group-indent
@@ -331,7 +331,7 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                           (agent-shell-ui--insert-fragment
                            final-model qualified-id (not collapsed) navigation))))))
                   (setq padding-end (or (marker-position block-end) (point)))))
-               ;; New group member, inserted into the group's region.  The
+               ;; New group child, inserted into the group's region.  The
                ;; group's trailing separator (after the header) already sits
                ;; below, so no trailing newlines are added here.
                ((map-elt model :group-qualified-id)
@@ -342,8 +342,8 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                 (setq block-start (point))
                 (agent-shell-ui--insert-fragment model qualified-id effective-expanded navigation)
                 ;; The group's trailing separator (the header's `\n\n', inserted
-                ;; once) now sits right after this last member; fold it into
-                ;; this member's padding so it is not stranded outside every
+                ;; once) now sits right after this last child; fold it into
+                ;; this child's padding so it is not stranded outside every
                 ;; block's range.
                 (skip-chars-forward "\n")
                 (setq padding-end (point)))
@@ -356,11 +356,11 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                 (agent-shell-ui--insert-fragment model qualified-id effective-expanded navigation)
                 (agent-shell-ui--insert-read-only "\n\n")
                 (setq padding-end (point)))))
-            ;; A collapsed group's members must stay hidden across updates.
-            ;; A member's own edit path (insert, or replace-label/body on an
-            ;; update) restores visibility from the member's own state, which
+            ;; A collapsed group's children must stay hidden across updates.
+            ;; A child's own edit path (insert, or replace-label/body on an
+            ;; update) restores visibility from the child's own state, which
             ;; would reveal it under a folded header; re-apply the group
-            ;; collapse so updates don't leak members onto the header line.
+            ;; collapse so updates don't leak children onto the header line.
             ;;
             ;; Skipped when the update only appended to an already hidden
             ;; body, which hides its own chars.  Re-applying then costs a
@@ -833,7 +833,7 @@ making that O(chunks so far) on every chunk (issue #757)."
 
 (defun agent-shell-ui--cached-group-header (group-qualified-id)
   "Return GROUP-QUALIFIED-ID's cached header range, or nil.
-Only a block recorded as a group header qualifies, so a member that
+Only a block recorded as a group header qualifies, so a child that
 happened to share the id could not be mistaken for one."
   (when-let* ((cached (agent-shell-ui--cached-block group-qualified-id))
               (start (marker-position (map-elt cached :start)))
@@ -849,7 +849,7 @@ happened to share the id could not be mistaken for one."
 Answered from `agent-shell-ui--block-cache' where possible, and the
 result of a search is recorded there.  The search starts at `point-min',
 so it costs whatever sits above the group, and a collapsed group looks
-its header up several times per member update: without the cache a
+its header up several times per child update: without the cache a
 turn's cost grew with everything already in the buffer (issue #757)."
   (or (agent-shell-ui--cached-group-header group-qualified-id)
       (when-let* ((match (save-mark-and-excursion
@@ -867,10 +867,10 @@ turn's cost grew with everything already in the buffer (issue #757)."
         range)))
 
 (cl-defun agent-shell-ui--group-children (&key group-qualified-id)
-  "Return ordered member block ranges of group GROUP-QUALIFIED-ID.
-Each element is (:qualified-id ID :start S :end E).  Members are the
+  "Return ordered child block ranges of group GROUP-QUALIFIED-ID.
+Each element is (:qualified-id ID :start S :end E).  Children are the
 fragments that follow the header contiguously and carry `:group-id'
-equal to GROUP-QUALIFIED-ID; the run stops at the first non-member."
+equal to GROUP-QUALIFIED-ID; the run stops at the first non-child."
   (when-let* ((header (agent-shell-ui--group-header-range group-qualified-id)))
     (save-mark-and-excursion
       (let ((children '())
@@ -884,15 +884,15 @@ equal to GROUP-QUALIFIED-ID; the run stops at the first non-member."
               (unless (and state (equal (map-elt state :group-id) group-qualified-id))
                 (throw 'done nil))
               (let ((block (agent-shell-ui--block-range :position (point))))
-                ;; POS advances only to the member's end, with nothing requiring
+                ;; POS advances only to the child's end, with nothing requiring
                 ;; that end to move forward.  A range ending at or behind POS
-                ;; re-examines the same member forever (consing on every pass),
+                ;; re-examines the same child forever (consing on every pass),
                 ;; and a nil BLOCK reaches `goto-char' as nil.  Stop instead,
-                ;; and log it: the remaining members go unenumerated, which
-                ;; surfaces later as a member left out of a fold or a new member
+                ;; and log it: the remaining children go unenumerated, which
+                ;; surfaces later as a child left out of a fold or a new child
                 ;; inserted above its siblings.
                 (unless (> (map-elt block :end 0) pos)
-                  (message "agent-shell: stopped enumerating group %s: member %s at %d resolved to %S, not past %d"
+                  (message "agent-shell: stopped enumerating group %s: child %s at %d resolved to %S, not past %d"
                            group-qualified-id (map-elt state :qualified-id) (point) block pos)
                   (throw 'done nil))
                 (push (list (cons :qualified-id (map-elt state :qualified-id))
@@ -928,7 +928,7 @@ under a collapsed group (issue #757)."
                                   :group-id)
                          group-qualified-id)
             (throw 'done nil))
-          ;; Step over this member's state run.  A non-advancing change
+          ;; Step over this child's state run.  A non-advancing change
           ;; position would spin forever, so stop on one.
           (let ((next (next-single-property-change (point) 'agent-shell-ui-state
                                                    nil (point-max))))
@@ -940,8 +940,8 @@ under a collapsed group (issue #757)."
         end))))
 
 (cl-defun agent-shell-ui--group-child-region (&key group-qualified-id)
-  "Return (:start :end) spanning group GROUP-QUALIFIED-ID's members, or nil.
-Spans from just after the header to the end of the last member."
+  "Return (:start :end) spanning group GROUP-QUALIFIED-ID's children, or nil.
+Spans from just after the header to the end of the last child."
   (when-let* ((header (agent-shell-ui--group-header-range group-qualified-id))
               (end (agent-shell-ui--group-children-end group-qualified-id
                                                       (map-elt header :end))))
@@ -949,8 +949,8 @@ Spans from just after the header to the end of the last member."
           (cons :end end))))
 
 (cl-defun agent-shell-ui--group-insertion-point (&key group-qualified-id)
-  "Return the buffer position for a new member of group GROUP-QUALIFIED-ID.
-After the current last member, or just after the header when empty."
+  "Return the buffer position for a new child of group GROUP-QUALIFIED-ID.
+After the current last child, or just after the header when empty."
   (when-let* ((header (agent-shell-ui--group-header-range group-qualified-id)))
     (or (agent-shell-ui--group-children-end group-qualified-id
                                            (map-elt header :end))
@@ -1005,7 +1005,7 @@ Both glyphs are two columns wide, so surrounding positions do not shift."
 
 (defun agent-shell-ui--apply-own-collapsed (block-start)
   "Re-apply the fragment at BLOCK-START's own fold state to its content.
-Leaf: hide/show its body per `:collapsed'.  Group: recurse into members."
+Leaf: hide/show its body per `:collapsed'.  Group: recurse into children."
   (when-let* ((state (get-text-property block-start 'agent-shell-ui-state))
               (block (agent-shell-ui--block-range :position block-start)))
     (if (eq (map-elt state :kind) 'group)
@@ -1020,8 +1020,8 @@ Leaf: hide/show its body per `:collapsed'.  Group: recurse into members."
 
 (defun agent-shell-ui--set-group-collapsed (group-qualified-id collapsed)
   "Fold or unfold group GROUP-QUALIFIED-ID (recompute-on-toggle).
-COLLAPSED hides the whole member region regardless of member states;
-expanding reveals it and restores each member's own fold state."
+COLLAPSED hides the whole child region regardless of child states;
+expanding reveals it and restores each child's own fold state."
   (when-let* ((header (agent-shell-ui--group-header-range group-qualified-id))
               (region (agent-shell-ui--group-child-region
                        :group-qualified-id group-qualified-id))
@@ -1049,9 +1049,9 @@ NAVIGATION controls navigability:
  `always' (always navigatable).
 
 A group header (MODEL `:kind' `group') gets a fold triangle and no body of
-its own; its members render below it as separate fragments tagged with its
+its own; its children render below it as separate fragments tagged with its
 qualified-id via `:group-qualified-id'.  MODEL `:group-indent' visually
-indents a member's header line under its group header."
+indents a child's header line under its group header."
   (let* ((block-start (point))
          (kind (map-elt model :kind))
          (group (eq kind 'group))
@@ -1072,7 +1072,7 @@ indents a member's header line under its group header."
          (body-end)
          (collapsable))
 
-    ;; Insert collapse indicator.  A body (or a group header, whose members
+    ;; Insert collapse indicator.  A body (or a group header, whose children
     ;; are its collapsible content) gets a fold triangle; a plain labels-only
     ;; fragment reserves two columns so it aligns and doesn't jump when a
     ;; body arrives later.
@@ -1151,9 +1151,9 @@ indents a member's header line under its group header."
                                                     help-echo ,(agent-shell-ui--fragment-help-echo qualified-id)
                                                     read-only t
                                                     front-sticky (read-only))))
-    ;; Indent a group member's header line under its group header.  The
+    ;; Indent a group child's header line under its group header.  The
     ;; body already carries its own (deeper) `line-prefix' from above.
-    ;; A member with neither label has no header line to indent (the
+    ;; A child with neither label has no header line to indent (the
     ;; indicator is only reserved alongside labels), so there is no end
     ;; position and nothing to do.  A tool call carrying only a
     ;; `toolCallId' renders that way: `agent-shell-make-tool-call-label'
@@ -1367,7 +1367,7 @@ disable undo recording for this operation.
   ;; Group \"ns-grp\" is expanded.
   (agent-shell-ui-set-group-collapsed-by-id
    :namespace-id \"ns\" :block-id \"grp\" :collapsed t)
-  ;; Its members are now hidden and its indicator reads `▶'."
+  ;; Its children are now hidden and its indicator reads `▶'."
   (save-mark-and-excursion
     (let ((inhibit-read-only t)
           (buffer-undo-list (if no-undo t buffer-undo-list))

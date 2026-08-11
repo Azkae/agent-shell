@@ -333,12 +333,12 @@ straight into the next block's leading spaces."
 ;;; groups
 
 (defun agent-shell-ui-tests--group-child-ids (group-qualified-id)
-  "Return the ordered member qualified-ids of GROUP-QUALIFIED-ID."
+  "Return the ordered child qualified-ids of GROUP-QUALIFIED-ID."
   (mapcar (lambda (c) (map-elt c :qualified-id))
           (agent-shell-ui--group-children :group-qualified-id group-qualified-id)))
 
-(ert-deftest agent-shell-ui-group-auto-creates-header-and-nests-members-test ()
-  "A member with a `:group-id' auto-creates the header and nests under it."
+(ert-deftest agent-shell-ui-group-auto-creates-header-and-nests-children-test ()
+  "A child with a `:group-id' auto-creates the header and nests under it."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
     (dolist (id '("t1" "t2"))
@@ -352,8 +352,8 @@ straight into the next block's leading spaces."
                    (agent-shell-ui-tests--group-child-ids "ns-grp")))))
 
 (ert-deftest agent-shell-ui-group-reports-created-header-range-test ()
-  "Creating a group header reports its range; a later member reports none.
-The header is inserted on its own, outside any member's block/padding, so
+  "Creating a group header reports its range; a later child reports none.
+The header is inserted on its own, outside any child's block/padding, so
 `agent-shell-ui-update-fragment' must hand its extent back to the caller
 via `:group-header' (callers mark output over that span so navigation
 does not stop mid-header).  The span covers the header and its padding,
@@ -373,25 +373,25 @@ and only the header-creating call reports it."
            (header (agent-shell-ui--group-header-range "ns-grp"))
            (gh-start (map-nested-elt first '(:group-header :start)))
            (gh-end (map-nested-elt first '(:group-header :end))))
-      ;; First member (which materialized the header) reports its range.
+      ;; First child (which materialized the header) reports its range.
       (should gh-start)
       (should gh-end)
       ;; Span encloses the header block itself.
       (should (<= gh-start (map-elt header :start)))
       (should (>= gh-end (map-elt header :end)))
-      ;; A second member into the same group creates no header, reports none.
+      ;; A second child into the same group creates no header, reports none.
       (should-not (map-elt second :group-header)))))
 
-(ert-deftest agent-shell-ui-group-member-padding-abuts-following-block-test ()
-  "A grouped member's padding reaches the following top-level block's padding.
+(ert-deftest agent-shell-ui-group-child-padding-abuts-following-block-test ()
+  "A grouped child's padding reaches the following top-level block's padding.
 The group's trailing separator (the header's `\\n\\n') is pushed below the
-member, belonging to neither the header block nor the member.  The member
+child, belonging to neither the header block nor the child.  The child
 must fold it into its padding so the reported ranges tile with no gap;
 otherwise that separator is left outside every block's range (and a
 caller stamping ranges leaves it unmarked, stranding navigation there)."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
-    (let* ((member (agent-shell-ui-update-fragment
+    (let* ((child (agent-shell-ui-update-fragment
                     (agent-shell-ui-make-fragment-model
                      :namespace-id "0" :block-id "th" :label-left "Thinking"
                      :body "pondering" :group-id "grp" :group-label "Activity")
@@ -400,11 +400,11 @@ caller stamping ranges leaves it unmarked, stranding navigation there)."
                  (agent-shell-ui-make-fragment-model
                   :namespace-id "0" :block-id "msg" :body "Answer")
                  :create-new t)))
-      (should (= (map-nested-elt member '(:padding :end))
+      (should (= (map-nested-elt child '(:padding :end))
                  (map-nested-elt top '(:padding :start)))))))
 
-(ert-deftest agent-shell-ui-group-collapse-hides-members-and-restores-state-test ()
-  "Collapsing a group hides every member; expanding restores per-member folds."
+(ert-deftest agent-shell-ui-group-collapse-hides-children-and-restores-state-test ()
+  "Collapsing a group hides every child; expanding restores per-child folds."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
     ;; m1 stays collapsed (default), m2 expanded.
@@ -418,7 +418,7 @@ caller stamping ranges leaves it unmarked, stranding navigation there)."
       :namespace-id "ns" :block-id "m2" :group-id "grp" :group-label "T"
       :label-left "run" :label-right "b" :body "bb")
      :expanded t :navigation 'always)
-    (cl-flet ((member-start (n) (map-elt (nth n (agent-shell-ui--group-children
+    (cl-flet ((child-start (n) (map-elt (nth n (agent-shell-ui--group-children
                                                  :group-qualified-id "ns-grp"))
                                          :start))
               (body-start (n) (let ((c (nth n (agent-shell-ui--group-children
@@ -427,14 +427,14 @@ caller stamping ranges leaves it unmarked, stranding navigation there)."
                                           :property 'agent-shell-ui-section :value 'body
                                           :from (map-elt c :start) :to (map-elt c :end))
                                          :start))))
-      ;; Collapse: both member header lines hidden.
+      ;; Collapse: both child header lines hidden.
       (let ((inhibit-read-only t)) (agent-shell-ui--set-group-collapsed "ns-grp" t))
-      (should (get-text-property (member-start 0) 'invisible))
-      (should (get-text-property (member-start 1) 'invisible))
+      (should (get-text-property (child-start 0) 'invisible))
+      (should (get-text-property (child-start 1) 'invisible))
       ;; Expand: headers visible; m1 body stays hidden, m2 body visible.
       (let ((inhibit-read-only t)) (agent-shell-ui--set-group-collapsed "ns-grp" nil))
-      (should-not (get-text-property (member-start 0) 'invisible))
-      (should-not (get-text-property (member-start 1) 'invisible))
+      (should-not (get-text-property (child-start 0) 'invisible))
+      (should-not (get-text-property (child-start 1) 'invisible))
       (should (get-text-property (body-start 0) 'invisible))
       (should-not (get-text-property (body-start 1) 'invisible)))))
 
@@ -452,32 +452,32 @@ caller stamping ranges leaves it unmarked, stranding navigation there)."
      (agent-shell-ui-make-fragment-model
       :namespace-id "ns" :block-id "leaf" :label-left "msg" :body "bb")
      :expanded t :navigation 'always)
-    (cl-flet ((member-hidden-p ()
+    (cl-flet ((child-hidden-p ()
                 (get-text-property
                  (map-elt (car (agent-shell-ui--group-children
                                 :group-qualified-id "ns-grp"))
                           :start)
                  'invisible)))
-      (should-not (member-hidden-p))
+      (should-not (child-hidden-p))
       (agent-shell-ui-set-group-collapsed-by-id
        :namespace-id "ns" :block-id "grp" :collapsed t)
-      (should (member-hidden-p))
+      (should (child-hidden-p))
       ;; Repeat calls are a no-op rather than a toggle.
       (agent-shell-ui-set-group-collapsed-by-id
        :namespace-id "ns" :block-id "grp" :collapsed t)
-      (should (member-hidden-p))
+      (should (child-hidden-p))
       (agent-shell-ui-set-group-collapsed-by-id
        :namespace-id "ns" :block-id "grp" :collapsed nil)
-      (should-not (member-hidden-p))
+      (should-not (child-hidden-p))
       ;; Unknown ids and non-group fragments are left untouched.
       (agent-shell-ui-set-group-collapsed-by-id
        :namespace-id "ns" :block-id "missing" :collapsed t)
       (agent-shell-ui-set-group-collapsed-by-id
        :namespace-id "ns" :block-id "leaf" :collapsed t)
-      (should-not (member-hidden-p)))))
+      (should-not (child-hidden-p)))))
 
-(ert-deftest agent-shell-ui-group-member-streams-body-stays-nested-test ()
-  "A labels-only member that later gains a body stays nested and indented."
+(ert-deftest agent-shell-ui-group-child-streams-body-stays-nested-test ()
+  "A labels-only child that later gains a body stays nested and indented."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
     (agent-shell-ui-update-fragment
@@ -491,33 +491,34 @@ caller stamping ranges leaves it unmarked, stranding navigation there)."
       :label-left "run" :label-right "a" :body "streamed body")
      :navigation 'always)
     (should (equal '("ns-m1") (agent-shell-ui-tests--group-child-ids "ns-grp")))
-    (let* ((member (car (agent-shell-ui--group-children :group-qualified-id "ns-grp")))
+    (let* ((child (car (agent-shell-ui--group-children
+                             :group-qualified-id "ns-grp")))
            (body (agent-shell-ui--nearest-range-matching-property
                   :property 'agent-shell-ui-section :value 'body
-                  :from (map-elt member :start) :to (map-elt member :end))))
+                  :from (map-elt child :start) :to (map-elt child :end))))
       ;; group indent (2) + body indent (2) = 4.
       (should (equal "    " (get-text-property (map-elt body :start) 'line-prefix))))))
 
-(ert-deftest agent-shell-ui-group-update-existing-member-keeps-group-test ()
-  "Updating an existing member never spawns a new group header.
+(ert-deftest agent-shell-ui-group-update-existing-child-keeps-group-test ()
+  "Updating an existing child never spawns a new group header.
 Regression: a caller whose group-id advanced (a message streamed between
 a tool call and its completion) must not create an empty group; the
-member stays in its original group."
+child stays in its original group."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
-    ;; Member created in group g1.
+    ;; Child created in group g1.
     (agent-shell-ui-update-fragment
      (agent-shell-ui-make-fragment-model
       :namespace-id "ns" :block-id "m1" :group-id "g1" :group-label "T"
       :label-left "… run" :label-right "a")
      :navigation 'always)
-    ;; Same member updated, but the caller now passes a *different* group.
+    ;; Same child updated, but the caller now passes a *different* group.
     (agent-shell-ui-update-fragment
      (agent-shell-ui-make-fragment-model
       :namespace-id "ns" :block-id "m1" :group-id "g2" :group-label "T"
       :label-left "✓ run" :label-right "a" :body "output")
      :navigation 'always)
-    ;; No g2 header; the member is still the sole child of g1, indented.
+    ;; No g2 header; the child is still the sole child of g1, indented.
     (should-not (agent-shell-ui--group-header-range "ns-g2"))
     (should (agent-shell-ui--group-header-range "ns-g1"))
     (let ((kids (agent-shell-ui--group-children :group-qualified-id "ns-g1")))
@@ -528,8 +529,8 @@ member stays in its original group."
                    :from (map-elt (car kids) :start) :to (map-elt (car kids) :end))))
         (should (equal "    " (get-text-property (map-elt body :start) 'line-prefix)))))))
 
-(ert-deftest agent-shell-ui-group-member-added-while-collapsed-stays-hidden-test ()
-  "A member added to a folded group is hidden, not popped into view."
+(ert-deftest agent-shell-ui-group-child-added-while-collapsed-stays-hidden-test ()
+  "A child added to a folded group is hidden, not popped into view."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
     (agent-shell-ui-update-fragment
@@ -549,13 +550,13 @@ member stays in its original group."
       (dolist (c kids)
         (should (get-text-property (map-elt c :start) 'invisible))))))
 
-(ert-deftest agent-shell-ui-group-collapsed-member-update-stays-hidden-test ()
-  "Updating a member in a collapsed group keeps it hidden (no leak).
-Regression: a member's in-place edit restored its own visibility while the
-separators stayed hidden, collapsing members onto the folded header line."
+(ert-deftest agent-shell-ui-group-collapsed-child-update-stays-hidden-test ()
+  "Updating a child in a collapsed group keeps it hidden (no leak).
+Regression: a child's in-place edit restored its own visibility while the
+separators stayed hidden, collapsing children onto the folded header line."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
-    ;; Group created collapsed; two labels-only members.
+    ;; Group created collapsed; two labels-only children.
     (dolist (m '("m1" "m2"))
       (agent-shell-ui-update-fragment
        (agent-shell-ui-make-fragment-model
@@ -568,16 +569,16 @@ separators stayed hidden, collapsing members onto the folded header line."
       :namespace-id "ns" :block-id "m1" :group-id "grp" :group-label "T"
       :group-expanded nil :label-left "✓ run" :label-right "m1" :body "output")
      :navigation 'always)
-    ;; Every member, including the just-updated one, stays hidden.
+    ;; Every child, including the just-updated one, stays hidden.
     (dolist (c (agent-shell-ui--group-children :group-qualified-id "ns-grp"))
       (should (get-text-property (map-elt c :start) 'invisible))
       ;; A position strictly inside the block is hidden too (not just the
-      ;; leading char), so member content can't leak onto the header line.
+      ;; leading char), so child content can't leak onto the header line.
       (should (get-text-property (1+ (map-elt c :start)) 'invisible)))))
 
 (ert-deftest agent-shell-ui-group-children-end-matches-enumeration-test ()
-  "`--group-children-end' agrees with enumerating members, and stops at non-members.
-It replaces `--group-children' where only the last member's end is
+  "`--group-children-end' matches enumeration, and stops at a non-child.
+It replaces `--group-children' where only the last child's end is
 needed, so the two must resolve the same position."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
@@ -701,8 +702,8 @@ would put it."
         (should (equal (searched)
                        (agent-shell-ui--group-header-range "ns-grp")))))))
 
-(ert-deftest agent-shell-ui-group-navigation-skips-collapsed-members-test ()
-  "Forward navigation steps into visible members but skips folded ones."
+(ert-deftest agent-shell-ui-group-navigation-skips-collapsed-children-test ()
+  "Forward navigation steps into visible children but skips folded ones."
   (cl-flet ((walk ()
               (goto-char (point-min))
               (let (visited)
@@ -727,14 +728,14 @@ would put it."
        (agent-shell-ui-make-fragment-model
         :namespace-id "d" :block-id "after" :label-left "After")
        :navigation 'always)
-      ;; Expanded: header and both members are visited.
+      ;; Expanded: header and both children are visited.
       (should (equal '("d-before" "d-g" "d-m1" "d-m2" "d-after") (walk)))
-      ;; Collapsed: members are skipped.
+      ;; Collapsed: children are skipped.
       (let ((inhibit-read-only t)) (agent-shell-ui--set-group-collapsed "d-g" t))
       (should (equal '("d-before" "d-g" "d-after") (walk))))))
 
-(ert-deftest agent-shell-ui-group-delete-member-keeps-header-test ()
-  "Deleting a member leaves the header and the remaining members intact."
+(ert-deftest agent-shell-ui-group-delete-child-keeps-header-test ()
+  "Deleting a child leaves the header and the remaining children intact."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
     (dolist (id '("m1" "m2"))
@@ -748,10 +749,10 @@ would put it."
     (should (equal '("ns-m2") (agent-shell-ui-tests--group-child-ids "ns-grp")))))
 
 (ert-deftest agent-shell-ui-group-children-stops-when-block-range-stalls-test ()
-  "Member enumeration stops when a block range fails to advance.
-The member walk moves to each block's `:end', with nothing requiring that
+  "Child enumeration stops when a block range fails to advance.
+The child walk moves to each block's `:end', with nothing requiring that
 end to move forward.  A range ending at or behind the walk position, or a
-nil range, used to re-examine the same member forever and cons on every
+nil range, used to re-examine the same child forever and cons on every
 pass until Emacs stopped responding."
   (with-temp-buffer
     (agent-shell-ui-mode 1)
@@ -764,7 +765,7 @@ pass until Emacs stopped responding."
     (should (equal '("ns-t1" "ns-t2")
                    (agent-shell-ui-tests--group-child-ids "ns-grp")))
     (let ((block-range (symbol-function 'agent-shell-ui--block-range)))
-      ;; Members report a stalled range; the header keeps its real one so the
+      ;; Children report a stalled range; the header keeps its real one so the
       ;; walk still starts.
       (cl-letf (((symbol-function 'agent-shell-ui--block-range)
                  (lambda (&rest args)
@@ -887,12 +888,12 @@ title on every streamed chunk, discarding the rendering each time."
                              :start)
                     'font-lock-face)))))
 
-(ert-deftest agent-shell-ui-group-member-without-labels-test ()
-  "A group member with neither label renders instead of erroring.
+(ert-deftest agent-shell-ui-group-child-without-labels-test ()
+  "A group child with neither label renders instead of erroring.
 
 A tool call carrying only a `toolCallId' has no status, kind, title or
 description, so both its labels come back nil, and tool calls are always
-group members."
+group children."
   (with-temp-buffer
     (let ((inhibit-read-only t))
       (agent-shell-ui-update-fragment
