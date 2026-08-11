@@ -473,9 +473,15 @@ through the bar instead.
 Enable it for new shells by default with `agent-shell-chat-mode-enabled'."
   :lighter nil
   :group 'agent-shell
-  (if agent-shell-chat-mode
-      (agent-shell-chat--enable)
-    (agent-shell-chat--disable)))
+  (cond
+   ((not agent-shell-chat-mode)
+    (agent-shell-chat--disable))
+   ((derived-mode-p 'agent-shell-mode)
+    (agent-shell-chat--enable))
+   (t
+    ;; Undo the toggle before erroring so the mode does not read as on.
+    (setq agent-shell-chat-mode nil)
+    (user-error "Not in an `agent-shell' buffer"))))
 
 (provide 'agent-shell-chat-mode)
 

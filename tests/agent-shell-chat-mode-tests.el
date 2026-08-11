@@ -164,6 +164,13 @@ vertical motion (a `display' string is backed by buffer positions)."
       (should (equal "" (overlay-get me 'display)))
       (should (string-match-p "Me" (overlay-get me 'before-string))))))
 
+(ert-deftest agent-shell-chat-errors-outside-agent-shell-test ()
+  "Enabling the mode outside an `agent-shell' buffer signals a `user-error'.
+The mode stays off after the failed attempt."
+  (with-temp-buffer
+    (should-error (agent-shell-chat-mode 1) :type 'user-error)
+    (should-not agent-shell-chat-mode)))
+
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
   (agent-shell-chat-mode-tests--with-shell
