@@ -54,6 +54,16 @@
 ;; Forward-declared: used before the `define-minor-mode' at the end.
 (defvar agent-shell-chat-mode)
 
+;;; Customization
+
+(defcustom agent-shell-chat-mode-enabled nil
+  "Whether a new agent shell enables `agent-shell-chat-mode' by default.
+When non-nil, starting a shell turns the (global) chat mode on, so that
+shell and any others render as a chat.  Toggling the mode off by hand is
+overridden the next time a shell starts."
+  :type 'boolean
+  :group 'agent-shell)
+
 ;;; Constants
 
 (defconst agent-shell-chat--prompt "❯ "
@@ -416,79 +426,56 @@ and from `shell-maker-finish-output-hook' (which covers `clear')."
     (setq agent-shell-chat--relabel-timer
           (run-at-time 0 nil #'agent-shell-chat--relabel-buffer (current-buffer)))))
 
-(defun agent-shell-chat--enable-labels (buffer)
-  "Turn on chat labels for shell BUFFER and keep them in sync.
+(defun agent-shell-chat--enable ()
+  "Turn on chat labels in the current buffer and keep them in sync.
 
-Backfills existing turns, then subscribes to shell events so a coalesced
+Backfills existing turns, subscribes to shell events so a coalesced
 relabel tracks submissions, streaming responses, turn completion and
-reloads (`session-restored').  `clear' is covered separately by
-`shell-maker-finish-output-hook'."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (unless agent-shell-chat--labeled
-        (setq-local agent-shell-chat--labeled t)
-        (agent-shell-chat--relabel)
-        (setq-local agent-shell-chat--subscription
-                    (agent-shell-subscribe-to
-                     :shell-buffer buffer
-                     :on-event #'agent-shell-chat--schedule-relabel))))))
+reloads (`session-restored'), and adds a buffer-local
+`shell-maker-finish-output-hook' so `clear' and the other internal
+commands (which reprint the prompt with no agent-shell event) relabel too."
+  (unless agent-shell-chat--labeled
+    (setq-local agent-shell-chat--labeled t)
+    (agent-shell-chat--relabel)
+    (setq-local agent-shell-chat--subscription
+                (agent-shell-subscribe-to
+                 :shell-buffer (current-buffer)
+                 :on-event #'agent-shell-chat--schedule-relabel))
+    (add-hook 'shell-maker-finish-output-hook
+              #'agent-shell-chat--schedule-relabel nil t)))
 
-(defun agent-shell-chat--on-shell-init ()
-  "Enable chat labels for a newly initialized shell buffer.
-Added to `agent-shell-mode-hook', so shells created while the mode is on
-are labeled too."
-  (agent-shell-chat--enable-labels (current-buffer)))
-
-(defun agent-shell-chat--label-all-shells ()
-  "Enable chat labels for every existing `agent-shell' buffer."
-  (dolist (buffer (buffer-list))
-    (when (provided-mode-derived-p
-           (buffer-local-value 'major-mode buffer) 'agent-shell-mode)
-      (agent-shell-chat--enable-labels buffer))))
-
-(defun agent-shell-chat--unlabel-all ()
-  "Remove chat labels, subscriptions and timers from every buffer."
-  (dolist (buffer (buffer-list))
-    (when (buffer-local-value 'agent-shell-chat--labeled buffer)
-      (with-current-buffer buffer
-        (when agent-shell-chat--subscription
-          (agent-shell-unsubscribe :subscription agent-shell-chat--subscription))
-        (when (timerp agent-shell-chat--relabel-timer)
-          (cancel-timer agent-shell-chat--relabel-timer))
-        (remove-overlays (point-min) (point-max)
-                         'category 'agent-shell-chat-me)
-        (remove-overlays (point-min) (point-max)
-                         'category 'agent-shell-chat-me-input)
-        (remove-overlays (point-min) (point-max)
-                         'category 'agent-shell-chat-agent)
-        (kill-local-variable 'agent-shell-chat--subscription)
-        (kill-local-variable 'agent-shell-chat--relabel-timer)
-        (kill-local-variable 'agent-shell-chat--labeled)))))
+(defun agent-shell-chat--disable ()
+  "Remove chat labels, subscription, timer and hook from the current buffer."
+  (remove-hook 'shell-maker-finish-output-hook
+               #'agent-shell-chat--schedule-relabel t)
+  (when agent-shell-chat--subscription
+    (agent-shell-unsubscribe :subscription agent-shell-chat--subscription))
+  (when (timerp agent-shell-chat--relabel-timer)
+    (cancel-timer agent-shell-chat--relabel-timer))
+  (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-me)
+  (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-me-input)
+  (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-agent)
+  (kill-local-variable 'agent-shell-chat--subscription)
+  (kill-local-variable 'agent-shell-chat--relabel-timer)
+  (kill-local-variable 'agent-shell-chat--labeled))
 
 ;;; Mode
 
 ;;;###autoload
 (define-minor-mode agent-shell-chat-mode
-  "Toggle chat-style `Me'/agent labels in every `agent-shell' buffer.
+  "Toggle chat-style `Me'/agent labels in the current `agent-shell' buffer.
 
 Each submitted turn is boxed `Me' and each response the agent's name.
 The live prompt shows `Me' so you can type into the shell; when
 `agent-shell-prompt-bar-mode' is on it is hidden, since input flows
-through the bar instead."
-  :global t
+through the bar instead.
+
+Enable it for new shells by default with `agent-shell-chat-mode-enabled'."
   :lighter nil
   :group 'agent-shell
   (if agent-shell-chat-mode
-      (progn
-        ;; `clear' is a shell-maker command with no agent-shell event, so
-        ;; it rides its finish-output hook; everything else comes through
-        ;; the per-buffer event subscription set up in `--enable-labels'.
-        (add-hook 'shell-maker-finish-output-hook #'agent-shell-chat--schedule-relabel)
-        (add-hook 'agent-shell-mode-hook #'agent-shell-chat--on-shell-init)
-        (agent-shell-chat--label-all-shells))
-    (remove-hook 'shell-maker-finish-output-hook #'agent-shell-chat--schedule-relabel)
-    (remove-hook 'agent-shell-mode-hook #'agent-shell-chat--on-shell-init)
-    (agent-shell-chat--unlabel-all)))
+      (agent-shell-chat--enable)
+    (agent-shell-chat--disable)))
 
 (provide 'agent-shell-chat-mode)
 

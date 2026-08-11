@@ -57,6 +57,7 @@
 (require 'agent-shell-markdown)
 (require 'agent-shell-anthropic)
 (require 'agent-shell-auggie)
+(require 'agent-shell-chat-mode)
 (require 'agent-shell-codebuddy)
 (require 'agent-shell-cline)
 (require 'agent-shell-completion)
@@ -4515,6 +4516,8 @@ variable (see makunbound)"))
       ;; defers this until the first prompt is sent.
       (unless (eq agent-shell-session-strategy 'new-deferred)
         (agent-shell--handle :shell-buffer shell-buffer))
+      (when (and agent-shell-chat-mode-enabled (not agent-shell-chat-mode))
+        (agent-shell-chat-mode 1))
       ;; State should be available after kicking off
       ;; `agent-shell--handle'.  Fire mode hook so initial
       ;; state is available to agent-shell-mode-hook(s).
