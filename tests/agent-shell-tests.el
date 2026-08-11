@@ -4116,6 +4116,39 @@ that fallback buffer, potentially starting the new shell in the wrong project."
   ;; Empty input returns empty output.
   (should (equal (agent-shell--sort-sessions-by-recency '()) '())))
 
+(ert-deftest agent-shell--display-attached-files-keeps-point-at-end-test ()
+  "Attaching files leaves point at the end when it was already there.
+
+The fragment renders while the submit command is still running, so
+auto-scroll can read a stale answer for whether the buffer end is on
+screen and leave point at the start of what it just inserted.  Point
+elsewhere is left alone, so a user reading further up is not dragged
+down."
+  (let ((shell-buf (generate-new-buffer " *test-shell*")))
+    (unwind-protect
+        (with-current-buffer shell-buf
+          ;; Enough of a shell for the fragment path: `comint-mode' for the
+          ;; markers `shell-maker's' auto-scroll sets, and the mode symbol
+          ;; the fragment writer checks.
+          (comint-mode)
+          (setq major-mode 'agent-shell-mode)
+          (setq-local agent-shell--state
+                      (agent-shell--make-state :buffer shell-buf))
+          ;; Displayed, and taller than the window: that is when
+          ;; `pos-visible-in-window-p' reports the end off screen and
+          ;; auto-scroll leaves point behind.  Undisplayed, the check is
+          ;; vacuous and this passes either way.
+          (set-window-buffer (selected-window) shell-buf)
+          (insert (make-string 200 ?\n))
+          (goto-char (point-max))
+          (agent-shell--display-attached-files (list "/tmp/one.el"))
+          (should (eobp))
+          ;; Reading further up: point stays put.
+          (goto-char (point-min))
+          (agent-shell--display-attached-files (list "/tmp/two.el"))
+          (should (equal (point) (point-min))))
+      (kill-buffer shell-buf))))
+
 (ert-deftest agent-shell--clean-up-tolerates-mode-change-test ()
   "Test `kill-buffer' succeeds after the major mode is manually changed.
 

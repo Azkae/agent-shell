@@ -7750,16 +7750,20 @@ Examples:
 
 (cl-defun agent-shell--display-attached-files (uris)
   "Display the attached URIS in the buffer."
-  (agent-shell--update-fragment
-   :state agent-shell--state
-   :block-id "attached-files"
-   :label-left (format "%d file%s attached"
-                       (length uris)
-                       (if (= (length uris) 1) "" "s"))
-   :body (mapconcat (lambda (f) (format "• %s" f))
-                    (nreverse uris)
-                    "\n")
-   :create-new t))
+  (with-current-buffer (map-elt agent-shell--state :buffer)
+    (let ((follow (eobp)))
+      (agent-shell--update-fragment
+       :state agent-shell--state
+       :block-id "attached-files"
+       :label-left (format "%d file%s attached"
+                           (length uris)
+                           (if (= (length uris) 1) "" "s"))
+       :body (mapconcat (lambda (f) (format "• %s" f))
+                        (nreverse uris)
+                        "\n")
+       :create-new t)
+      (when follow
+        (goto-char (point-max))))))
 
 (defun agent-shell--set-session-title (title)
   "Set the current session's title to TITLE and emit `session-title-changed'.
