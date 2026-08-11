@@ -178,6 +178,7 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                        expanded))
                  (block-start nil)
                  (body-range nil)
+                 (wrote-hidden nil)
                  (padding-start nil)
                  (padding-end nil)
                  (group-header nil)
@@ -279,6 +280,16 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                       (cond
                        ;; Append to existing body — preserves rendered content.
                        ((and append existing-body-range)
+                        ;; `--append-body' hides what it writes whenever the
+                        ;; body it extends is hidden, so an append into a
+                        ;; folded child leaves nothing exposed and the
+                        ;; group's fold below can be left alone.
+                        (setq wrote-hidden
+                              (and (not new-label-left)
+                                   (not new-label-right)
+                                   (agent-shell-ui--body-invisible-p
+                                    (map-elt existing-body-range :start)
+                                    (map-elt existing-body-range :end))))
                         (setq body-range
                               (or (agent-shell-ui--append-body
                                    existing-body-range new-body qualified-id collapsed)
@@ -350,7 +361,14 @@ O(accumulated-body).  Label-only updates leave the body untouched."
             ;; update) restores visibility from the member's own state, which
             ;; would reveal it under a folded header; re-apply the group
             ;; collapse so updates don't leak members onto the header line.
-            (when-let* ((group-qid (map-elt model :group-qualified-id))
+            ;;
+            ;; Skipped when the update only appended to an already hidden
+            ;; body, which hides its own chars.  Re-applying then costs a
+            ;; pass over the whole child region, and that region holds the
+            ;; streamed body, so a folded group paid O(chunks so far) on
+            ;; every chunk (issue #757).
+            (when-let* (((not wrote-hidden))
+                        (group-qid (map-elt model :group-qualified-id))
                         (header (agent-shell-ui--group-header-range group-qid))
                         (header-state (get-text-property (map-elt header :start)
                                                          'agent-shell-ui-state))

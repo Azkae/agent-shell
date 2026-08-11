@@ -636,6 +636,36 @@ searching."
                        (buffer-substring-no-properties (point-min)
                                                        (point-max))))))))
 
+(ert-deftest agent-shell-ui-group-streamed-body-stays-hidden-test ()
+  "Chunks streamed into a folded group stay hidden, every char of them.
+An append into an already hidden body hides what it writes, so the
+group's fold is not re-applied afterwards.  This is what makes that safe:
+the first chunk lands in an empty body, later ones extend a hidden one,
+and a label update comes through the middle."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model
+      :namespace-id "ns" :block-id "m" :group-id "grp" :group-label "T"
+      :group-expanded nil :label-left "thinking" :body "")
+     :navigation 'always)
+    (dotimes (i 12)
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :namespace-id "ns" :block-id "m" :body (format "chunk %d\n" i))
+       :append t)
+      (when (= i 5)
+        (agent-shell-ui-update-fragment
+         (agent-shell-ui-make-fragment-model
+          :namespace-id "ns" :block-id "m" :label-left "still thinking"))))
+    (let ((region (agent-shell-ui--group-child-region
+                   :group-qualified-id "ns-grp")))
+      (should region)
+      (should (> (- (map-elt region :end) (map-elt region :start)) 12))
+      (dolist (position (number-sequence (map-elt region :start)
+                                         (1- (map-elt region :end))))
+        (should (get-text-property position 'invisible))))))
+
 (ert-deftest agent-shell-ui-group-header-range-tracks-relabel-test ()
   "A cached group header range follows the header's own edits.
 `agent-shell-ui--group-header-range' answers from
