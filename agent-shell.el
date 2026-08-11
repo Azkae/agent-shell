@@ -4430,8 +4430,7 @@ variable (see makunbound)"))
                                                          :cache-enabled (eq status 'busy))))
                                                     ;; 'ended is the final tick; render even
                                                     ;; if off-screen to ensure animation is hidden.
-                                                    (when-let* ((using-viewports agent-shell-prefer-viewport-interaction)
-                                                                (viewport-buffer (agent-shell-viewport--buffer
+                                                    (when-let* ((viewport-buffer (agent-shell-viewport--buffer
                                                                                   :shell-buffer shell-buffer
                                                                                   :existing-only t))
                                                                 ;; 'ended is the final tick; render even
