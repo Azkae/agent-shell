@@ -602,6 +602,40 @@ needed, so the two must resolve the same position."
       ;; Empty group: nil, so callers fall back to the header's end.
       (should-not (agent-shell-ui--group-children-end "ns-grp" (point-max))))))
 
+(ert-deftest agent-shell-ui-block-cache-survives-buffer-erase-test ()
+  "Rebuilding after an erase renders as if nothing had been cached.
+The viewport erases and rebuilds itself, which collapses every cached
+marker to `point-min' while the same fragment ids come back.  Entries are
+verified against the buffer on use rather than invalidated on change, so
+this is the case that has to fail those checks and fall back to
+searching."
+  (cl-flet ((populate ()
+              (dolist (m '("a" "b" "c"))
+                (agent-shell-ui-update-fragment
+                 (agent-shell-ui-make-fragment-model
+                  :namespace-id "ns" :block-id m :label-left "run" :label-right m
+                  :body "output\n")
+                 :navigation 'always)
+                (dotimes (_ 3)
+                  (agent-shell-ui-update-fragment
+                   (agent-shell-ui-make-fragment-model
+                    :namespace-id "ns" :block-id m :body "more\n")
+                   :append t)))))
+    (let ((reference (with-temp-buffer
+                       (agent-shell-ui-mode 1)
+                       (populate)
+                       (buffer-substring-no-properties (point-min) (point-max)))))
+      (with-temp-buffer
+        (agent-shell-ui-mode 1)
+        (populate)
+        (should agent-shell-ui--block-cache)
+        (let ((inhibit-read-only t))
+          (erase-buffer))
+        (populate)
+        (should (equal reference
+                       (buffer-substring-no-properties (point-min)
+                                                       (point-max))))))))
+
 (ert-deftest agent-shell-ui-group-navigation-skips-collapsed-members-test ()
   "Forward navigation steps into visible members but skips folded ones."
   (cl-flet ((walk ()

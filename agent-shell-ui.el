@@ -181,13 +181,25 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                  (padding-start nil)
                  (padding-end nil)
                  (group-header nil)
-                 (match (save-mark-and-excursion
-                          (goto-char (point-max))
-                          (text-property-search-backward
-                           'agent-shell-ui-state nil
-                           (lambda (_ state)
-                             (equal (map-elt state :qualified-id) qualified-id))
-                           t))))
+                 ;; Locating the block means walking back over every
+                 ;; interval in it, and a streamed body accrues intervals
+                 ;; per chunk, so the search costs O(chunks so far) on every
+                 ;; chunk (issue #757).  The cache answers it outright when
+                 ;; it still describes the buffer.
+                 (cached (unless create-new
+                           (agent-shell-ui--cached-block qualified-id)))
+                 (match (unless cached
+                          (save-mark-and-excursion
+                            (goto-char (point-max))
+                            (text-property-search-backward
+                             'agent-shell-ui-state nil
+                             (lambda (_ state)
+                               (equal (map-elt state :qualified-id)
+                                      qualified-id))
+                             t))))
+                 (existing-start (cond (cached (marker-position
+                                                (map-elt cached :start)))
+                                       (match (prop-match-beginning match)))))
             ;; Resolve group membership.  A NEW member materializes its
             ;; header (auto-create) and routes into the group's region.  An
             ;; EXISTING member keeps whatever group it already belongs to;
@@ -197,8 +209,8 @@ O(accumulated-body).  Label-only updates leave the body untouched."
             ;; Either way the resolved parent qualified-id and indent are
             ;; recorded on the model so insertion and body regeneration nest.
             (cond
-             ((and match (not create-new))
-              (when-let* ((state (get-text-property (prop-match-beginning match)
+             ((and existing-start (not create-new))
+              (when-let* ((state (get-text-property existing-start
                                                     'agent-shell-ui-state))
                           (existing-group (map-elt state :group-id)))
                 (setq model (append model
@@ -218,11 +230,11 @@ O(accumulated-body).  Label-only updates leave the body untouched."
             (when (or new-label-left new-label-right new-body)
               (cond
                ;; Existing block — apply edits per changed section.
-               ((and match (not create-new))
-                (let* ((state (get-text-property (prop-match-beginning match)
+               ((and existing-start (not create-new))
+                (let* ((state (get-text-property existing-start
                                                  'agent-shell-ui-state))
                        (collapsed (map-elt state :collapsed)))
-                  (setq block-start (prop-match-beginning match))
+                  (setq block-start existing-start)
                   (save-excursion
                     (goto-char block-start)
                     (skip-chars-backward "\n")
@@ -246,19 +258,24 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                   ;; block, and a streamed body accrues an interval per chunk,
                   ;; so each rescan costs O(chunks so far).  The marker tracks
                   ;; the edits below for free (issue #757).
+                  ;;
+                  ;; A cached end is itself a marker, read here rather than at
+                  ;; lookup so a label rewritten just above it is accounted
+                  ;; for, same as deriving it at this point would be.
                   (setq block-end
-                        (copy-marker (or (map-elt (agent-shell-ui--block-range
+                        (copy-marker (or (and cached
+                                              (marker-position
+                                               (map-elt cached :end)))
+                                         (map-elt (agent-shell-ui--block-range
                                                    :position block-start)
                                                   :end)
-                                         (prop-match-end match))
+                                         (and match (prop-match-end match)))
                                      t))
                   (when new-body
                     (let* ((current-block-end (marker-position block-end))
                            (existing-body-range
-                            (agent-shell-ui--nearest-range-matching-property
-                             :property 'agent-shell-ui-section :value 'body
-                             :from block-start
-                             :to current-block-end)))
+                            (agent-shell-ui--body-range block-start
+                                                        current-block-end)))
                       (cond
                        ;; Append to existing body — preserves rendered content.
                        ((and append existing-body-range)
@@ -347,6 +364,7 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                          (list (cons :start block-start)
                                                (cons :end (marker-position block-end)))
                                        (agent-shell-ui--block-range :position block-start))))
+              (agent-shell-ui--cache-block qualified-id block-range)
               ;; Sections the update didn't touch are left out rather than
               ;; searched for: each search walks the block's accumulated
               ;; intervals, so on a streamed body that cost grew per chunk
@@ -355,10 +373,9 @@ O(accumulated-body).  Label-only updates leave the body untouched."
               (list (cons :block block-range)
                     (cons :body (or body-range
                                     (when new-body
-                                      (agent-shell-ui--nearest-range-matching-property
-                                       :property 'agent-shell-ui-section :value 'body
-                                       :from (map-elt block-range :start)
-                                       :to (map-elt block-range :end)))))
+                                      (agent-shell-ui--body-range
+                                       (map-elt block-range :start)
+                                       (map-elt block-range :end)))))
                     (cons :label-left (when new-label-left
                                         (agent-shell-ui--nearest-range-matching-property
                                          :property 'agent-shell-ui-section :value 'label-left
@@ -661,6 +678,111 @@ In the form:
      :value qualified-id
      :predicate (lambda (qualified-id property)
                   (equal (map-elt property :qualified-id) qualified-id)))))
+
+(defvar-local agent-shell-ui--block-cache nil
+  "Markers for the blocks most recently updated in this buffer.
+
+Most recent first, for example:
+
+  (((:qualified-id . \"3-msg\") (:start . #<marker at 412>)
+    (:end . #<marker at 980>))
+   ((:qualified-id . \"3-tool1\") (:start . #<marker at 96>)
+    (:end . #<marker at 410>)))
+
+Buffer local by design: a shell and its viewport render the same
+fragments into separate buffers, so each keeps its own markers and there
+is nothing to keep in step between them.
+
+Only the last few blocks are kept.  Streaming revisits a handful at a
+time, and every live marker costs a little on each insertion, so this
+must not grow with the session.")
+
+(defun agent-shell-ui--block-id-at (position qualified-id)
+  "Return non-nil when POSITION holds a char of QUALIFIED-ID's block."
+  (equal (map-elt (get-text-property position 'agent-shell-ui-state)
+                  :qualified-id)
+         qualified-id))
+
+(defun agent-shell-ui--cached-block (qualified-id)
+  "Return QUALIFIED-ID's cached entry when it still describes the buffer.
+
+Entries carry markers, so the caller reads `:start' and `:end' at the
+point of use: a label rewritten in between moves the end, and the marker
+has already followed it.
+
+Verified against the buffer on every use rather than invalidated when
+the buffer changes.  The viewport erases and rebuilds itself
+\(`agent-shell-viewport--render'), which collapses every marker in it to
+`point-min', so an entry that no longer describes a block has to fail
+here and send the caller back to searching.  Both ends are checked:
+after an erase a stale end sits at `point-min' too, where a start-only
+check could pass and hand back an inverted range."
+  (when-let* ((entry (seq-find (lambda (entry)
+                                 (equal (map-elt entry :qualified-id)
+                                        qualified-id))
+                               agent-shell-ui--block-cache))
+              (start (marker-position (map-elt entry :start)))
+              (end (marker-position (map-elt entry :end)))
+              ((< start end))
+              ((<= end (point-max)))
+              ((agent-shell-ui--block-id-at start qualified-id))
+              ((agent-shell-ui--block-id-at (1- end) qualified-id))
+              ;; END must be the block's end, not a position inside it.
+              ((or (= end (point-max))
+                   (not (agent-shell-ui--block-id-at end qualified-id)))))
+    entry))
+
+(defun agent-shell-ui--cache-block (qualified-id range)
+  "Remember RANGE as QUALIFIED-ID's block range in this buffer.
+Replaces any entry already held for QUALIFIED-ID, and drops the oldest
+once more than a handful are cached.  See `agent-shell-ui--block-cache'."
+  (setq agent-shell-ui--block-cache
+        (seq-remove (lambda (entry)
+                      (when (equal (map-elt entry :qualified-id)
+                                   qualified-id)
+                        (agent-shell-ui--release-cached-block entry)
+                        t))
+                    agent-shell-ui--block-cache))
+  (push (list (cons :qualified-id qualified-id)
+              (cons :start (copy-marker (map-elt range :start)))
+              ;; Advances as the body is appended to, so the end stays
+              ;; right without re-deriving it.
+              (cons :end (copy-marker (map-elt range :end) t)))
+        agent-shell-ui--block-cache)
+  (seq-do #'agent-shell-ui--release-cached-block
+          (seq-drop agent-shell-ui--block-cache 8))
+  (setq agent-shell-ui--block-cache (seq-take agent-shell-ui--block-cache 8)))
+
+(defun agent-shell-ui--release-cached-block (entry)
+  "Point ENTRY's markers nowhere, so they stop tracking buffer edits."
+  (set-marker (map-elt entry :start) nil)
+  (set-marker (map-elt entry :end) nil))
+
+(defun agent-shell-ui--body-range (block-start block-end)
+  "Return the body section range within [BLOCK-START, BLOCK-END), or nil.
+
+A block lays its sections out as indicator, labels, then body, and the
+body runs to the block's end:
+
+  [indicator][label-left][ ][label-right][\\n\\n][body ... BLOCK-END)
+
+So the end is BLOCK-END, and only the start has to be found: step over
+the sections above it, of which there are a fixed few, and stop at the
+first body char.  Searching for the body's own run instead would walk
+every interval in it, and a streamed body accrues intervals per chunk,
+making that O(chunks so far) on every chunk (issue #757)."
+  (let ((pos block-start))
+    (while (and (< pos block-end)
+                (not (eq (get-text-property pos 'agent-shell-ui-section)
+                         'body)))
+      (setq pos (next-single-property-change pos 'agent-shell-ui-section
+                                             nil block-end)))
+    ;; The scan stops early only on a body char, so landing inside the
+    ;; block means POS is the body's start.  A block with no body runs
+    ;; POS to BLOCK-END instead.
+    (when (< pos block-end)
+      (list (cons :start pos)
+            (cons :end block-end)))))
 
 (cl-defun agent-shell-ui--nearest-range-matching-property (&key property value (predicate t) from to)
   "Return nearest range where PREDICATE is non-nil for PROPERTY and VALUE."
