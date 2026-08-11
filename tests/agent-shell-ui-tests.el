@@ -636,6 +636,41 @@ searching."
                        (buffer-substring-no-properties (point-min)
                                                        (point-max))))))))
 
+(ert-deftest agent-shell-ui-group-header-range-tracks-relabel-test ()
+  "A cached group header range follows the header's own edits.
+`agent-shell-ui--group-header-range' answers from
+`agent-shell-ui--block-cache', whose end is a marker.  A relabel that
+changes the header's width has to leave that end where a fresh search
+would put it."
+  (cl-flet ((searched ()
+              (save-mark-and-excursion
+                (goto-char (point-min))
+                (when-let* ((match (text-property-search-forward
+                                    'agent-shell-ui-state nil
+                                    (lambda (_ state)
+                                      (and (equal (map-elt state :qualified-id)
+                                                  "ns-grp")
+                                           (eq (map-elt state :kind) 'group)))
+                                    t)))
+                  (agent-shell-ui--block-range
+                   :position (prop-match-beginning match))))))
+    (with-temp-buffer
+      (agent-shell-ui-mode 1)
+      (dolist (m '("m1" "m2"))
+        (agent-shell-ui-update-fragment
+         (agent-shell-ui-make-fragment-model
+          :namespace-id "ns" :block-id m :group-id "grp" :group-label "T"
+          :label-left "run" :label-right m :body "output\n")
+         :navigation 'always))
+      (should (equal (searched) (agent-shell-ui--group-header-range "ns-grp")))
+      ;; Relabel the header to something much wider, then much narrower.
+      (dolist (label '("A considerably longer group label" "T"))
+        (agent-shell-ui-update-fragment
+         (agent-shell-ui-make-fragment-model
+          :namespace-id "ns" :block-id "grp" :label-left label))
+        (should (equal (searched)
+                       (agent-shell-ui--group-header-range "ns-grp")))))))
+
 (ert-deftest agent-shell-ui-group-navigation-skips-collapsed-members-test ()
   "Forward navigation steps into visible members but skips folded ones."
   (cl-flet ((walk ()

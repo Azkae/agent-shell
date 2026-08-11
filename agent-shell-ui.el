@@ -813,17 +813,40 @@ making that O(chunks so far) on every chunk (issue #757)."
                          (prop-match-end forward-match)
                        (prop-match-end backward-match)))))))))
 
+(defun agent-shell-ui--cached-group-header (group-qualified-id)
+  "Return GROUP-QUALIFIED-ID's cached header range, or nil.
+Only a block recorded as a group header qualifies, so a member that
+happened to share the id could not be mistaken for one."
+  (when-let* ((cached (agent-shell-ui--cached-block group-qualified-id))
+              (start (marker-position (map-elt cached :start)))
+              ((eq (map-elt (get-text-property start 'agent-shell-ui-state)
+                            :kind)
+                   'group)))
+    (list (cons :start start)
+          (cons :end (marker-position (map-elt cached :end))))))
+
 (defun agent-shell-ui--group-header-range (group-qualified-id)
-  "Return (:start :end) of the group header GROUP-QUALIFIED-ID, or nil."
-  (save-mark-and-excursion
-    (goto-char (point-min))
-    (when-let* ((match (text-property-search-forward
-                        'agent-shell-ui-state nil
-                        (lambda (_ state)
-                          (and (equal (map-elt state :qualified-id) group-qualified-id)
-                               (eq (map-elt state :kind) 'group)))
-                        t)))
-      (agent-shell-ui--block-range :position (prop-match-beginning match)))))
+  "Return (:start :end) of the group header GROUP-QUALIFIED-ID, or nil.
+
+Answered from `agent-shell-ui--block-cache' where possible, and the
+result of a search is recorded there.  The search starts at `point-min',
+so it costs whatever sits above the group, and a collapsed group looks
+its header up several times per member update: without the cache a
+turn's cost grew with everything already in the buffer (issue #757)."
+  (or (agent-shell-ui--cached-group-header group-qualified-id)
+      (when-let* ((match (save-mark-and-excursion
+                           (goto-char (point-min))
+                           (text-property-search-forward
+                            'agent-shell-ui-state nil
+                            (lambda (_ state)
+                              (and (equal (map-elt state :qualified-id)
+                                          group-qualified-id)
+                                   (eq (map-elt state :kind) 'group)))
+                            t)))
+                  (range (agent-shell-ui--block-range
+                          :position (prop-match-beginning match))))
+        (agent-shell-ui--cache-block group-qualified-id range)
+        range)))
 
 (cl-defun agent-shell-ui--group-children (&key group-qualified-id)
   "Return ordered member block ranges of group GROUP-QUALIFIED-ID.
