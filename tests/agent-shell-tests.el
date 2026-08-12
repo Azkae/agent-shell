@@ -5384,6 +5384,24 @@ the global hook value must stay quiet."
                     0 'font-lock-face
                     (map-elt (agent-shell-make-tool-call-label state "t1") :title))))))
 
+(ert-deftest agent-shell-make-tool-call-label-multiline-command-test ()
+  "A multiline command reads as truncated, so its title ends in an ellipsis.
+
+Showing only the first line makes an innocent-looking \"cd somewhere\"
+stand in for whatever else the command runs."
+  (let ((label (lambda (title)
+                 (substring-no-properties
+                  (map-elt (agent-shell-make-tool-call-label
+                            `((:tool-calls . (("t1" . ((:kind . "execute")
+                                                       (:status . "completed")
+                                                       (:title . ,title))))))
+                            "t1")
+                           :title)))))
+    (should (equal "cd /tmp…" (funcall label "cd /tmp\ngrep -n foo bar.el")))
+    ;; A lone command stays as-is, trailing newline or not.
+    (should (equal "cd /tmp" (funcall label "cd /tmp")))
+    (should (equal "cd /tmp" (funcall label "cd /tmp\n")))))
+
 (ert-deftest agent-shell--tag-untagged-output-tags-same-chars-test ()
   "Tagging only the untagged tail covers what a whole-range tag would."
   (with-temp-buffer

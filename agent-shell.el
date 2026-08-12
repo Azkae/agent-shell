@@ -4141,6 +4141,18 @@ With INCLUDE-PROJECT
                                 ""
                                 (or text "")))))
 
+(defun agent-shell--first-line (text)
+  "Return TEXT's first line, ellipsized when more lines follow.
+
+\"cd /tmp\" -> \"cd /tmp\"
+\"cd /tmp\\n\" -> \"cd /tmp\"
+\"cd /tmp\\ngrep -n foo bar.el\" -> \"cd /tmp…\""
+  (when-let* ((text (string-trim-right (or text "")))
+              ((not (string-empty-p text))))
+    (concat (seq-first (split-string text "\n"))
+            (when (string-search "\n" text)
+              "…"))))
+
 (defun agent-shell-make-tool-call-label (state tool-call-id)
   "Create tool call label from STATE using TOOL-CALL-ID.
 
@@ -4164,7 +4176,7 @@ Returns propertized labels in :status and :title propertized."
                             ;; Fall back to the first line of the command when
                             ;; description is missing for execute tool calls.
                             (when (equal (map-elt tool-call :kind) "execute")
-                              (seq-first (split-string (or (map-elt tool-call :title) "") "\n")))))
+                              (agent-shell--first-line (map-elt tool-call :title)))))
            ;; Append a "+N -M" diff summary to edit titles.
            (stats (agent-shell--format-diffs-line-stats (map-elt tool-call :diffs)))
            (label (cond ((and title description
