@@ -1758,6 +1758,40 @@ Outro"))))
                      (" b " nil)
                      ("real bold" (agent-shell-markdown-bold)))))))
 
+(ert-deftest agent-shell-markdown-inline-code-body-not-linked ()
+  ;; Regression: link markup inside inline code is literal text, not a
+  ;; link.  The passes after inline-code styling avoid its body through
+  ;; marker ranges into the span, which a delete-and-reinsert of the span
+  ;; would collapse, exposing the body as prose.
+  (with-temp-buffer
+    (insert "see `[title](url)` here")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "see [title](url) here" (buffer-substring-no-properties
+                                            (point-min) (point-max))))
+    (should (null (agent-shell-markdown-link-url-at-point 5)))
+    (should (equal (agent-shell-markdown--deconstruct (buffer-string))
+                   '(("see " nil)
+                     ("[title](url)" (agent-shell-markdown-inline-code))
+                     (" here" nil))))))
+
+(ert-deftest agent-shell-markdown-inline-code-body-not-imaged ()
+  ;; Same protection for image markup: inside inline code it stays
+  ;; literal text rather than rendering an image.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image) (lambda (&rest _) '(image :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "see `![a](%s)` here\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (string-match-p (regexp-quote (format "![a](%s)" image-file))
+                                    (buffer-substring-no-properties
+                                     (point-min) (point-max))))
+            (should (null (get-text-property 5 'display)))))
+      (delete-file image-file))))
+
 (ert-deftest agent-shell-markdown-convert-divider-dashes ()
   ;; A `---' line gets a `display' property and `agent-shell-markdown-frozen'
   ;; tag.  The chars themselves stay in the buffer beneath the display.

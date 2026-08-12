@@ -833,22 +833,27 @@ face `agent-shell-markdown-inline-code' on \"code\"."
                      markup-start markup-end avoid-ranges)))
         (if avoid
             (goto-char (cdr avoid))
-          (let ((text (buffer-substring (match-beginning 1) (match-end 1)))
-                (source (unless (get-text-property markup-start
+          (let ((source (unless (get-text-property markup-start
                                                    'agent-shell-markdown-source)
                           (agent-shell-markdown-reconstruct
                            markup-start markup-end))))
-            (delete-region markup-start markup-end)
-            (goto-char markup-start)
-            (insert text)
-            (let ((end (+ markup-start (length text))))
+            ;; Delete the two backticks where they stand rather than the
+            ;; span as a whole: the `:inline-code-ranges' every later pass
+            ;; avoids this body through are markers into it, and deleting
+            ;; the span collapses them onto a single point.  The body would
+            ;; then read as ordinary prose, rendering `[title](url)' inside
+            ;; backticks as a link instead of the literal text asked for.
+            (delete-region (1- markup-end) markup-end)
+            (delete-region markup-start (1+ markup-start))
+            (let ((end (- markup-end 2)))
               (add-face-text-property markup-start end 'agent-shell-markdown-inline-code)
               (add-text-properties markup-start end
                                    '(agent-shell-markdown-frozen t
                                                                  rear-nonsticky (agent-shell-markdown-frozen)))
               (when source
                 (put-text-property markup-start end
-                                   'agent-shell-markdown-source source)))))))))
+                                   'agent-shell-markdown-source source))
+              (goto-char end))))))))
 
 (cl-defun agent-shell-markdown--link-markup-regexp (&key as-image?)
   "Return a regexp matching link (or image, when AS-IMAGE?) markup.
