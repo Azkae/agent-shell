@@ -4973,9 +4973,9 @@ APPEND and CREATE-NEW control update behavior."
 (defun agent-shell-next-item ()
   "Go to next item.
 
-Could be a prompt, an expandable item, a displayed image, or a
-rendered link.  When point is inside a rendered markdown table,
-navigate to the next table cell instead.
+Could be a prompt, an expandable item, a displayed image, a rendered
+link, or a source block.  When point is inside a rendered markdown
+table, navigate to the next table cell instead.
 If point is at the input prompt and a character key was pressed,
 insert the character instead."
   (declare (modes agent-shell-mode))
@@ -5004,11 +5004,14 @@ insert the character instead."
                         (agent-shell-markdown--next-visible-image)))
            (link-pos (save-mark-and-excursion
                        (agent-shell-markdown--next-visible-link)))
+           (source-block-pos (save-mark-and-excursion
+                               (agent-shell-markdown--next-visible-source-block)))
            (next-pos (apply #'min (delq nil (list prompt-pos
                                                   block-pos
                                                   button-pos
                                                   image-pos
-                                                  link-pos)))))
+                                                  link-pos
+                                                  source-block-pos)))))
       (when next-pos
         (deactivate-mark)
         (goto-char next-pos)
@@ -5018,9 +5021,9 @@ insert the character instead."
 (defun agent-shell-previous-item ()
   "Go to previous item.
 
-Could be a prompt, an expandable item, a displayed image, or a
-rendered link.  When point is inside a rendered markdown table,
-navigate to the previous table cell instead.
+Could be a prompt, an expandable item, a displayed image, a rendered
+link, or a source block.  When point is inside a rendered markdown
+table, navigate to the previous table cell instead.
 If point is at the input prompt and a character key was pressed,
 insert the character instead."
   (declare (modes agent-shell-mode))
@@ -5060,11 +5063,17 @@ insert the character instead."
                        (when-let* ((pos (agent-shell-markdown--previous-visible-link))
                                    ((< pos current-pos)))
                          pos)))
+           (source-block-pos
+            (save-mark-and-excursion
+              (when-let* ((pos (agent-shell-markdown--previous-visible-source-block))
+                          ((< pos current-pos)))
+                pos)))
            (positions (delq nil (list prompt-pos
                                       block-pos
                                       button-pos
                                       image-pos
-                                      link-pos)))
+                                      link-pos
+                                      source-block-pos)))
            (next-pos (when positions
                        (apply #'max positions))))
       (when next-pos

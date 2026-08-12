@@ -612,10 +612,10 @@ Optionally set its PROMPT and RESPONSE."
 (defun agent-shell-viewport-next-item ()
   "Go to next item.
 
-Could be a prompt, an expandable item, a displayed image, or a
-rendered link.  When point is inside a rendered markdown table,
-navigate to the next table cell instead.  If at point-max, attempt
-to switch to next interaction."
+Could be a prompt, an expandable item, a displayed image, a rendered
+link, or a source block.  When point is inside a rendered markdown
+table, navigate to the next table cell instead.  If at point-max,
+attempt to switch to next interaction."
   (declare (modes agent-shell-viewport-view-mode))
   (interactive)
   (unless (derived-mode-p 'agent-shell-viewport-view-mode)
@@ -633,6 +633,8 @@ to switch to next interaction."
                         (agent-shell-markdown--next-visible-image)))
            (link-pos (save-mark-and-excursion
                        (agent-shell-markdown--next-visible-link)))
+           (source-block-pos (save-mark-and-excursion
+                               (agent-shell-markdown--next-visible-source-block)))
            ;; Filter positions to only those after current position
            (candidates (delq nil (list
                                   (when (and prompt-start (> prompt-start current-pos))
@@ -642,7 +644,8 @@ to switch to next interaction."
                                   block-pos
                                   button-pos
                                   image-pos
-                                  link-pos)))
+                                  link-pos
+                                  source-block-pos)))
            (next-pos (if candidates
                          (apply #'min candidates)
                        ;; No more items, try point-max if not already there
@@ -662,10 +665,10 @@ to switch to next interaction."
 (defun agent-shell-viewport-previous-item ()
   "Go to previous item.
 
-Could be a prompt, an expandable item, a displayed image, or a
-rendered link.  When point is inside a rendered markdown table,
-navigate to the previous table cell instead.  If at the first item,
-attempt to switch to previous interaction."
+Could be a prompt, an expandable item, a displayed image, a rendered
+link, or a source block.  When point is inside a rendered markdown
+table, navigate to the previous table cell instead.  If at the first
+item, attempt to switch to previous interaction."
   (declare (modes agent-shell-viewport-view-mode))
   (interactive)
   (unless (derived-mode-p 'agent-shell-viewport-view-mode)
@@ -691,6 +694,11 @@ attempt to switch to previous interaction."
                        (when-let* ((pos (agent-shell-markdown--previous-visible-link))
                                    ((< pos current-pos)))
                          pos)))
+           (source-block-pos
+            (save-mark-and-excursion
+              (when-let* ((pos (agent-shell-markdown--previous-visible-source-block))
+                          ((< pos current-pos)))
+                pos)))
            ;; Filter positions to only those before current position
            (candidates (delq nil (list
                                   (when (and prompt-start (< prompt-start current-pos))
@@ -700,7 +708,8 @@ attempt to switch to previous interaction."
                                   block-pos
                                   button-pos
                                   image-pos
-                                  link-pos)))
+                                  link-pos
+                                  source-block-pos)))
            (next-pos (when candidates
                        (apply #'max candidates))))
       (if next-pos

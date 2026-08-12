@@ -647,6 +647,39 @@ streaming **not bold**" nil)))))
     (should (null (agent-shell-markdown--next-visible-image)))
     (should (= 2 (agent-shell-markdown--next-visible-link)))))
 
+(ert-deftest agent-shell-markdown-next-visible-source-block ()
+  ;; Walks rendered source blocks, landing on the `⧉' their label ends
+  ;; with (where RET copies the body) rather than on the block's text.
+  (with-temp-buffer
+    (insert "Intro\n\n```python\nprint(1)\n```\n\nMiddle\n\n```\nplain\n```\n\nEnd\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    (let ((first (agent-shell-markdown--next-visible-source-block)))
+      (should first)
+      (should (equal "⧉" (buffer-substring-no-properties first (1+ first))))
+      (goto-char first)
+      (let ((second (agent-shell-markdown--next-visible-source-block)))
+        (should second)
+        (should (equal "⧉" (buffer-substring-no-properties second (1+ second))))
+        (goto-char second)
+        (should (null (agent-shell-markdown--next-visible-source-block)))
+        ;; And back again.
+        (should (= first (agent-shell-markdown--previous-visible-source-block)))))))
+
+(ert-deftest agent-shell-markdown-next-visible-source-block-skips-hidden ()
+  ;; A block hidden inside collapsed text isn't a navigation stop.
+  (with-temp-buffer
+    (insert "Intro\n\n```python\nprint(1)\n```\n\nEnd\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    (let ((glyph (agent-shell-markdown--next-visible-source-block)))
+      (put-text-property glyph (1+ glyph) 'invisible t)
+      (goto-char (point-min))
+      (should (null (agent-shell-markdown--next-visible-source-block)))
+      (remove-list-of-text-properties glyph (1+ glyph) '(invisible))
+      (goto-char (point-min))
+      (should (= glyph (agent-shell-markdown--next-visible-source-block))))))
+
 (ert-deftest agent-shell-markdown-visible-image-search-without-images ()
   ;; Plain text is no stop in either direction.
   (with-temp-buffer

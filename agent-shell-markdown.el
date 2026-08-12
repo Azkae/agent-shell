@@ -1391,7 +1391,14 @@ with `emacs-lisp-mode' face properties on the body and a
             ;; prefix punches a hole in the caller's contiguous block
             ;; range and breaks toggle/replace operations.
             (let* ((label-text (concat (if (string-empty-p lang) "snippet" lang)
-                                       " ⧉"))
+                                       " "
+                                       ;; Tag the copy glyph so item
+                                       ;; navigation can land on the
+                                       ;; affordance itself (see
+                                       ;; `agent-shell-markdown--next-visible-source-block').
+                                       (propertize
+                                        "⧉"
+                                        'agent-shell-markdown-source-block-copy t)))
                    (content-start (copy-marker (marker-position body-start) t))
                    (kill-action (lambda ()
                                   (interactive)
@@ -3323,6 +3330,29 @@ Skips links hidden inside collapsed text (see
 `agent-shell-markdown--next-visible-link')."
   (agent-shell-markdown--search-visible
    :property 'agent-shell-markdown-url
+   :predicate #'identity
+   :backwards t))
+
+(defun agent-shell-markdown--next-visible-source-block ()
+  "From point, return the position of the next visible source block, or nil.
+
+Returns the `⧉' glyph on the block's label, where RET copies the body,
+so navigation lands on what can be acted on rather than on the block's
+first line.  Blocks hidden inside collapsed text are skipped, as for
+`agent-shell-markdown--next-visible-image'.
+
+For example, in a buffer holding one rendered \"python ⧉\" block,
+returns the position of its `⧉'."
+  (agent-shell-markdown--search-visible
+   :property 'agent-shell-markdown-source-block-copy
+   :predicate #'identity))
+
+(defun agent-shell-markdown--previous-visible-source-block ()
+  "From point, return the position of the previous visible source block, or nil.
+Skips blocks hidden inside collapsed text (see
+`agent-shell-markdown--next-visible-source-block')."
+  (agent-shell-markdown--search-visible
+   :property 'agent-shell-markdown-source-block-copy
    :predicate #'identity
    :backwards t))
 
