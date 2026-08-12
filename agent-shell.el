@@ -8410,6 +8410,28 @@ for details."
 
 ;;; Permissions
 
+(cl-defun agent-shell--append-title-detail (&key text detail)
+  "Return TEXT with DETAIL appended, or DETAIL when TEXT is nil.
+
+TEXT is returned as-is when it ends in a fenced code block.  Appending to
+the closing fence line would leave the block unterminated and the
+markdown renderer would show the fences verbatim.  See
+https://github.com/xenodium/agent-shell/issues/767.
+
+For example:
+
+  TEXT \"edit\" and DETAIL \"foo.rs\"
+  => \"edit (foo.rs)\"
+
+  TEXT \"```console\\nls -la\\n```\" and DETAIL \"/home/user\"
+  => \"```console\\nls -la\\n```\""
+  (cond ((null text)
+         detail)
+        ((string-suffix-p "```" (string-trim-right text))
+         text)
+        (t
+         (concat (string-trim-right text) " (" detail ")"))))
+
 (cl-defun agent-shell--permission-title (&key tool-call)
   "Build a display title for a permission dialog from TOOL-CALL.
 
@@ -8432,7 +8454,11 @@ For example:
 
   TOOL-CALL with title \"emacs_eval-elisp\", kind \"other\",
   and rawInput ((expression . \"(+ 1 2 3)\"))
-  => \"emacs_eval-elisp\\n\\n```\\n(+ 1 2 3)\\n```\""
+  => \"emacs_eval-elisp\\n\\n```\\n(+ 1 2 3)\\n```\"
+
+  TOOL-CALL with title \"Bash\", command \"ls -la\"
+  and locations ((path . \"/home/user\"))
+  => \"```console\\nls -la\\n```\""
   (let* ((title (map-elt tool-call :title))
          (raw-input (map-elt tool-call :raw-input))
          (command (agent-shell--tool-call-command-to-string
@@ -8483,9 +8509,7 @@ For example:
                 ((not (string-empty-p filename)))
                 ((or (not text)
                      (not (string-match-p (regexp-quote filename) text)))))
-      (setq text (if text
-                     (concat (string-trim-right text) " (" filename ")")
-                   filename)))
+      (setq text (agent-shell--append-title-detail :text text :detail filename)))
     ;; Append the URL to the title when available and not already
     ;; included, so the user can see which URL the permission applies
     ;; to.  Unlike filepaths, keep the full URL (not just its basename).
@@ -8494,9 +8518,7 @@ For example:
                 ((not (string-empty-p url)))
                 ((or (not text)
                      (not (string-match-p (regexp-quote url) text)))))
-      (setq text (if text
-                     (concat (string-trim-right text) " (" url ")")
-                   url)))
+      (setq text (agent-shell--append-title-detail :text text :detail url)))
     ;; Fence execute commands so the markdown renderer
     ;; renders them verbatim, not as markdown.
     (when (and text
@@ -8543,9 +8565,7 @@ For example:
                        (equal basename path)
                        (string-empty-p basename)
                        (not (string-match-p (regexp-quote basename) text)))))
-        (setq text (if text
-                       (concat (string-trim-right text) " (" path ")")
-                     path))))
+        (setq text (agent-shell--append-title-detail :text text :detail path))))
     text))
 
 (cl-defun agent-shell--make-tool-call-permission-text (&key tool-call tool-call-id client state)

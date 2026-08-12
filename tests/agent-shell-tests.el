@@ -3986,6 +3986,32 @@ copy should render."
               (:raw-input . ((filepath . "/home/user/foo.rs")))
               (:locations . [((path . "/home/user/foo.rs"))]))))))
 
+(ert-deftest agent-shell--permission-title-locations-skipped-after-fenced-command-test ()
+  "Skip `locations' paths when the title ends in a fenced command.
+OpenCode sends the command in `rawInput' and the working directory in
+`locations'.  Appending to the closing fence line would leave the block
+unterminated and render the fences verbatim.  See
+https://github.com/xenodium/agent-shell/issues/767."
+  (should (equal
+           "```console\ngh issue list --limit 1\n```"
+           (agent-shell--permission-title
+            :tool-call
+            `((:title . "gh issue list --limit 1")
+              (:kind . "execute")
+              (:raw-input . ((command . "gh issue list --limit 1")))
+              (:locations . [((path . "/home/user/.config/emacs"))]))))))
+
+(ert-deftest agent-shell--permission-title-locations-skipped-after-fenced-raw-input-test ()
+  "Skip `locations' paths when the title ends in fenced `rawInput'."
+  (should (equal
+           "emacs_eval-elisp\n\n```\n(+ 1 2 3)\n```"
+           (agent-shell--permission-title
+            :tool-call
+            `((:title . "emacs_eval-elisp")
+              (:kind . "other")
+              (:raw-input . ((expression . "(+ 1 2 3)")))
+              (:locations . [((path . "/home/user/project"))]))))))
+
 (ert-deftest agent-shell--permission-title-other-kind-single-stringy-raw-input-test ()
   "Surface single stringy `rawInput' value for `other'-kind tools.
 OpenCode sends `emacs_eval-elisp' permission requests with the
