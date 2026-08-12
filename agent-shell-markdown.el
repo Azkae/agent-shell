@@ -3272,6 +3272,46 @@ markup carries no such block, that is when nothing but
               ((string-match "{\\([^}\n]*\\)}\\'" source)))
     (agent-shell-markdown--parse-image-attributes (match-string 1 source))))
 
+(defun agent-shell-markdown--next-visible-image ()
+  "From point, return the start of the next visible image, or nil.
+
+Images hidden inside collapsed text (their start is `invisible') are
+skipped, navigating to one being a jump into text nothing shows.  So
+is markup left unrendered, which carries no image to land on.
+
+Mirrors `agent-shell-ui--next-visible-navigatable', for callers
+folding images into their item navigation.
+
+For example, with a collapsed body holding the only image ahead,
+returns nil; expanded, it returns that image's position."
+  (agent-shell-markdown--search-visible-image :backwards nil))
+
+(defun agent-shell-markdown--previous-visible-image ()
+  "From point, return the start of the previous visible image, or nil.
+Skips images hidden inside collapsed text (see
+`agent-shell-markdown--next-visible-image')."
+  (agent-shell-markdown--search-visible-image :backwards t))
+
+(cl-defun agent-shell-markdown--search-visible-image (&key backwards)
+  "From point, return the start of the nearest visible image, or nil.
+Searches forward, or backwards when BACKWARDS is non-nil.  The image
+point is already on isn't a match, so repeated calls advance."
+  (let (result)
+    (catch 'done
+      (while t
+        (let ((match (funcall (if backwards
+                                 #'text-property-search-backward
+                               #'text-property-search-forward)
+                              'display nil
+                              (lambda (_value property)
+                                (eq (car-safe property) 'image))
+                              t)))
+          (unless match (throw 'done nil))
+          (unless (invisible-p (prop-match-beginning match))
+            (setq result (prop-match-beginning match))
+            (throw 'done nil)))))
+    result))
+
 (defun agent-shell-markdown--image-position-at-point ()
   "Return the position of the image displayed at point, or nil when there's none.
 Point counts as on an image when the char it's on displays one or,

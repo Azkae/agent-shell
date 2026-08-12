@@ -4973,8 +4973,9 @@ APPEND and CREATE-NEW control update behavior."
 (defun agent-shell-next-item ()
   "Go to next item.
 
-Could be a prompt or an expandable item.  When point is inside a
-rendered markdown table, navigate to the next table cell instead.
+Could be a prompt, an expandable item, or a displayed image.  When
+point is inside a rendered markdown table, navigate to the next table
+cell instead.
 If point is at the input prompt and a character key was pressed,
 insert the character instead."
   (declare (modes agent-shell-mode))
@@ -4999,9 +5000,12 @@ insert the character instead."
                         (agent-shell-ui-forward-block)))
            (button-pos (save-mark-and-excursion
                          (agent-shell-next-permission-button)))
+           (image-pos (save-mark-and-excursion
+                        (agent-shell-markdown--next-visible-image)))
            (next-pos (apply #'min (delq nil (list prompt-pos
                                                   block-pos
-                                                  button-pos)))))
+                                                  button-pos
+                                                  image-pos)))))
       (when next-pos
         (deactivate-mark)
         (goto-char next-pos)
@@ -5011,8 +5015,9 @@ insert the character instead."
 (defun agent-shell-previous-item ()
   "Go to previous item.
 
-Could be a prompt or an expandable item.  When point is inside a
-rendered markdown table, navigate to the previous table cell instead.
+Could be a prompt, an expandable item, or a displayed image.  When
+point is inside a rendered markdown table, navigate to the previous
+table cell instead.
 If point is at the input prompt and a character key was pressed,
 insert the character instead."
   (declare (modes agent-shell-mode))
@@ -5044,9 +5049,14 @@ insert the character instead."
                          (let ((pos (agent-shell-previous-permission-button)))
                            (when (and pos (< pos current-pos))
                              pos))))
+           (image-pos (save-mark-and-excursion
+                        (let ((pos (agent-shell-markdown--previous-visible-image)))
+                          (when (and pos (< pos current-pos))
+                            pos))))
            (positions (delq nil (list prompt-pos
                                       block-pos
-                                      button-pos)))
+                                      button-pos
+                                      image-pos)))
            (next-pos (when positions
                        (apply #'max positions))))
       (when next-pos

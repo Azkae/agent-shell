@@ -557,6 +557,63 @@ streaming **not bold**" nil)))))
         (agent-shell-markdown-rerender-images :force t)
         (should (equal max-widths '(300)))))))
 
+(ert-deftest agent-shell-markdown-next-visible-image ()
+  ;; Walks to the next image, skipping the one point is on, so repeated
+  ;; calls advance rather than sticking.
+  (with-temp-buffer
+    (insert "a b c")
+    (put-text-property 1 2 'display '(image :file "a.png"))
+    (put-text-property 3 4 'display '(image :file "b.png"))
+    (put-text-property 5 6 'display '(image :file "c.png"))
+    (goto-char 1)
+    (should (= 3 (agent-shell-markdown--next-visible-image)))
+    (goto-char 3)
+    (should (= 5 (agent-shell-markdown--next-visible-image)))
+    (goto-char 5)
+    (should (null (agent-shell-markdown--next-visible-image)))))
+
+(ert-deftest agent-shell-markdown-next-visible-image-skips-hidden ()
+  ;; An image hidden inside collapsed text isn't a navigation stop:
+  ;; landing there would put point in text nothing shows.
+  (with-temp-buffer
+    (insert "a b c")
+    (put-text-property 1 2 'display '(image :file "a.png"))
+    (put-text-property 3 4 'display '(image :file "b.png"))
+    (put-text-property 3 4 'invisible t)
+    (put-text-property 5 6 'display '(image :file "c.png"))
+    (goto-char 1)
+    (should (= 5 (agent-shell-markdown--next-visible-image)))
+    ;; Expanded, it's a stop again.
+    (remove-list-of-text-properties 3 4 '(invisible))
+    (goto-char 1)
+    (should (= 3 (agent-shell-markdown--next-visible-image)))))
+
+(ert-deftest agent-shell-markdown-previous-visible-image ()
+  ;; Mirrors the forward search, hidden images included.
+  (with-temp-buffer
+    (insert "a b c")
+    (put-text-property 1 2 'display '(image :file "a.png"))
+    (put-text-property 3 4 'display '(image :file "b.png"))
+    (put-text-property 5 6 'display '(image :file "c.png"))
+    (goto-char 5)
+    (should (= 3 (agent-shell-markdown--previous-visible-image)))
+    (goto-char 3)
+    (should (= 1 (agent-shell-markdown--previous-visible-image)))
+    (goto-char 1)
+    (should (null (agent-shell-markdown--previous-visible-image)))
+    (put-text-property 3 4 'invisible t)
+    (goto-char 5)
+    (should (= 1 (agent-shell-markdown--previous-visible-image)))))
+
+(ert-deftest agent-shell-markdown-visible-image-search-without-images ()
+  ;; Plain text is no stop in either direction.
+  (with-temp-buffer
+    (insert "no images here")
+    (goto-char (point-min))
+    (should (null (agent-shell-markdown--next-visible-image)))
+    (goto-char (point-max))
+    (should (null (agent-shell-markdown--previous-visible-image)))))
+
 (ert-deftest agent-shell-markdown-image-scale-steps ()
   ;; A ratio steps by 0.1 and a pixel width by 50, each clamped at its
   ;; bounds.  Re-sizing is a no-op here: the buffer is in no window.
