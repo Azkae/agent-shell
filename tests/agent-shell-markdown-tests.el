@@ -605,6 +605,48 @@ streaming **not bold**" nil)))))
     (goto-char 5)
     (should (= 1 (agent-shell-markdown--previous-visible-image)))))
 
+(ert-deftest agent-shell-markdown-next-visible-link ()
+  ;; Walks rendered links (those stamped with their URL), skipping the one
+  ;; point is on, in both directions.
+  (with-temp-buffer
+    (insert "see docs and more here now")
+    (put-text-property 5 9 'agent-shell-markdown-url "https://a.example")
+    (put-text-property 18 22 'agent-shell-markdown-url "https://b.example")
+    (goto-char (point-min))
+    (should (= 5 (agent-shell-markdown--next-visible-link)))
+    (goto-char 5)
+    (should (= 18 (agent-shell-markdown--next-visible-link)))
+    (goto-char 18)
+    (should (null (agent-shell-markdown--next-visible-link)))
+    (goto-char (point-max))
+    (should (= 18 (agent-shell-markdown--previous-visible-link)))
+    (goto-char 18)
+    (should (= 5 (agent-shell-markdown--previous-visible-link)))))
+
+(ert-deftest agent-shell-markdown-next-visible-link-skips-hidden ()
+  ;; A link hidden inside collapsed text isn't a navigation stop either.
+  (with-temp-buffer
+    (insert "see docs and more here now")
+    (put-text-property 5 9 'agent-shell-markdown-url "https://a.example")
+    (put-text-property 5 9 'invisible t)
+    (put-text-property 18 22 'agent-shell-markdown-url "https://b.example")
+    (goto-char (point-min))
+    (should (= 18 (agent-shell-markdown--next-visible-link)))
+    (remove-list-of-text-properties 5 9 '(invisible))
+    (goto-char (point-min))
+    (should (= 5 (agent-shell-markdown--next-visible-link)))))
+
+(ert-deftest agent-shell-markdown-visible-link-and-image-are-separate-stops ()
+  ;; Rendered text carrying both (an image whose alt text is a link) is one
+  ;; stop for each search, and plain rendered links aren't image stops.
+  (with-temp-buffer
+    (insert "ab")
+    (put-text-property 1 2 'display '(image :file "a.png"))
+    (put-text-property 2 3 'agent-shell-markdown-url "https://a.example")
+    (goto-char (point-min))
+    (should (null (agent-shell-markdown--next-visible-image)))
+    (should (= 2 (agent-shell-markdown--next-visible-link)))))
+
 (ert-deftest agent-shell-markdown-visible-image-search-without-images ()
   ;; Plain text is no stop in either direction.
   (with-temp-buffer

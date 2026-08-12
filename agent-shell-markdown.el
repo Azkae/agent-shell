@@ -3289,33 +3289,67 @@ folding images into their item navigation.
 
 For example, with a collapsed body holding the only image ahead,
 returns nil; expanded, it returns that image's position."
-  (agent-shell-markdown--search-visible-image :backwards nil))
+  (agent-shell-markdown--search-visible
+   :property 'display
+   :predicate (lambda (value) (eq (car-safe value) 'image))))
 
 (defun agent-shell-markdown--previous-visible-image ()
   "From point, return the start of the previous visible image, or nil.
 Skips images hidden inside collapsed text (see
 `agent-shell-markdown--next-visible-image')."
-  (agent-shell-markdown--search-visible-image :backwards t))
+  (agent-shell-markdown--search-visible
+   :property 'display
+   :predicate (lambda (value) (eq (car-safe value) 'image))
+   :backwards t))
 
-(cl-defun agent-shell-markdown--search-visible-image (&key backwards)
-  "From point, return the start of the nearest visible image, or nil.
-Searches forward, or backwards when BACKWARDS is non-nil.  The image
-point is already on isn't a match, so repeated calls advance."
-  (let (result)
-    (catch 'done
-      (while t
-        (let ((match (funcall (if backwards
-                                 #'text-property-search-backward
-                               #'text-property-search-forward)
-                              'display nil
-                              (lambda (_value property)
-                                (eq (car-safe property) 'image))
-                              t)))
-          (unless match (throw 'done nil))
-          (unless (invisible-p (prop-match-beginning match))
-            (setq result (prop-match-beginning match))
-            (throw 'done nil)))))
-    result))
+(defun agent-shell-markdown--next-visible-link ()
+  "From point, return the start of the next visible rendered link, or nil.
+
+Links are the `[title](url)' ones the renderer stamps with
+`agent-shell-markdown-url' (see
+`agent-shell-markdown-link-url-at-point').  Ones hidden inside
+collapsed text are skipped, as for
+`agent-shell-markdown--next-visible-image'.
+
+For example, in \"see docs and more\" where `docs' renders a link,
+returns the position of `docs'."
+  (agent-shell-markdown--search-visible
+   :property 'agent-shell-markdown-url
+   :predicate #'identity))
+
+(defun agent-shell-markdown--previous-visible-link ()
+  "From point, return the start of the previous visible rendered link, or nil.
+Skips links hidden inside collapsed text (see
+`agent-shell-markdown--next-visible-link')."
+  (agent-shell-markdown--search-visible
+   :property 'agent-shell-markdown-url
+   :predicate #'identity
+   :backwards t))
+
+(cl-defun agent-shell-markdown--search-visible (&key property predicate backwards)
+  "From point, return the start of the nearest visible PROPERTY run, or nil.
+
+PREDICATE is called with the run's PROPERTY value and returns non-nil
+for a run worth stopping at.  Searches forward, or backwards when
+BACKWARDS is non-nil.  The run point is already on isn't a match, so
+repeated calls advance rather than sticking.  Runs whose start is
+`invisible' are skipped, being text nothing shows.
+
+For example, with PROPERTY `display' and a PREDICATE matching image
+values, returns the position of the next image."
+  (catch 'found
+    (while t
+      (let ((match (funcall (if backwards
+                                #'text-property-search-backward
+                              #'text-property-search-forward)
+                            property nil
+                            (lambda (_target run-value)
+                              (funcall predicate run-value))
+                            t)))
+        (unless match
+          (throw 'found nil))
+        (unless (invisible-p (prop-match-beginning match))
+          (throw 'found (prop-match-beginning match)))))))
 
 (defun agent-shell-markdown--image-position-at-point ()
   "Return the position of the image displayed at point, or nil when there's none.
