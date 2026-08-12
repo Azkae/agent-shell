@@ -5473,5 +5473,34 @@ a real button."
                                      :text (propertize "x" 'face 'agent-shell-link)
                                      :boxed nil :action #'ignore)))))
 
+(ert-deftest agent-shell--typing-at-prompt-p-test ()
+  "A character key typed at an idle prompt is input, not a command."
+  (let ((last-command-event ?+)
+        (this-command 'agent-shell-image-scale-increase))
+    (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () [?+]))
+              ((symbol-function 'key-binding)
+               (lambda (&rest _) 'agent-shell-image-scale-increase)))
+      (cl-letf (((symbol-function 'shell-maker-busy) (lambda (&rest _) nil))
+                ((symbol-function 'shell-maker-point-at-last-prompt-p)
+                 (lambda (&rest _) t)))
+        (should (agent-shell--typing-at-prompt-p)))
+      ;; Away from the prompt (reading output), it's a command.
+      (cl-letf (((symbol-function 'shell-maker-busy) (lambda (&rest _) nil))
+                ((symbol-function 'shell-maker-point-at-last-prompt-p)
+                 (lambda (&rest _) nil)))
+        (should-not (agent-shell--typing-at-prompt-p)))
+      ;; Busy shell: the prompt isn't taking input.
+      (cl-letf (((symbol-function 'shell-maker-busy) (lambda (&rest _) t))
+                ((symbol-function 'shell-maker-point-at-last-prompt-p)
+                 (lambda (&rest _) t)))
+        (should-not (agent-shell--typing-at-prompt-p)))))
+  ;; Invoked as M-x rather than by its key: a command, even at the prompt.
+  (let ((last-command-event nil)
+        (this-command 'agent-shell-image-scale-increase))
+    (cl-letf (((symbol-function 'shell-maker-busy) (lambda (&rest _) nil))
+              ((symbol-function 'shell-maker-point-at-last-prompt-p)
+               (lambda (&rest _) t)))
+      (should-not (agent-shell--typing-at-prompt-p)))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

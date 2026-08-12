@@ -2035,6 +2035,9 @@ copy depending on selection direction."
   "n" #'agent-shell-next-item
   "p" #'agent-shell-previous-item
   "r" #'agent-shell-quote-region
+  "+" #'agent-shell-image-scale-increase
+  "-" #'agent-shell-image-scale-decrease
+  "0" #'agent-shell-image-scale-reset
   "C-<tab>" #'agent-shell-cycle-session-mode
   "C-c C-c" #'agent-shell-interrupt
   "C-c C-m" #'agent-shell-set-session-mode
@@ -4981,12 +4984,7 @@ insert the character instead."
   (cond
    ;; Check if at prompt and inserting a character
    ;; (Ignore special keys like TAB/Shift-TAB).
-   ((and (not (shell-maker-busy))
-         (shell-maker-point-at-last-prompt-p)
-         (integerp last-command-event)
-         (> (length (this-command-keys-vector)) 0)
-         ;; Ensure invoked using a key binding.
-         (eq (key-binding (this-command-keys-vector)) this-command))
+   ((agent-shell--typing-at-prompt-p)
     ;; At prompt, insert character.
     (self-insert-command 1))
    ;; Inside a rendered markdown table — navigate cells.
@@ -5024,12 +5022,7 @@ insert the character instead."
   (cond
    ;; Check if at prompt and inserting a character
    ;; (Ignore special keys like TAB/Shift-TAB).
-   ((and (not (shell-maker-busy))
-         (shell-maker-point-at-last-prompt-p)
-         (integerp last-command-event)
-         (> (length (this-command-keys-vector)) 0)
-         ;; Ensure invoked using a key binding.
-         (eq (key-binding (this-command-keys-vector)) this-command))
+   ((agent-shell--typing-at-prompt-p)
     ;; At prompt, insert character.
     (self-insert-command 1))
    ;; Inside a rendered markdown table — navigate cells.
@@ -10291,11 +10284,7 @@ and queue it via `agent-shell-prompt-queue'."
     (error "Not in a shell"))
   (cond
    ;; At prompt + not busy: behave as regular editing.
-   ((and (not (shell-maker-busy))
-         (shell-maker-point-at-last-prompt-p)
-         (integerp last-command-event)
-         (> (length (this-command-keys-vector)) 0)
-         (eq (key-binding (this-command-keys-vector)) this-command))
+   ((agent-shell--typing-at-prompt-p)
     (self-insert-command 1))
    ;; Region active and not at prompt: quote into prompt or queue.
    ((and (not (shell-maker-point-at-last-prompt-p))
@@ -10311,6 +10300,64 @@ and queue it via `agent-shell-prompt-queue'."
    ;; Otherwise: fall back to self-insert.
    (t
     (self-insert-command 1))))
+
+(defun agent-shell--typing-at-prompt-p ()
+  "Return non-nil when a character key was typed at the latest prompt.
+Single-character bindings in `agent-shell-mode-map' (`n', `+', ...)
+consult this to insert the character while a prompt is being
+composed, acting as commands anywhere else in the shell."
+  (and (not (shell-maker-busy))
+       (shell-maker-point-at-last-prompt-p)
+       (integerp last-command-event)
+       (> (length (this-command-keys-vector)) 0)
+       ;; Ensure invoked using a key binding.
+       (eq (key-binding (this-command-keys-vector)) this-command)))
+
+(defun agent-shell-image-scale-increase ()
+  "Widen the image at point, or every image in the buffer, by one step.
+
+If point is at the last prompt, behave as regular editing (typing
+the originating key) so the user can type `+' as plain input.
+
+See `agent-shell-markdown-image-scale-increase' for the sizing."
+  (declare (modes agent-shell-mode))
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (error "Not in a shell"))
+  (if (agent-shell--typing-at-prompt-p)
+      (self-insert-command 1)
+    (agent-shell-markdown-image-scale-increase)))
+
+(defun agent-shell-image-scale-decrease ()
+  "Narrow the image at point, or every image in the buffer, by one step.
+
+If point is at the last prompt, behave as regular editing (typing
+the originating key) so the user can type `-' as plain input.
+
+See `agent-shell-markdown-image-scale-decrease' for the sizing."
+  (declare (modes agent-shell-mode))
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (error "Not in a shell"))
+  (if (agent-shell--typing-at-prompt-p)
+      (self-insert-command 1)
+    (agent-shell-markdown-image-scale-decrease)))
+
+(defun agent-shell-image-scale-reset ()
+  "Reset the image at point, or every image in the buffer, to its rendered size.
+
+If point is at the last prompt, behave as regular editing (typing
+the originating key) so the user can type `0' as plain input.
+
+See `agent-shell-markdown-image-scale-reset', which errors when
+there's nothing to reset."
+  (declare (modes agent-shell-mode))
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (error "Not in a shell"))
+  (if (agent-shell--typing-at-prompt-p)
+      (self-insert-command 1)
+    (agent-shell-markdown-image-scale-reset)))
 
 (defun agent-shell-trim (text)
   "Strip surrounding whitespace from TEXT, preserving renderer padding.

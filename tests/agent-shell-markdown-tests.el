@@ -441,12 +441,19 @@ streaming **not bold**" nil)))))
                             (point-min) 'agent-shell-markdown-image-width-ratio)))
             (should (= 1000 (get-text-property
                              (point-min) 'agent-shell-markdown-image-window-width))))
-          ;; No attribute: sized by the default `image-max-width' (a float),
-          ;; so tracked with the `default' sentinel (not a baked-in value).
+          ;; No attribute: sized by the default `image-max-width', so
+          ;; tracked with the `default' sentinel (not a baked-in value),
+          ;; whether that default is a ratio or a pixel width.
           ;; A trailing newline settles the streaming attribute guard.
           (with-temp-buffer
             (insert (format "![a](%s)\n" image-file))
             (agent-shell-markdown-replace-markup :render-images t)
+            (should (eq 'default (get-text-property
+                                  (point-min) 'agent-shell-markdown-image-width-ratio))))
+          (with-temp-buffer
+            (insert (format "![a](%s)\n" image-file))
+            (let ((agent-shell-markdown-image-max-width 300))
+              (agent-shell-markdown-replace-markup :render-images t))
             (should (eq 'default (get-text-property
                                   (point-min) 'agent-shell-markdown-image-width-ratio))))
           (with-temp-buffer
@@ -512,6 +519,334 @@ streaming **not bold**" nil)))))
       (should (= 40 (image-property image :max-height))))
     (should (= 2000 (get-text-property
                      (point-min) 'agent-shell-markdown-image-window-width)))))
+
+(ert-deftest agent-shell-markdown-resize-image-skips-matching-max-width ()
+  ;; An image already at the requested width isn't re-created (a pixel-sized
+  ;; default sees the same width at every window width); only the window
+  ;; width it's now measured against is recorded.
+  (with-temp-buffer
+    (insert "X")
+    (put-text-property (point-min) (point-max) 'display
+                       '(image :file "x.png" :max-width 500))
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (&rest _) (error "Should not re-create the image"))))
+      (agent-shell-markdown--resize-image (point-min) (point-max) 500 2000))
+    (should (equal '(image :file "x.png" :max-width 500)
+                   (get-text-property (point-min) 'display)))
+    (should (= 2000 (get-text-property
+                     (point-min) 'agent-shell-markdown-image-window-width)))))
+
+(ert-deftest agent-shell-markdown-rerender-images-force-ignores-stored-width ()
+  ;; `agent-shell-markdown-image-max-width' changing (rather than the
+  ;; window) leaves the stored window width matching, so forcing is what
+  ;; re-sizes the image.
+  (with-temp-buffer
+    (insert "X")
+    (put-text-property (point-min) (point-max)
+                       'agent-shell-markdown-image-width-ratio 'default)
+    (put-text-property (point-min) (point-max)
+                       'agent-shell-markdown-image-window-width 1000)
+    (let ((max-widths nil)
+          (agent-shell-markdown-image-max-width 300))
+      (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+                ((symbol-function 'window-body-width) (lambda (&rest _) 1000))
+                ((symbol-function 'agent-shell-markdown--resize-image)
+                 (lambda (_s _e max-width _w) (push max-width max-widths))))
+        (agent-shell-markdown-rerender-images)
+        (should (null max-widths))
+        (agent-shell-markdown-rerender-images :force t)
+        (should (equal max-widths '(300)))))))
+
+(ert-deftest agent-shell-markdown-image-scale-steps ()
+  ;; A ratio steps by 0.1 and a pixel width by 50, each clamped at its
+  ;; bounds.  Re-sizing is a no-op here: the buffer is in no window.
+  (with-temp-buffer
+    (setq-local agent-shell-markdown-image-max-width 0.4)
+    (agent-shell-markdown-image-scale-increase)
+    (should (= 0.5 agent-shell-markdown-image-max-width))
+    (agent-shell-markdown-image-scale-decrease)
+    (agent-shell-markdown-image-scale-decrease)
+    (should (= 0.3 agent-shell-markdown-image-max-width))
+    ;; Repeated steps stay on 0.1 boundaries (no float drift) and stop at 1.0.
+    (dotimes (_ 10)
+      (agent-shell-markdown-image-scale-increase))
+    (should (= 1.0 agent-shell-markdown-image-max-width))
+    ;; ... and at 0.1 going down.
+    (dotimes (_ 20)
+      (agent-shell-markdown-image-scale-decrease))
+    (should (= 0.1 agent-shell-markdown-image-max-width)))
+  (with-temp-buffer
+    (setq-local agent-shell-markdown-image-max-width 300)
+    (agent-shell-markdown-image-scale-increase)
+    (should (= 350 agent-shell-markdown-image-max-width))
+    (agent-shell-markdown-image-scale-decrease)
+    (should (= 300 agent-shell-markdown-image-max-width))
+    (dotimes (_ 10)
+      (agent-shell-markdown-image-scale-decrease))
+    (should (= 50 agent-shell-markdown-image-max-width))))
+
+(ert-deftest agent-shell-markdown-image-scale-steps-buffer-locally ()
+  ;; Scaling one buffer leaves the setting (and every other buffer's
+  ;; images) as configured, rather than moving a global width.
+  (let ((configured (default-value 'agent-shell-markdown-image-max-width)))
+    (with-temp-buffer
+      (agent-shell-markdown-image-scale-increase)
+      (should (local-variable-p 'agent-shell-markdown-image-max-width))
+      (should (equal configured
+                     (default-value 'agent-shell-markdown-image-max-width))))
+    ;; A second buffer starts from the configured width, not the first
+    ;; buffer's step.
+    (with-temp-buffer
+      (should-not (local-variable-p 'agent-shell-markdown-image-max-width))
+      (should (equal configured agent-shell-markdown-image-max-width)))))
+
+(ert-deftest agent-shell-markdown-image-scale-at-point-steps-ratio ()
+  ;; With point on a window-tracking image, only that image steps: its
+  ;; fraction grows by 0.1 and stays tracked (so it keeps following the
+  ;; window), while the setting other images follow is left alone.
+  (with-temp-buffer
+    (insert "AB")
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 500))
+    (put-text-property 1 2 'agent-shell-markdown-image-width-ratio 0.5)
+    (put-text-property 2 3 'display '(image :file "b.png" :max-width 400))
+    (put-text-property 2 3 'agent-shell-markdown-image-width-ratio 'default)
+    (setq-local agent-shell-markdown-image-max-width 0.4)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (goto-char 1)
+      (agent-shell-markdown-image-scale-increase))
+    (should (= 0.6 (get-text-property 1 'agent-shell-markdown-image-width-ratio)))
+    (should (= 600 (image-property (get-text-property 1 'display) :max-width)))
+    ;; The image at point aside, nothing else moved.
+    (should (= 0.4 agent-shell-markdown-image-max-width))
+    (should (= 400 (image-property (get-text-property 2 'display) :max-width)))))
+
+(ert-deftest agent-shell-markdown-image-scale-at-point-steps-pixels ()
+  ;; An image the markdown sizes in pixels (no tracked ratio) steps by 50
+  ;; when point is on it, as it does under a whole-buffer step.
+  (with-temp-buffer
+    (insert "A")
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 300))
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (goto-char 1)
+      (agent-shell-markdown-image-scale-increase)
+      (should (= 350 (image-property (get-text-property 1 'display) :max-width)))
+      (agent-shell-markdown-image-scale-decrease)
+      (agent-shell-markdown-image-scale-decrease)
+      (should (= 250 (image-property (get-text-property 1 'display) :max-width)))
+      ;; Still untracked, so a window resize won't pull it back to the
+      ;; default width.
+      (should (null (get-text-property
+                     1 'agent-shell-markdown-image-width-ratio))))))
+
+(ert-deftest agent-shell-markdown-image-scale-at-point-untracks-default ()
+  ;; Stepping a `default'-sized image detaches it from
+  ;; `agent-shell-markdown-image-max-width'.  With a pixel default there's
+  ;; no fraction to track, so it's dropped from tracking altogether and
+  ;; keeps its stepped width across a resize.
+  (with-temp-buffer
+    (insert "A")
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 300))
+    (put-text-property 1 2 'agent-shell-markdown-image-width-ratio 'default)
+    (put-text-property 1 2 'agent-shell-markdown-image-window-width 1000)
+    (setq-local agent-shell-markdown-image-max-width 300)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 2000)))
+      (goto-char 1)
+      (agent-shell-markdown-image-scale-increase)
+      (should (= 350 (image-property (get-text-property 1 'display) :max-width)))
+      (should (null (get-text-property
+                     1 'agent-shell-markdown-image-width-ratio)))
+      (agent-shell-markdown-rerender-images :force t)
+      (should (= 350 (image-property (get-text-property 1 'display) :max-width))))))
+
+(ert-deftest agent-shell-markdown-image-scale-at-point-follows-preceding-image ()
+  ;; A cursor resting just past an image still counts as being on it,
+  ;; where a cursor on plain text falls back to whole-buffer scaling.
+  (with-temp-buffer
+    (insert "Ax")
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 300))
+    (setq-local agent-shell-markdown-image-max-width 0.4)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (goto-char 2)
+      (agent-shell-markdown-image-scale-increase)
+      (should (= 350 (image-property (get-text-property 1 'display) :max-width)))
+      (should (= 0.4 agent-shell-markdown-image-max-width))
+      ;; On plain text: the buffer's width steps, and the image steps with
+      ;; it on its own pixel size rather than being skipped.
+      (goto-char 3)
+      (agent-shell-markdown-image-scale-increase)
+      (should (= 0.5 agent-shell-markdown-image-max-width))
+      (should (= 400 (image-property (get-text-property 1 'display) :max-width))))))
+
+(ert-deftest agent-shell-markdown-image-scale-off-image-steps-every-image ()
+  ;; A buffer-wide step moves all three kinds: one following the setting,
+  ;; one the markdown sized as a percentage, one it sized in pixels.
+  (with-temp-buffer
+    (insert "ABC.")
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 400))
+    (put-text-property 1 2 'agent-shell-markdown-image-width-ratio 'default)
+    (put-text-property 2 3 'display '(image :file "b.png" :max-width 500))
+    (put-text-property 2 3 'agent-shell-markdown-image-width-ratio 0.5)
+    (put-text-property 3 4 'display '(image :file "c.png" :max-width 300))
+    (setq-local agent-shell-markdown-image-max-width 0.4)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (goto-char (point-max))
+      (should-not (agent-shell-markdown--image-position-at-point))
+      (agent-shell-markdown-image-scale-increase)
+      ;; Following the buffer's width, now 0.5.
+      (should (= 0.5 agent-shell-markdown-image-max-width))
+      (should (= 500 (image-property (get-text-property 1 'display) :max-width)))
+      ;; Its own fraction stepped to 0.6, still tracking the window.
+      (should (= 0.6 (get-text-property 2 'agent-shell-markdown-image-width-ratio)))
+      (should (= 600 (image-property (get-text-property 2 'display) :max-width)))
+      ;; Its own pixel width stepped by 50.
+      (should (= 350 (image-property (get-text-property 3 'display) :max-width)))
+      (should (null (get-text-property
+                     3 'agent-shell-markdown-image-width-ratio))))))
+
+(ert-deftest agent-shell-markdown-image-scale-reset-restores-markup-width ()
+  ;; Reset re-sizes the image at point to what its markdown asks for: a
+  ;; pixel width stays untracked at that width, a percentage goes back to
+  ;; tracking its own fraction.
+  (with-temp-buffer
+    (insert "AB")
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 500))
+    (put-text-property 1 2 'agent-shell-markdown-source "![a](a.png){width=300}")
+    (put-text-property 2 3 'display '(image :file "b.png" :max-width 500))
+    (put-text-property 2 3 'agent-shell-markdown-image-width-ratio 0.9)
+    (put-text-property 2 3 'agent-shell-markdown-source "![b](b.png){width=50%}")
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (goto-char 1)
+      (agent-shell-markdown-image-scale-reset)
+      (should (= 300 (image-property (get-text-property 1 'display) :max-width)))
+      (should (null (get-text-property 1 'agent-shell-markdown-image-width-ratio)))
+      (goto-char 2)
+      (agent-shell-markdown-image-scale-reset)
+      (should (= 500 (image-property (get-text-property 2 'display) :max-width)))
+      (should (= 0.5 (get-text-property
+                      2 'agent-shell-markdown-image-width-ratio))))))
+
+(ert-deftest agent-shell-markdown-image-scale-reset-restores-default-tracking ()
+  ;; An image whose markdown asks for no width goes back to following
+  ;; `agent-shell-markdown-image-max-width', so later whole-buffer
+  ;; scaling takes it along again.
+  (with-temp-buffer
+    (insert "A")
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 250))
+    (put-text-property 1 2 'agent-shell-markdown-source "![a](a.png)")
+    (setq-local agent-shell-markdown-image-max-width 0.4)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (goto-char 1)
+      (agent-shell-markdown-image-scale-reset)
+      (should (eq 'default (get-text-property
+                            1 'agent-shell-markdown-image-width-ratio)))
+      (should (= 400 (image-property (get-text-property 1 'display) :max-width)))
+      ;; Following the setting again: scaling from off the image moves it.
+      (goto-char (point-max))
+      (agent-shell-markdown-image-scale-increase)
+      (should (= 500 (image-property
+                      (get-text-property 1 'display) :max-width))))))
+
+(ert-deftest agent-shell-markdown-image-scale-reset-without-image-errors ()
+  ;; A buffer with no image and no scaling of its own has nothing to
+  ;; reset, and says so rather than silently doing nothing.
+  (with-temp-buffer
+    (insert "no image here")
+    (goto-char (point-min))
+    (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (should-error (agent-shell-markdown-image-scale-reset) :type 'user-error))))
+
+(ert-deftest agent-shell-markdown-image-scale-reset-off-image-resets-buffer ()
+  ;; Off an image, reset restores every image in the buffer and drops the
+  ;; buffer's own width, so images following it return to the configured
+  ;; one.
+  (with-temp-buffer
+    (insert "AB.")
+    ;; Stepped at point earlier: untracked at 500, markdown asking for 300.
+    (put-text-property 1 2 'display '(image :file "a.png" :max-width 500))
+    (put-text-property 1 2 'agent-shell-markdown-source "![a](a.png){width=300}")
+    ;; Following the buffer's stepped width (0.8 of 1000).
+    (put-text-property 2 3 'display '(image :file "b.png" :max-width 800))
+    (put-text-property 2 3 'agent-shell-markdown-image-width-ratio 'default)
+    (put-text-property 2 3 'agent-shell-markdown-source "![b](b.png)")
+    (setq-local agent-shell-markdown-image-max-width 0.8)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest props)
+                 (append (list 'image :file file) props)))
+              ((symbol-function 'image-flush) (lambda (&rest _) nil))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      ;; Clear of both images: the char before point isn't one either.
+      (goto-char (point-max))
+      (should-not (agent-shell-markdown--image-position-at-point))
+      (agent-shell-markdown-image-scale-reset)
+      ;; Back to the width its markdown asks for, untracked.
+      (should (= 300 (image-property (get-text-property 1 'display) :max-width)))
+      (should (null (get-text-property 1 'agent-shell-markdown-image-width-ratio)))
+      ;; Back to the configured width, still tracking it.
+      (should-not (local-variable-p 'agent-shell-markdown-image-max-width))
+      (should (eq 'default (get-text-property
+                            2 'agent-shell-markdown-image-width-ratio)))
+      (should (= (agent-shell-markdown--image-max-width)
+                 (image-property (get-text-property 2 'display) :max-width))))))
+
+(ert-deftest agent-shell-markdown-image-scale-reset-drops-scaling-without-images ()
+  ;; A buffer scaled before its images arrived (or after they were
+  ;; cleared) still has its own width dropped.
+  (with-temp-buffer
+    (insert "no images yet")
+    (setq-local agent-shell-markdown-image-max-width 0.8)
+    (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) 'window))
+              ((symbol-function 'window-body-width) (lambda (&rest _) 1000)))
+      (agent-shell-markdown-image-scale-reset)
+      (should-not (local-variable-p 'agent-shell-markdown-image-max-width)))))
+
+(ert-deftest agent-shell-markdown-image-source-attributes ()
+  ;; Reads the size block off the stashed markup; markup without one (or
+  ;; no markup at all) constrains nothing.
+  (with-temp-buffer
+    (insert "ABC")
+    (put-text-property 1 2 'agent-shell-markdown-source "![a](a.png){width=300}")
+    (put-text-property 2 3 'agent-shell-markdown-source "![a](a.png)")
+    (should (equal '((:max-width . 300))
+                   (agent-shell-markdown--image-source-attributes 1)))
+    (should (null (agent-shell-markdown--image-source-attributes 2)))
+    (should (null (agent-shell-markdown--image-source-attributes 3)))))
 
 (ert-deftest agent-shell-markdown-image-attributes-round-trip ()
   ;; A trailing `{width=...}' block is consumed with the image (no leaked

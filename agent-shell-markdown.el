@@ -176,7 +176,12 @@ rendered by `agent-shell-markdown-convert'."
 (defvar agent-shell-markdown-image-max-width 0.4
   "Maximum width for inline images rendered from `![alt](url)'.
 An integer is taken as pixels.  A float between 0 and 1 is a
-ratio of the window body width.")
+ratio of the window body width.
+
+`agent-shell-markdown-image-scale-increase' and
+`agent-shell-markdown-image-scale-decrease' step this interactively,
+re-sizing the images already on display.  They step a buffer-local
+value, leaving this setting as configured.")
 
 (defvar agent-shell-markdown-prettify-tables t
   "When non-nil, render markdown tables with aligned columns.")
@@ -1029,13 +1034,13 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                  ;; `agent-shell-markdown-rerender-images' can re-size it: an
                  ;; explicit `{width=N%}' fraction (intrinsic to the markup),
                  ;; or the symbol `default' when it comes from
-                 ;; `agent-shell-markdown-image-max-width' being a ratio
-                 ;; (re-read live on resize, so a changed setting applies).
-                 ;; Nil for a fixed pixel size.
+                 ;; `agent-shell-markdown-image-max-width' (re-read live on
+                 ;; resize and on `agent-shell-markdown-image-scale-increase',
+                 ;; so a changed setting applies).  Nil for a size the markup
+                 ;; itself fixes in pixels.
                  (width-ratio (cond ((map-elt attributes :max-width-ratio))
                                     ((map-elt attributes :max-width) nil)
-                                    ((floatp agent-shell-markdown-image-max-width)
-                                     'default)))
+                                    (t 'default)))
                  (content-end (if attribute-match (cdr attribute-match) markup-end))
                  ;; Stash the original `![alt](url)' markup so
                  ;; `agent-shell-copy-as-markdown' round-trips the image back to
@@ -1149,17 +1154,15 @@ renders the image in place of that text."
                 ;; background a `mouse-face' would paint across it on hover.
                 (put-text-property path-start path-end 'pointer 'hand)
                 ;; A bare-path image is sized by the default
-                ;; `agent-shell-markdown-image-max-width'; when that is a
-                ;; ratio it tracks the window, so mark it `default' for
-                ;; `agent-shell-markdown-rerender-images' to re-read live (a
-                ;; fixed pixel default is left untracked).
-                (when (floatp agent-shell-markdown-image-max-width)
-                  (put-text-property path-start path-end
-                                     'agent-shell-markdown-image-width-ratio
-                                     'default)
-                  (put-text-property
-                   path-start path-end 'agent-shell-markdown-image-window-width
-                   (agent-shell-markdown--displayed-window-width)))
+                ;; `agent-shell-markdown-image-max-width', so mark it
+                ;; `default' for `agent-shell-markdown-rerender-images' to
+                ;; re-read live.
+                (put-text-property path-start path-end
+                                   'agent-shell-markdown-image-width-ratio
+                                   'default)
+                (put-text-property
+                 path-start path-end 'agent-shell-markdown-image-window-width
+                 (agent-shell-markdown--displayed-window-width))
                 (add-text-properties path-start path-end
                                      '(agent-shell-markdown-frozen t
                                                                    rear-nonsticky (agent-shell-markdown-frozen))))))))))))
@@ -2930,20 +2933,25 @@ that as \"size unknown\" and re-measure once it is shown."
 Creates a fresh image from the current one's file with the new
 `:max-width' (keeping its `:max-height'), swaps it onto the `display'
 property, and records WINDOW-WIDTH as the width it is now sized
-against.  A no-op unless the region actually holds a file image."
+against.  A no-op unless the region actually holds a file image.
+
+An image already at MAX-WIDTH only gets WINDOW-WIDTH recorded: a
+pixel-sized image sees the same MAX-WIDTH at every window width, so
+re-creating and flushing it on each resize would be wasted work."
   (when-let* ((image (get-text-property start 'display))
               ((eq (car-safe image) 'image))
-              (file (image-property image :file))
-              (resized (create-image
-                        file nil nil
-                        :max-width max-width
-                        :max-height (image-property image :max-height))))
-    (image-flush resized)
-    (put-text-property start end 'display resized)
+              (file (image-property image :file)))
+    (when-let* (((not (eql max-width (image-property image :max-width))))
+                (resized (create-image
+                          file nil nil
+                          :max-width max-width
+                          :max-height (image-property image :max-height))))
+      (image-flush resized)
+      (put-text-property start end 'display resized))
     (put-text-property start end
                        'agent-shell-markdown-image-window-width window-width)))
 
-(defun agent-shell-markdown-rerender-images ()
+(cl-defun agent-shell-markdown-rerender-images (&key force)
   "Re-size window-relative images whose stored window width no longer matches.
 
 Each image sized against the window carries, on
@@ -2957,9 +2965,14 @@ stored width differs from the display, this recomputes `:max-width' at
 the current width -- from the stored fraction, or, for `default', by
 re-reading `agent-shell-markdown-image-max-width' live so a changed
 setting applies.
-Fixed-size (pixel) images carry no ratio and are left untouched; an
-image first sized off-screen or at another width is re-sized once
-shown at a different width.
+Images the markup itself sizes in pixels carry no ratio and are left
+untouched; an image first sized off-screen or at another width is
+re-sized once shown at a different width.
+
+With FORCE non-nil, every tracked image is recomputed even when the
+window width hasn't changed, for when the change came from
+`agent-shell-markdown-image-max-width' rather than the window (see
+`agent-shell-markdown-image-scale-increase').
 
 A no-op when the buffer isn't displayed or every image already matches
 the current width, so it is safe to call on display and on resize."
@@ -2978,8 +2991,9 @@ the current width, so it is safe to call on display and on resize."
             (let* ((beg (prop-match-beginning match))
                    (ratio (get-text-property
                            beg 'agent-shell-markdown-image-width-ratio)))
-              (unless (eql width (get-text-property
-                                  beg 'agent-shell-markdown-image-window-width))
+              (when (or force
+                        (not (eql width (get-text-property
+                                         beg 'agent-shell-markdown-image-window-width))))
                 (agent-shell-markdown--resize-image
                  beg (prop-match-end match)
                  (if (numberp ratio)
@@ -2987,6 +3001,338 @@ the current width, so it is safe to call on display and on resize."
                    (agent-shell-markdown--image-max-width))
                  width))))))
       (restore-buffer-modified-p modified))))
+
+(defun agent-shell-markdown-image-scale-increase ()
+  "Widen the image at point, or every image in the buffer, by one step.
+
+With point on an image, only that image widens.  Elsewhere, every
+image in the buffer does.  Either way that includes the ones the
+markdown sizes itself (`{width=300}' or `{width=50%}'): widening a
+whole buffer that visibly skipped some of its images would be no use.
+
+A buffer-wide step moves `agent-shell-markdown-image-max-width'
+buffer-locally, for the images following it, and steps each remaining
+image on its own size.  Nothing outside the buffer changes: not the
+setting, not another buffer's images.
+
+The step is 50 pixels for a pixel width or 0.1 of the window for a
+ratio, so 300 becomes 350 and 0.4 becomes 0.5."
+  (interactive)
+  (agent-shell-markdown--scale-images :direction 1))
+
+(defun agent-shell-markdown-image-scale-decrease ()
+  "Narrow the image at point, or every image in the buffer, by one step.
+
+Inverse of `agent-shell-markdown-image-scale-increase', stopping at
+50 pixels or a 0.1 ratio."
+  (interactive)
+  (agent-shell-markdown--scale-images :direction -1))
+
+(defun agent-shell-markdown-image-scale-reset ()
+  "Drop sizes set by scaling, restoring the ones the images rendered at.
+
+With point on an image, only that image is restored.  Elsewhere, every
+image in the buffer is, and the buffer's own
+`agent-shell-markdown-image-max-width' is dropped so the ones
+following that setting go back to the configured width.
+
+An image rendered at is the width its markdown asks for (`{width=300}'
+or `{width=50%}'), or, for markdown that asks for none, that setting
+again: the image resumes following it, so later scaling takes it along.
+
+Undoes `agent-shell-markdown-image-scale-increase' and
+`agent-shell-markdown-image-scale-decrease'.  Signals an error in a
+buffer holding no image and carrying no scaling of its own, there
+being nothing to reset."
+  (interactive)
+  (unless (or (agent-shell-markdown--reset-image-at-point)
+              (agent-shell-markdown--reset-images))
+    (user-error "No image to reset")))
+
+(cl-defun agent-shell-markdown--scale-images (&key direction)
+  "Step the image at point, or every image in the buffer, by DIRECTION.
+DIRECTION is 1 to widen or -1 to narrow.  Falls back to the whole
+buffer when point isn't on an image, stepping
+`agent-shell-markdown-image-max-width' buffer-locally for the images
+following it and each remaining image on its own size.  See
+`agent-shell-markdown-image-scale-increase' for the step sizes."
+  (unless (agent-shell-markdown--scale-image-at-point :direction direction)
+    ;; Buffer-local, so scaling one buffer leaves the user's setting (and
+    ;; every other buffer's images) alone.  Stepping reads the effective
+    ;; value, so the first step starts from whatever they configured.
+    (setq-local agent-shell-markdown-image-max-width
+                (if (floatp agent-shell-markdown-image-max-width)
+                    (agent-shell-markdown--step-ratio
+                     agent-shell-markdown-image-max-width direction)
+                  (agent-shell-markdown--step-pixels
+                   agent-shell-markdown-image-max-width direction)))
+    (agent-shell-markdown--scale-self-sized-images :direction direction)
+    (agent-shell-markdown-rerender-images :force t)
+    (message "Image width: %s"
+             (agent-shell-markdown--describe-image-width
+              agent-shell-markdown-image-max-width))))
+
+(cl-defun agent-shell-markdown--scale-self-sized-images (&key direction)
+  "Step by DIRECTION the images `agent-shell-markdown-image-max-width' misses.
+
+Those are the ones carrying a size of their own rather than following
+that setting: the ones the markdown sizes itself (`{width=300}',
+`{width=50%}') and any already stepped with point on them.  A
+buffer-wide step has to move each of them itself, or scaling the
+buffer would visibly skip them.
+
+A percentage steps its fraction, and is re-sized by the caller's
+`agent-shell-markdown-rerender-images'; a pixel width has nothing
+tracking it, so it is re-sized here.
+
+A no-op when the buffer isn't displayed, there being no width to
+resolve fractions against.
+
+For example, with DIRECTION 1 a `{width=50%}' image becomes 60% of
+the window and a `{width=300}' one 350 pixels."
+  (when-let* ((window-width (agent-shell-markdown--displayed-window-width)))
+    ;; A re-size, not a content change: keep it off the undo list and
+    ;; don't flip the buffer's modified flag.
+    (let ((modified (buffer-modified-p))
+          (inhibit-read-only t)
+          (buffer-undo-list t))
+      (save-excursion
+        (goto-char (point-min))
+        (let (match)
+          (while (setq match (text-property-search-forward
+                              'display nil
+                              (lambda (_value property)
+                                (eq (car-safe property) 'image))))
+            (let* ((start (prop-match-beginning match))
+                   (end (prop-match-end match))
+                   (ratio (get-text-property
+                           start 'agent-shell-markdown-image-width-ratio)))
+              ;; `default' images follow the setting stepped by the caller,
+              ;; so they're left for its re-render.
+              (cond ((numberp ratio)
+                     (put-text-property start end
+                                        'agent-shell-markdown-image-width-ratio
+                                        (agent-shell-markdown--step-ratio
+                                         ratio direction)))
+                    ((null ratio)
+                     (agent-shell-markdown--resize-image
+                      start end
+                      (agent-shell-markdown--step-pixels
+                       (or (image-property (get-text-property start 'display)
+                                           :max-width)
+                           (agent-shell-markdown--image-max-width))
+                       direction)
+                      window-width)))))))
+      (restore-buffer-modified-p modified))))
+
+(cl-defun agent-shell-markdown--scale-image-at-point (&key direction)
+  "Return non-nil after stepping the image at point by DIRECTION.
+Nil when point isn't on an image, for the caller to fall back to
+scaling the whole buffer.
+
+An image tracking the window (an explicit `{width=N%}', or one
+following `agent-shell-markdown-image-max-width' while that is a
+ratio) steps its fraction and keeps tracking.  Any other image steps
+its pixel width and stops tracking, a pixel width being fixed rather
+than a fraction of the window.
+
+Either way the image stops following
+`agent-shell-markdown-image-max-width', so the size set here sticks
+through window resizes and later scaling of the other images.
+
+For example, with DIRECTION 1 a `{width=300}' image becomes 350
+pixels, and a `{width=50%}' one 60% of the window."
+  (when-let* ((pos (agent-shell-markdown--image-position-at-point))
+              (window-width (agent-shell-markdown--displayed-window-width))
+              (bounds (agent-shell-markdown--image-bounds pos)))
+    ;; A re-size, not a content change: keep it off the undo list and
+    ;; don't flip the buffer's modified flag.
+    (let* ((modified (buffer-modified-p))
+           (inhibit-read-only t)
+           (buffer-undo-list t)
+           (ratio (agent-shell-markdown--image-tracked-ratio pos))
+           (stepped (if ratio
+                        (agent-shell-markdown--step-ratio ratio direction)
+                      (agent-shell-markdown--step-pixels
+                       (or (image-property (get-text-property pos 'display) :max-width)
+                           (agent-shell-markdown--image-max-width))
+                       direction))))
+      ;; Track the new fraction, or untrack a pixel width: left on
+      ;; `default' it would snap back to
+      ;; `agent-shell-markdown-image-max-width' on the next resize,
+      ;; undoing the step.
+      (if ratio
+          (put-text-property (car bounds) (cdr bounds)
+                             'agent-shell-markdown-image-width-ratio stepped)
+        (remove-list-of-text-properties
+         (car bounds) (cdr bounds) '(agent-shell-markdown-image-width-ratio)))
+      (agent-shell-markdown--resize-image
+       (car bounds) (cdr bounds)
+       (if (floatp stepped) (round (* stepped window-width)) stepped)
+       window-width)
+      (restore-buffer-modified-p modified)
+      (message "Image at point: %s"
+               (agent-shell-markdown--describe-image-width stepped)))
+    t))
+
+(defun agent-shell-markdown--reset-image-at-point ()
+  "Return non-nil after re-sizing the image at point to its rendered size.
+Nil when point isn't on an image, for the caller to fall back to the
+whole buffer."
+  (when-let* ((pos (agent-shell-markdown--image-position-at-point))
+              (window-width (agent-shell-markdown--displayed-window-width))
+              (bounds (agent-shell-markdown--image-bounds pos)))
+    ;; A re-size, not a content change: keep it off the undo list and
+    ;; don't flip the buffer's modified flag.
+    (let ((modified (buffer-modified-p))
+          (inhibit-read-only t)
+          (buffer-undo-list t))
+      (message "Image at point reset to %s"
+               (agent-shell-markdown--describe-image-width
+                (agent-shell-markdown--reset-image
+                 (car bounds) (cdr bounds) window-width)))
+      (restore-buffer-modified-p modified))
+    t))
+
+(defun agent-shell-markdown--reset-images ()
+  "Return non-nil after re-sizing every image in the buffer to its rendered size.
+
+Also drops the buffer's own `agent-shell-markdown-image-max-width'
+\(see `agent-shell-markdown--scale-images'), so images following that
+setting go back to the width it is configured with.
+
+Nil when the buffer holds no image and carries no scaling of its own,
+there being nothing to reset, or when it isn't displayed, there being
+no width to measure ratios against."
+  (when-let* ((window-width (agent-shell-markdown--displayed-window-width)))
+    ;; A re-size, not a content change: keep it off the undo list and
+    ;; don't flip the buffer's modified flag.
+    (let ((modified (buffer-modified-p))
+          (inhibit-read-only t)
+          (buffer-undo-list t)
+          (scaled (local-variable-p 'agent-shell-markdown-image-max-width))
+          (count 0))
+      ;; Before re-sizing, so `default'-sized images resolve against the
+      ;; configured width rather than this buffer's stepped one.
+      (kill-local-variable 'agent-shell-markdown-image-max-width)
+      (save-excursion
+        (goto-char (point-min))
+        (let (match)
+          (while (setq match (text-property-search-forward
+                              'display nil
+                              (lambda (_value property)
+                                (eq (car-safe property) 'image))))
+            (agent-shell-markdown--reset-image
+             (prop-match-beginning match) (prop-match-end match) window-width)
+            (setq count (1+ count)))))
+      (restore-buffer-modified-p modified)
+      (cond ((> count 0)
+             (message "Reset %d image%s" count (if (= count 1) "" "s"))
+             t)
+            (scaled
+             (message "Image scaling reset")
+             t)))))
+
+(defun agent-shell-markdown--reset-image (start end window-width)
+  "Re-size the image on [START, END) to its rendered size, returning that width.
+WINDOW-WIDTH is the window body width to resolve ratios against.
+
+Restores the sizing `agent-shell-markdown--replace-images' gave the
+image: the width its stashed markdown asks for, or, absent one,
+tracking `agent-shell-markdown-image-max-width' on `default' again.
+
+For example, an image stashing `![a](a.png){width=300}' is re-sized
+to 300 and 300 returned, whatever it had been scaled to; one stashing
+`![a](a.png)' goes back to following the setting."
+  (let* ((attributes (agent-shell-markdown--image-source-attributes start))
+         ;; Mirrors how `agent-shell-markdown--replace-images' picks an
+         ;; image's ratio, so a reset image is sized as first rendered.
+         (ratio (cond ((map-elt attributes :max-width-ratio))
+                      ((map-elt attributes :max-width) nil)
+                      (t 'default)))
+         (max-width (cond ((numberp ratio) (round (* ratio window-width)))
+                          (ratio (agent-shell-markdown--image-max-width))
+                          (t (map-elt attributes :max-width)))))
+    (if ratio
+        (put-text-property start end
+                           'agent-shell-markdown-image-width-ratio ratio)
+      (remove-list-of-text-properties
+       start end '(agent-shell-markdown-image-width-ratio)))
+    (agent-shell-markdown--resize-image start end max-width window-width)
+    max-width))
+
+(defun agent-shell-markdown--image-source-attributes (position)
+  "Return the size attributes the markdown of the image at POSITION asks for.
+Parses the `{width= height=}' block off the markup stashed on
+`agent-shell-markdown-source', so \"![a](a.png){width=300}\" yields
+\\='((:max-width . 300)).  Nil when the image carries no markup or its
+markup carries no such block, that is when nothing but
+`agent-shell-markdown-image-max-width' constrains its size."
+  (when-let* ((source (get-text-property position 'agent-shell-markdown-source))
+              ((string-match "{\\([^}\n]*\\)}\\'" source)))
+    (agent-shell-markdown--parse-image-attributes (match-string 1 source))))
+
+(defun agent-shell-markdown--image-position-at-point ()
+  "Return the position of the image displayed at point, or nil when there's none.
+Point counts as on an image when the char it's on displays one or,
+so a cursor resting just past an image still counts, when the char
+before it does.
+
+For example, with an image displayed over the char at 5, returns 5
+with point at either 5 or 6, and nil with point at 7."
+  (seq-find (lambda (position)
+              (and (>= position (point-min))
+                   (< position (point-max))
+                   (eq (car-safe (get-text-property position 'display)) 'image)))
+            (list (point) (1- (point)))))
+
+(defun agent-shell-markdown--image-bounds (position)
+  "Return the (START . END) bounds of the image displayed at POSITION.
+The bounds span the text the image is displayed over (its alt text
+or path), which is what carries the `display' property.
+
+For example, with an image displayed over the two chars of its alt
+text at the start of the buffer, returns (1 . 3)."
+  (cons (or (previous-single-property-change (1+ position) 'display) (point-min))
+        (or (next-single-property-change position 'display) (point-max))))
+
+(defun agent-shell-markdown--image-tracked-ratio (position)
+  "Return the window fraction the image at POSITION tracks, or nil.
+That's its `{width=N%}' fraction, or, for an image following
+`agent-shell-markdown-image-max-width', that setting when it is a
+ratio.  Nil for an image sized in pixels, which doesn't track the
+window.
+
+For example, returns 0.5 for a `{width=50%}' image, 0.4 for one
+following the setting while it holds 0.4, and nil for a `{width=300}'
+one or one following the setting while it holds 300."
+  (if (eq (get-text-property position 'agent-shell-markdown-image-width-ratio)
+          'default)
+      (when (floatp agent-shell-markdown-image-max-width)
+        agent-shell-markdown-image-max-width)
+    (get-text-property position 'agent-shell-markdown-image-width-ratio)))
+
+(defun agent-shell-markdown--step-ratio (ratio direction)
+  "Return RATIO stepped by 0.1 in DIRECTION, within 0.1 and the full window.
+DIRECTION is 1 to widen or -1 to narrow, so 0.4 steps to 0.5 and
+0.4 steps back to 0.3."
+  ;; Re-round to a tenth so repeated steps stay on 0.1 boundaries
+  ;; rather than drifting with float error.
+  (min 1.0 (max 0.1 (/ (round (* 10 (+ ratio (* direction 0.1)))) 10.0))))
+
+(defun agent-shell-markdown--step-pixels (pixels direction)
+  "Return PIXELS stepped by 50 in DIRECTION, no narrower than 50.
+DIRECTION is 1 to widen or -1 to narrow, so 300 steps to 350 and
+300 steps back to 250."
+  (max 50 (+ pixels (* direction 50))))
+
+(defun agent-shell-markdown--describe-image-width (width)
+  "Return WIDTH described for the echo area.
+A ratio reads as a percentage of the window (0.5 as \"50% of
+window\") and an integer as pixels (350 as \"350px\")."
+  (if (floatp width)
+      (format "%d%% of window" (round (* 100 width)))
+    (format "%dpx" width)))
 
 (defun agent-shell-markdown--carry-properties (pos)
   "Return a plist of properties at POS to carry across our delete+insert.
