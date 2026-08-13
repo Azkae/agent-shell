@@ -300,6 +300,7 @@ For example:
     (buffer-string)))
 
 (cl-defun agent-shell-markdown-replace-markup (&key force
+                                                    complete
                                                     (render-images t)
                                                     (highlight-blocks t)
                                                     image-cache-directory)
@@ -335,6 +336,13 @@ instead of `point-min'.  The watermark is read off the
 character and re-stamped at the end of the call.  Pass FORCE
 non-nil to drop the watermark and re-render the whole buffer
 (useful after mid-buffer edits, or for tests).
+
+Pass COMPLETE non-nil when no more text will be appended, so
+markup held back while it could still grow renders now: an image
+ending the text is otherwise left raw in case a `{width=...}'
+block is still streaming in (see
+`agent-shell-markdown--image-attributes-pending-p').  FORCE
+implies it.
 
 RENDER-IMAGES, when non-nil (the default), replaces `![alt](url)'
 markup with displayed images where the URL resolves to an image
@@ -408,7 +416,7 @@ body un-fontified."
           (agent-shell-markdown--replace-images
            :avoid-ranges avoid-ranges
            :image-cache-directory image-cache-directory
-           :complete force)
+           :complete (or force complete))
           (agent-shell-markdown--replace-image-file-paths
            :avoid-ranges avoid-ranges))
         (agent-shell-markdown--style-dividers :avoid-ranges avoid-ranges)
@@ -4122,17 +4130,20 @@ first character.  When absent or out of range, returns
 `point-min' (whole-buffer scan — the conservative default for the
 first call or after the watermark anchor has been rewritten away).
 
-The property is stored on the rendered text itself so it travels
-with the string when callers shuttle the buffer contents around
-via `agent-shell-markdown-convert', avoiding a buffer-local
-variable that wouldn't survive serialization."
+The property holds the frontier as an offset from the character it
+sits on, not as a buffer position, so it survives the text moving:
+rendering anything above shifts every position below it, and a
+stored position would then point somewhere else entirely (a scan
+could start mid-markup and skip it).  An offset also keeps meaning
+when callers shuttle the text into another buffer via
+`agent-shell-markdown-convert'."
   (let ((stored (and (> (point-max) (point-min))
                      (get-text-property (point-min)
                                         'agent-shell-markdown-watermark))))
     (if (and (integerp stored)
-             (>= stored (point-min))
-             (<= stored (point-max)))
-        stored
+             (>= stored 0)
+             (<= stored (- (point-max) (point-min))))
+        (+ (point-min) stored)
       (point-min))))
 
 (defun agent-shell-markdown--extending-table-start ()
@@ -4238,8 +4249,12 @@ only to end-of-line, so they're naturally within that zone."
                                                     extending-table-start)
                                               external-candidates)))))
       (with-silent-modifications
+        ;; Stored as an offset from the char it sits on, so it still means
+        ;; the same place after the text moves (see
+        ;; `agent-shell-markdown--watermark-start').
         (put-text-property (point-min) (1+ (point-min))
-                           'agent-shell-markdown-watermark frontier)))))
+                           'agent-shell-markdown-watermark
+                           (- frontier (point-min)))))))
 
 (defun agent-shell-markdown--make-markers (ranges)
   "Convert each (start . end) in RANGES to (start-marker . end-marker)."

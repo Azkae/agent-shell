@@ -980,6 +980,73 @@ streaming **not bold**" nil)))))
     (should (null (agent-shell-markdown--image-source-attributes 2)))
     (should (null (agent-shell-markdown--image-source-attributes 3)))))
 
+(ert-deftest agent-shell-markdown-complete-renders-trailing-image ()
+  ;; An image ending the text is held back while streaming, in case a
+  ;; `{width=...}' block is still coming, and renders once the render is
+  ;; marked complete.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image) (lambda (&rest _) '(image :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "plot\n\n![alt](%s)" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (string-suffix-p (format "![alt](%s)" image-file)
+                                     (buffer-substring-no-properties
+                                      (point-min) (point-max))))
+            (agent-shell-markdown-replace-markup :render-images t :complete t)
+            (should (equal "plot\n\nalt" (buffer-substring-no-properties
+                                         (point-min) (point-max))))
+            (should (eq 'image (car-safe (get-text-property (- (point-max) 1)
+                                                            'display))))))
+      (delete-file image-file))))
+
+(ert-deftest agent-shell-markdown-watermark-survives-shift ()
+  ;; The frontier is stored relative to the text carrying it, so it still
+  ;; means the same place after that text moves.  Stored as a position it
+  ;; would drift by whatever was added or removed above, and a later scan
+  ;; could start mid-markup, skipping it.
+  (with-temp-buffer
+    (insert "ABOVE\n")
+    (let ((body-start (point)))
+      (insert "hello **world**\nlast line here")
+      (save-restriction
+        (narrow-to-region body-start (point-max))
+        (agent-shell-markdown-replace-markup))
+      ;; Something above shrinks, moving the body up.
+      (goto-char (point-min))
+      (delete-char 3)
+      (setq body-start (- body-start 3))
+      (save-restriction
+        (narrow-to-region body-start (point-max))
+        (should (= (agent-shell-markdown--watermark-start)
+                   (save-excursion
+                     (goto-char (point-max))
+                     (line-beginning-position))))))))
+
+(ert-deftest agent-shell-markdown-complete-keeps-attributes-together ()
+  ;; Completing doesn't break the streaming guard's purpose: an image
+  ;; whose `{width=...}' block did arrive still renders with it applied,
+  ;; rather than stranding the attributes as literal text.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (_file &optional _type _data-p &rest props)
+                     (cons 'image props)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "![alt](%s){width=300}" image-file))
+            (agent-shell-markdown-replace-markup :render-images t :complete t)
+            (should (equal "alt" (buffer-substring-no-properties
+                                  (point-min) (point-max))))
+            (should (= 300 (image-property (get-text-property (point-min) 'display)
+                                           :max-width)))))
+      (delete-file image-file))))
+
 (ert-deftest agent-shell-markdown-image-attributes-round-trip ()
   ;; A trailing `{width=...}' block is consumed with the image (no leaked
   ;; braces) and folded into the stashed source, so copy-as-markdown
@@ -2963,7 +3030,8 @@ A " nil)
     (insert "**bold**\n")
     (with-silent-modifications
       (put-text-property (point-min) (1+ (point-min))
-                         'agent-shell-markdown-watermark (point-max)))
+                         'agent-shell-markdown-watermark
+                         (- (point-max) (point-min))))
     (agent-shell-markdown-replace-markup)
     (should (string-match-p "\\*\\*bold\\*\\*"
                             (substring-no-properties (buffer-string))))
@@ -3304,9 +3372,7 @@ exercised by the editing in the -all-math-cases test.)"
                            (re-search-forward "\\$\\$")
                            (match-beginning 0))))
         (agent-shell-markdown-replace-markup)
-        (should (= (get-text-property (point-min)
-                                      'agent-shell-markdown-watermark)
-                   open-dollar))))))
+        (should (= (agent-shell-markdown--watermark-start) open-dollar))))))
 
 (ert-deftest agent-shell-markdown-render-functions-all-math-cases ()
   ;; A renderer that claims every math form the PR supports and wraps its

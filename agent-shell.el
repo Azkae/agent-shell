@@ -351,7 +351,7 @@ image-cache-directory &allow-other-keys'."
 
 (cl-defun agent-shell--render-markdown
     (&key (render-images t) (highlight-blocks agent-shell-highlight-blocks)
-          (external-renderers t))
+          (external-renderers t) complete)
   "Render markdown in the current narrowed buffer.
 
 Dispatches to `agent-shell-markdown-render-function', forwarding
@@ -359,6 +359,10 @@ RENDER-IMAGES and HIGHLIGHT-BLOCKS.  HIGHLIGHT-BLOCKS defaults to
 the current value of `agent-shell-highlight-blocks' so most call
 sites can omit it; RENDER-IMAGES defaults to t, override with nil
 on label spans where images shouldn't appear.
+
+COMPLETE marks a render nothing will be appended to, so markup the
+streaming passes hold back renders now (see
+`agent-shell--render-deferred-images').  Left nil while streaming.
 
 EXTERNAL-RENDERERS defaults to t.  Pass nil on single-line label
 spans to suppress `agent-shell-markdown-render-functions'.  Those
@@ -377,7 +381,46 @@ cache so downloaded images share `agent-shell-cache-dir'."
     (funcall agent-shell-markdown-render-function
              :render-images render-images
              :highlight-blocks highlight-blocks
+             :complete complete
              :image-cache-directory (agent-shell-cache-dir "content"))))
+
+(defun agent-shell--render-deferred-images ()
+  "Render image markup the streaming passes held back, the turn being over.
+
+An image whose markup ends the text rendered so far is left raw: a
+`{width=...}' block may still be streaming in behind it, and rendering
+before it lands would strand those attributes as literal text (see
+`agent-shell-markdown--image-attributes-pending-p').  A response ending
+in an image never gets that following chunk, so its markup stays raw
+until a render marked complete comes along.
+
+Re-renders, as complete, every fragment body still holding raw image
+markup.  Bodies without any are left untouched, so a turn ending in
+prose costs one scan.
+
+Collapsed bodies are re-rendered too, unlike while streaming, where
+they are skipped because expanding one renders it.  That later render
+is not marked complete, so skipping them here would leave an image
+ending a folded tool call raw for good.
+
+For example, a body left as \"Here it is\\n\\n![plot](/tmp/plot.png)\"
+ends up showing the image, while a body of prose is untouched."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((inhibit-read-only t)
+          (buffer-undo-list t)
+          (regexp (agent-shell-markdown--link-markup-regexp :as-image? t))
+          (match nil))
+      (while (setq match (text-property-search-forward
+                          'agent-shell-ui-section 'body #'eq))
+        (when-let* ((start (prop-match-beginning match))
+                    (end (prop-match-end match))
+                    ((save-excursion
+                       (goto-char start)
+                       (re-search-forward regexp end t))))
+          (save-restriction
+            (narrow-to-region start end)
+            (agent-shell--render-markdown :complete t)))))))
 
 (defcustom agent-shell-confirm-interrupt t
   "Whether to prompt for confirmation before interrupting.
@@ -7120,6 +7163,11 @@ pending-restore state once replay completes."
       ;; group is left expanded under `latest'.  Nothing is actually
       ;; running, so fold it like a completed turn.
       (agent-shell--collapse-expanded-activity-group state)
+      ;; Replayed history renders through the streaming path, which holds
+      ;; back an image ending a message in case a `{width=...}' block
+      ;; follows.  No further notification is coming for it, so render it
+      ;; now, as at the end of a live turn.
+      (agent-shell--render-deferred-images)
       ;; Point followed the narrowed history insertions up above the live
       ;; prompt.  Return it to the input area so the cursor lands where the
       ;; user types (matching pre-early-prompt restore behavior).
@@ -7942,6 +7990,11 @@ Each marked span is replaced by its `agent-shell-region-text' value."
                       :heartbeat (map-elt agent-shell--state :heartbeat))
                      (unless success
                        (agent-shell--prompt-queue-display))
+                     ;; No more chunks are coming, so markup the streaming
+                     ;; passes held back for one (a trailing image) can
+                     ;; render now.  Runs whatever the stop reason: an
+                     ;; interrupted turn leaves the same markup raw.
+                     (agent-shell--render-deferred-images)
                      (shell-maker-finish-output :config shell-maker--config
                                                 :success t)
                      (let ((data (list (cons :stop-reason (map-elt acp-response 'stopReason))

@@ -5546,5 +5546,46 @@ a real button."
                (lambda (&rest _) t)))
       (should-not (agent-shell--typing-at-prompt-p)))))
 
+(ert-deftest agent-shell--render-deferred-images-test ()
+  "A body ending in image markup renders once the turn is over.
+
+Streaming holds that markup back in case a `{width=...}\' block is
+still coming, so nothing else would ever render it."
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image) (lambda (&rest _) '(image :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "plot\n\n![alt](%s)" image-file))
+            (put-text-property (point-min) (point-max) 'agent-shell-ui-section 'body)
+            (agent-shell--render-deferred-images)
+            (should (equal "plot\n\nalt" (buffer-substring-no-properties
+                                          (point-min) (point-max))))
+            (should (eq 'image (car-safe (get-text-property (1- (point-max))
+                                                           'display)))))
+          ;; A collapsed body renders too, staying hidden: the render on
+          ;; expand isn't marked complete, so skipping it here would leave
+          ;; the image raw for good.
+          (with-temp-buffer
+            (insert (format "plot\n\n![alt](%s)" image-file))
+            (put-text-property (point-min) (point-max) 'agent-shell-ui-section 'body)
+            (put-text-property (point-min) (point-max) 'invisible t)
+            (agent-shell--render-deferred-images)
+            (should (equal "plot\n\nalt" (buffer-substring-no-properties
+                                          (point-min) (point-max))))
+            (should (eq 'image (car-safe (get-text-property (1- (point-max))
+                                                           'display))))
+            (should (eq t (get-text-property (1- (point-max)) 'invisible))))
+          ;; Text outside a fragment body is not a shell rendering target.
+          (with-temp-buffer
+            (insert (format "plot\n\n![alt](%s)" image-file))
+            (agent-shell--render-deferred-images)
+            (should (string-suffix-p (format "![alt](%s)" image-file)
+                                     (buffer-substring-no-properties
+                                      (point-min) (point-max))))))
+      (delete-file image-file))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
