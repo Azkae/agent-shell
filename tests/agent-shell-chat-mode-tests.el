@@ -171,6 +171,24 @@ The mode stays off after the failed attempt."
     (should-error (agent-shell-chat-mode 1) :type 'user-error)
     (should-not agent-shell-chat-mode)))
 
+(ert-deftest agent-shell-chat-preserves-code-block-top-padding-test ()
+  "A response opening with a code block keeps the panel's tinted top padding.
+The agent overlay stops before the `:extend' padding instead of hiding it
+with `display'."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    ;; Response opens directly with a code block panel's tinted top padding.
+    (insert (propertize "\n" 'face 'agent-shell-chat-mode-tests--panel))
+    (let ((panel-top (1- (point))))
+      (insert (propertize "elisp\ncode\n" 'face 'agent-shell-chat-mode-tests--panel))
+      (agent-shell-chat--relabel)
+      (let ((agent (car (agent-shell-chat-mode-tests--agent-overlays))))
+        ;; The overlay ends before the panel padding, leaving it visible.
+        (should (<= (overlay-end agent) panel-top))
+        (should-not (get-char-property panel-top 'display))))))
+
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
   (agent-shell-chat-mode-tests--with-shell

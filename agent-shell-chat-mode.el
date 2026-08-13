@@ -357,7 +357,15 @@ newline would merge the input line into the response for line motion
                (mend (match-end 0))
                (end (save-excursion
                       (goto-char mend)
-                      (skip-chars-forward " \t\n")
+                      ;; Swallow the response's leading blank lines, but stop
+                      ;; at a code block panel's tinted top padding (an
+                      ;; `:extend' background) so the panel keeps its internal
+                      ;; padding rather than having it hidden by `display'.
+                      (while (and (< (point) (point-max))
+                                  (memq (char-after) '(?\s ?\t ?\n))
+                                  (not (agent-shell-chat--extends-bg-p
+                                        (get-text-property (point) 'face))))
+                        (forward-char 1))
                       ;; Do not swallow the whitespace before a following prompt
                       ;; (an empty response): it belongs to that prompt's
                       ;; spacing, and swallowing it would overlap the `Me'
