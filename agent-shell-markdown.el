@@ -2328,28 +2328,38 @@ window passed to the measurement helpers), so cache lookups are
 per-destination.")
 
 (defun agent-shell-markdown--table-measure-string (str window)
-  "Return real pixel width of STR rendered at point-max of WINDOW's buffer.
+  "Return real pixel width of STR as WINDOW renders it.
 
-Briefly inserts STR, measures with `window-text-pixel-size', and
-deletes; `inhibit-modification-hooks' and the modified flag are
-preserved so callers never observe the mutation."
-  (with-current-buffer (window-buffer window)
-    (let ((inhibit-read-only t)
-          (inhibit-modification-hooks t)
-          (modified (buffer-modified-p))
-          real)
-      (save-excursion
-        (goto-char (point-max))
-        (let ((m (point-marker)))
-          (set-marker-insertion-type m nil)
-          (insert str)
-          ;; Strip `line-prefix' / `wrap-prefix' before measuring
-          (remove-text-properties m (point) '(line-prefix nil wrap-prefix nil))
-          (setq real (car (window-text-pixel-size window m (point))))
-          (delete-region m (point))
-          (set-marker m nil)))
-      (set-buffer-modified-p modified)
-      real)))
+Measured in a work buffer, never in WINDOW's own buffer: this runs
+hundreds of times per table layout, and measuring in place meant
+inserting a probe into what the user is reading, so anything that
+exited non-locally in between stranded that probe as visible garbage.
+WINDOW is still what STR is measured against — `buffer-text-pixel-size'
+temporarily shows the work buffer there, so the window's frame font
+applies.
+
+`face-remapping-alist' comes across from WINDOW's buffer because that
+is how `text-scale-mode' and `buffer-face-mode' take effect; without
+it a text-scaled buffer measures at its unscaled width and every table
+in it misaligns.  `display-line-numbers' and the two prefixes are
+neutralized for the reason `string-pixel-width' neutralizes them: a
+globally enabled line-number gutter would otherwise be counted into
+the width (bug#59311).
+
+For example, in a buffer whose font is 10 pixels wide,
+\"MMMMMMMMMM\" measures 100, and 170 under `text-scale-mode' +3."
+  (let ((remapping (buffer-local-value 'face-remapping-alist
+                                       (window-buffer window))))
+    (agent-shell-with-work-buffer
+      (setq display-line-numbers nil
+            line-prefix nil
+            wrap-prefix nil)
+      (setq-local face-remapping-alist remapping)
+      (insert str)
+      ;; STR carries the cell's own properties, prefixes included.
+      (remove-text-properties (point-min) (point-max)
+                              '(line-prefix nil wrap-prefix nil))
+      (car (buffer-text-pixel-size nil window t)))))
 
 (defun agent-shell-markdown--table-char-pixel-width (window)
   "Return real pixel width of a single space in WINDOW, cached.
@@ -2467,6 +2477,10 @@ pipes between rows."
            (display-graphic-p)
            (or (not (string-match-p (rx bos (* ascii) eos) str))
                (agent-shell-markdown--text-has-face-p str)))
+      ;; TODO: Make this fallback observable.  Discarding the error
+      ;; means a broken pixel path silently degrades to char-width
+      ;; alignment; stashing the last error in a defvar would be
+      ;; enough to diagnose it.
       (condition-case nil
           (let ((char-px (agent-shell-markdown--table-char-pixel-width window))
                 (real-px (agent-shell-markdown--table-measure-string str window)))
@@ -2603,6 +2617,10 @@ overflow an N-cell column and push the right pipe out of line."
                          (display-graphic-p)
                          (fboundp 'window-text-pixel-size)
                          (get-text-property pos 'face text))))
+        ;; TODO: Make this fallback observable.  Discarding the error
+        ;; means a broken pixel path silently degrades to char-width
+        ;; alignment; stashing the last error in a defvar would be
+        ;; enough to diagnose it.
         (condition-case nil
             (* base (agent-shell-markdown--table-face-width-ratio
                      face window))
@@ -2725,6 +2743,10 @@ via different paths and drift sub-pixel on their right edge."
            (or force-pixel
                (not (string-match-p (rx bos (* ascii) eos) str))
                (agent-shell-markdown--text-has-face-p str)))
+      ;; TODO: Make this fallback observable.  Discarding the error
+      ;; means a broken pixel path silently degrades to char-width
+      ;; alignment; stashing the last error in a defvar would be
+      ;; enough to diagnose it.
       (condition-case nil
           (let* ((char-px (agent-shell-markdown--table-char-pixel-width window))
                  (target-px (* width char-px))

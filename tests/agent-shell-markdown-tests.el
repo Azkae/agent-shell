@@ -2779,6 +2779,49 @@ after" nil)))))
   (should (agent-shell-markdown--text-has-face-p
            (concat "a" (propertize "b" 'face 'bold) "c"))))
 
+(ert-deftest agent-shell-markdown-table-measure-string-leaves-destination-alone ()
+  ;; Measurement used to insert the string into the destination buffer,
+  ;; measure, then delete.  Anything that exited non-locally in between
+  ;; stranded the probe, and since every caller catches the error and
+  ;; falls back to `string-width' the failure was silent: runs of
+  ;; `MMMMMMMMMM' (the face-ratio sample) and spaces (the per-char
+  ;; sample) piled up at the end of the rendered text.  It now measures
+  ;; in a work buffer, so the destination is untouched either way.
+  (with-temp-buffer
+    (insert "content")
+    (set-buffer-modified-p nil)
+    (cl-letf (((symbol-function 'window-buffer) (lambda (_window) (current-buffer))))
+      ;; A measurement that succeeds.
+      (cl-letf (((symbol-function 'buffer-text-pixel-size)
+                 (lambda (&rest _) (cons 100 10))))
+        (should (= 100 (agent-shell-markdown--table-measure-string
+                        "MMMMMMMMMM" 'fake-window))))
+      ;; And one that signals partway through.
+      (cl-letf (((symbol-function 'buffer-text-pixel-size)
+                 (lambda (&rest _) (error "Measurement failed"))))
+        (should-error (agent-shell-markdown--table-measure-string
+                       "MMMMMMMMMM" 'fake-window))))
+    (should (equal "content" (buffer-string)))
+    (should-not (buffer-modified-p))))
+
+(ert-deftest agent-shell-markdown-table-measure-string-carries-face-remapping ()
+  ;; `text-scale-mode' and `buffer-face-mode' work through
+  ;; `face-remapping-alist', so measuring without carrying it over
+  ;; reports a text-scaled buffer at its unscaled width and misaligns
+  ;; every table in it.  Verified against a real window, this returned
+  ;; 100 unscaled and 170 at `text-scale-mode' +3; here we just pin that
+  ;; the destination's remapping reaches the measurement buffer.
+  (with-temp-buffer
+    (setq-local face-remapping-alist '((default . (:height 1.7))))
+    (cl-letf* ((seen nil)
+               ((symbol-function 'window-buffer) (lambda (_window) (current-buffer)))
+               ((symbol-function 'buffer-text-pixel-size)
+                (lambda (&rest _)
+                  (setq seen face-remapping-alist)
+                  (cons 170 10))))
+      (agent-shell-markdown--table-measure-string "MMMMMMMMMM" 'fake-window)
+      (should (equal '((default . (:height 1.7))) seen)))))
+
 (ert-deftest agent-shell-markdown-table-wrap-text-accepts-window ()
   ;; `--table-wrap-text' grew an optional WINDOW arg so wrap decisions
   ;; can factor in face-induced pixel widening (themes that style
