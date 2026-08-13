@@ -323,10 +323,15 @@ settled and `markdown-overlays' is no longer a dependency."
   #'agent-shell-markdown-replace-markup
   "Function called to render markdown in the current narrowed buffer.
 
-The function accepts `&key render-images highlight-blocks
+The function accepts `&key render-images highlight-blocks complete
 image-cache-directory' (use `&allow-other-keys' to tolerate keys a
 renderer ignores) and is expected to render markdown in the
-current buffer.  Callers narrow the buffer to the target span
+current buffer.  COMPLETE marks a render nothing will be
+appended to, so a renderer holding markup back while it could
+still grow can settle it (see
+`agent-shell--render-deferred-images').
+
+Callers narrow the buffer to the target span
 \(for example, a fragment body or label) before calling, so the function can
 scan the whole accessible portion.
 
