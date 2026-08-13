@@ -1178,6 +1178,13 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                                          :keymap link-map
                                          :verb "open image in browser"))))
                   (put-text-property markup-start end 'mouse-face 'highlight)
+                  ;; Stamped as on any rendered link (see
+                  ;; `agent-shell-markdown--replace-links'): this stands in
+                  ;; for the image as a link to it, so
+                  ;; `agent-shell-markdown-link-url-at-point' recovers the
+                  ;; target and item navigation stops on it.
+                  (put-text-property markup-start end
+                                     'agent-shell-markdown-url url)
                   (when source
                     (put-text-property markup-start end
                                        'agent-shell-markdown-source source)))))))))))))

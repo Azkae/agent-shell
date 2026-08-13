@@ -755,6 +755,21 @@ streaming **not bold**" nil)))))
     (goto-char 5)
     (should (= 1 (agent-shell-markdown--previous-visible-image)))))
 
+(ert-deftest agent-shell-markdown-remote-image-fallback-is-a-link ()
+  ;; A remote image that can't be shown inline renders as a link opening
+  ;; it, so it carries its target like any rendered link: recoverable for
+  ;; copy/export, and a stop for item navigation rather than a spot only
+  ;; RET knows about.
+  (with-temp-buffer
+    (insert "see ![remote](https://example.com/x.png) here")
+    (agent-shell-markdown-replace-markup :render-images t)
+    (should (equal "see remote here"
+                   (buffer-substring-no-properties (point-min) (point-max))))
+    (should (equal "https://example.com/x.png"
+                   (agent-shell-markdown-link-url-at-point 5)))
+    (goto-char (point-min))
+    (should (= 5 (agent-shell-markdown--next-visible-link)))))
+
 (ert-deftest agent-shell-markdown-next-visible-link ()
   ;; Walks rendered links (those stamped with their URL), skipping the one
   ;; point is on, in both directions.
