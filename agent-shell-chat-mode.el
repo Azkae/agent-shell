@@ -156,11 +156,18 @@ so this marks whitespace the prompt overlay must not swallow."
 PROPS is an alist of overlay property to value.  Reuses an existing
 CATEGORY overlay overlapping ANCHOR-BEG..ANCHOR-END (moving it when the
 span changed), otherwise creates one."
-  (let ((overlay (or (agent-shell-chat--overlay-in anchor-beg anchor-end category)
-                     (let ((created (make-overlay beg end)))
-                       (overlay-put created 'category category)
-                       (overlay-put created 'evaporate t)
-                       created))))
+  (let* ((existing (seq-filter (lambda (overlay)
+                                 (eq (overlay-get overlay 'category) category))
+                               (overlays-in anchor-beg (max anchor-end (1+ anchor-beg)))))
+         (overlay (or (car existing)
+                      (let ((created (make-overlay beg end)))
+                        (overlay-put created 'category category)
+                        (overlay-put created 'evaporate t)
+                        created))))
+    ;; Delete stray duplicates: relabels re-create an overlay whenever its
+    ;; span has drifted outside the search range, so more than one can pile up.
+    (dolist (extra (cdr existing))
+      (delete-overlay extra))
     (unless (and (= (overlay-start overlay) beg) (= (overlay-end overlay) end))
       (move-overlay overlay beg end))
     (map-do (lambda (property value)
@@ -301,9 +308,12 @@ padded by exactly one blank line on each side.  Updates in place."
                                   (concat agent-shell-chat--body-indent
                                           agent-shell-chat--prompt)
                                   'face 'default)))
-                        ;; A submitted turn or an empty submission: just the
-                        ;; `Me' label (a submitted turn's input follows as
-                        ;; buffer text; an empty one has none).
+                        ;; An empty submission (blank but not the live prompt)
+                        ;; is not labeled: only the live prompt shows an empty
+                        ;; `Me'.
+                        (blank "")
+                        ;; A submitted turn: `Me', its input following as
+                        ;; buffer text.
                         (t (concat lead me-label pad)))))
           (agent-shell-chat--upsert-overlay
            'agent-shell-chat-me pos run-end start end
@@ -392,10 +402,30 @@ newline would merge the input line into the response for line motion
                                         (eq (char-before start) ?\n))
                                    "\n"
                                  "\n\n")
-                               label "\n\n")))
-          (agent-shell-chat--upsert-overlay
-           'agent-shell-chat-agent mbeg mend start end
-           (list (cons 'before-string before) (cons 'display ""))))))))
+                               label "\n\n"))
+               ;; A turn with no response text (a tool-only turn, or a
+               ;; restored empty turn) is not labeled: the marker is followed
+               ;; only by whitespace up to end of buffer, another marker, or
+               ;; the next prompt.
+               (response-empty (save-excursion
+                                 (goto-char mend)
+                                 (skip-chars-forward " \t\n")
+                                 (or (eobp)
+                                     (get-text-property (point) 'shell-maker--marker)
+                                     (agent-shell-chat--prompt-face-p
+                                      (get-text-property (point) 'font-lock-face))))))
+          (if response-empty
+              ;; Drop any label from a turn that no longer has a response.
+              (dolist (overlay (overlays-in mbeg (max end (1+ mbeg))))
+                (when (eq (overlay-get overlay 'category) 'agent-shell-chat-agent)
+                  (delete-overlay overlay)))
+            ;; Anchor the reuse search on the whole span, not just the marker:
+            ;; a restored turn's overlay starts past the marker (keeping the
+            ;; terminator visible), so a marker-only anchor would miss it and
+            ;; pile up duplicates.
+            (agent-shell-chat--upsert-overlay
+             'agent-shell-chat-agent mbeg end start end
+             (list (cons 'before-string before) (cons 'display "")))))))))
 
 (defun agent-shell-chat--relabel ()
   "Apply the `Me' and agent labels to the current buffer (idempotent).

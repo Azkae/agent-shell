@@ -189,6 +189,20 @@ with `display'."
         (should (<= (overlay-end agent) panel-top))
         (should-not (get-char-property panel-top 'display))))))
 
+(ert-deftest agent-shell-chat-no-duplicate-agent-overlays-test ()
+  "Relabeling a restored turn does not accumulate duplicate agent overlays.
+A restored turn's overlay starts past the marker, so the reuse search must
+cover the whole span rather than the marker alone."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "restored input?")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "\n\nthe reply\n")
+    (agent-shell-chat--relabel)
+    (agent-shell-chat--relabel)
+    (agent-shell-chat--relabel)
+    (should (= 1 (length (agent-shell-chat-mode-tests--agent-overlays))))))
+
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
   (agent-shell-chat-mode-tests--with-shell
@@ -263,9 +277,9 @@ so it does not vanish mid-type when a relabel runs."
       (should (equal agent-shell-chat--body-indent
                      (overlay-get (car input) 'line-prefix))))))
 
-(ert-deftest agent-shell-chat-empty-submission-shows-bare-me-test ()
-  "An empty submission (a prompt with another below it) shows a bare `Me'.
-It claims no input and gets no indent overlay; only the live prompt shows `❯'."
+(ert-deftest agent-shell-chat-empty-submission-hidden-test ()
+  "An empty submission (a prompt with another below it) is not labeled.
+Only the live prompt shows an empty `Me', and neither claims input."
   (agent-shell-chat-mode-tests--with-shell
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (insert "\n")
@@ -274,9 +288,8 @@ It claims no input and gets no indent overlay; only the live prompt shows `❯'.
       (agent-shell-chat--relabel))
     (let ((me (agent-shell-chat-mode-tests--me-overlays)))
       (should (= 2 (length me)))
-      ;; Stale empty submission: `Me', no `❯'.
-      (should (string-match-p "Me" (overlay-get (nth 0 me) 'before-string)))
-      (should-not (string-match-p "❯" (overlay-get (nth 0 me) 'before-string)))
+      ;; Empty submission: hidden.
+      (should (equal "" (overlay-get (nth 0 me) 'before-string)))
       ;; Live prompt: `Me' and `❯'.
       (should (string-match-p "❯" (overlay-get (nth 1 me) 'before-string)))
       ;; Neither empty prompt claims input.
@@ -285,25 +298,24 @@ It claims no input and gets no indent overlay; only the live prompt shows `❯'.
                                     'agent-shell-chat-me-input))
                               (overlays-in (point-min) (point-max)))))))
 
-(ert-deftest agent-shell-chat-stacked-empty-me-single-blank-test ()
-  "Consecutive empty submissions are separated by exactly one blank line."
+(ert-deftest agent-shell-chat-stacked-empty-submissions-hidden-test ()
+  "Consecutive empty submissions are all hidden; only the live prompt shows."
   (agent-shell-chat-mode-tests--with-shell
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (insert "\n")
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (insert "\n")
     (agent-shell-chat-mode-tests--prompt "Claude> ")
-    (agent-shell-chat--relabel)
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel))
     (let ((me (agent-shell-chat-mode-tests--me-overlays)))
-      ;; The stacked labels drop their leading pad (the previous label's
-      ;; trailing pad already gives the one blank line), so they do not begin
-      ;; with a newline.
-      (should (string-prefix-p " Me" (overlay-get (nth 1 me) 'before-string)))
-      (should (string-prefix-p " Me" (overlay-get (nth 2 me) 'before-string))))))
+      (should (equal "" (overlay-get (nth 0 me) 'before-string)))
+      (should (equal "" (overlay-get (nth 1 me) 'before-string)))
+      ;; Only the live prompt is labeled.
+      (should (string-match-p "❯" (overlay-get (nth 2 me) 'before-string))))))
 
-(ert-deftest agent-shell-chat-empty-response-no-overlap-test ()
-  "An empty agent response keeps the agent and `Me' overlays from overlapping.
-The `Me' label drops its leading pad so one blank line separates them."
+(ert-deftest agent-shell-chat-empty-response-not-labeled-test ()
+  "A turn with no response text is not given an agent label."
   (agent-shell-chat-mode-tests--with-shell
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (insert "hello\n")
@@ -311,12 +323,8 @@ The `Me' label drops its leading pad so one blank line separates them."
     (insert "\n\n")
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (agent-shell-chat--relabel)
-    (let* ((agent (car (agent-shell-chat-mode-tests--agent-overlays)))
-           (me (car (last (agent-shell-chat-mode-tests--me-overlays)))))
-      ;; The agent overlay ends where the live `Me' overlay begins: no overlap.
-      (should (<= (overlay-end agent) (overlay-start me)))
-      ;; The `Me' label follows the marker directly, so no leading blank line.
-      (should (string-prefix-p " Me" (overlay-get me 'before-string))))))
+    ;; The empty response gets no agent label.
+    (should-not (agent-shell-chat-mode-tests--agent-overlays))))
 
 (ert-deftest agent-shell-chat-code-block-padding-preserved-test ()
   "A prompt after a code block panel keeps the panel's tinted padding.
