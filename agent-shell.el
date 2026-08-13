@@ -8310,7 +8310,7 @@ Uses AGENT-CWD to shorten file paths where necessary."
                       :file file
                       ;; No link face for image (no underline).
                       :face nil
-                      :hint "open")
+                      :hint "open image")
                    ;; Not an image, insert as normal text
                    (agent-shell--make-file-link
                     :label (if (and agent-cwd (file-in-directory-p file agent-cwd))
@@ -8320,7 +8320,7 @@ Uses AGENT-CWD to shorten file paths where necessary."
                              (propertize (concat "@" file)
                                          'pointer 'hand))
                     :file file
-                    :hint "open")))
+                    :hint "open file")))
                files
                "\n\n")))
 

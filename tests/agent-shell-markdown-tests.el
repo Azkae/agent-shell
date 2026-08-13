@@ -361,6 +361,156 @@ streaming **not bold**" nil)))))
                                      'agent-shell-ui-section nil))))
       (delete-file image-file))))
 
+(ert-deftest agent-shell-markdown-image-hints-open-key ()
+  ;; A rendered image gives no hint that it's actionable (it deliberately
+  ;; gets no `mouse-face', which would paint a box across it on hover), so
+  ;; entering it echoes whichever key its keymap binds to open the file.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg"))
+        (echoed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest _) '(image :type svg :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (setq echoed (apply #'format format-string args)))))
+          (with-temp-buffer
+            (insert (format "![svg graphics](%s)\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (goto-char (point-min))
+            (funcall (seq-first (get-text-property (point) 'cursor-sensor-functions))
+                     nil nil 'entered)
+            (should (equal "Press RET to open image" echoed))))
+      (delete-file image-file))))
+
+(ert-deftest agent-shell-markdown-image-hints-resize-keys ()
+  ;; Resizing is bound at mode level rather than on the image itself, so
+  ;; the hint is the only thing making it discoverable.  It names the keys
+  ;; `agent-shell-markdown-image-scale-commands' are bound to here, and
+  ;; leaves resizing out entirely where they're bound to nothing (the
+  ;; `agent-shell-markdown-image-hints-open-key' case above).
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg"))
+        (echoed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest _) '(image :type svg :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (setq echoed (apply #'format format-string args)))))
+          (with-temp-buffer
+            (use-local-map
+             (let ((map (make-sparse-keymap)))
+               (define-key map (kbd "+") #'agent-shell-markdown-image-scale-increase)
+               (define-key map (kbd "-") #'agent-shell-markdown-image-scale-decrease)
+               (define-key map (kbd "0") #'agent-shell-markdown-image-scale-reset)
+               map))
+            (insert (format "![svg graphics](%s)\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (goto-char (point-min))
+            (funcall (seq-first (get-text-property (point) 'cursor-sensor-functions))
+                     nil nil 'entered)
+            (should (equal "Press RET to open image, +/-/0 to resize" echoed))))
+      (delete-file image-file))))
+
+(ert-deftest agent-shell-markdown-image-hints-shell-resize-keys ()
+  ;; `agent-shell-mode' binds resizing to its own wrappers (so `+' still
+  ;; self-inserts while typing a prompt) rather than to the markdown
+  ;; commands the viewport binds.  The hint looks up both names, so it
+  ;; names keys that work there instead of going silent about resizing.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg"))
+        (echoed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest _) '(image :type svg :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (setq echoed (apply #'format format-string args)))))
+          (with-temp-buffer
+            ;; The wrappers live in agent-shell.el, which these tests don't
+            ;; load -- binding the symbols is all the hint looks at.
+            (use-local-map
+             (let ((map (make-sparse-keymap)))
+               (define-key map (kbd "+") 'agent-shell-image-scale-increase)
+               (define-key map (kbd "-") 'agent-shell-image-scale-decrease)
+               (define-key map (kbd "0") 'agent-shell-image-scale-reset)
+               map))
+            (insert (format "![svg graphics](%s)\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (goto-char (point-min))
+            (funcall (seq-first (get-text-property (point) 'cursor-sensor-functions))
+                     nil nil 'entered)
+            (should (equal "Press RET to open image, +/-/0 to resize" echoed))))
+      (delete-file image-file))))
+
+(ert-deftest agent-shell-markdown-image-file-path-hints-open-key ()
+  ;; A bare image-path line renders as an image too, and hints the same way.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg"))
+        (echoed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest _) '(image :type svg :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (setq echoed (apply #'format format-string args)))))
+          (with-temp-buffer
+            (insert image-file "\n")
+            (agent-shell-markdown-replace-markup :render-images t)
+            (goto-char (point-min))
+            (funcall (seq-first (get-text-property (point) 'cursor-sensor-functions))
+                     nil nil 'entered)
+            (should (equal "Press RET to open image" echoed))))
+      (delete-file image-file))))
+
+(ert-deftest agent-shell-markdown-remote-image-link-hints-open-key ()
+  ;; A remote image that falls back to a link hints at the browser rather
+  ;; than at opening a file, since that's what invoking it does.
+  (let ((rendered (agent-shell-markdown-convert
+                   "![docs](https://example.com/a.png)"))
+        (echoed nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq echoed (apply #'format format-string args)))))
+      (funcall (seq-first (get-text-property 0 'cursor-sensor-functions rendered))
+               nil nil 'entered)
+      (should (equal "Press RET to open image in browser" echoed)))))
+
+(ert-deftest agent-shell-markdown-link-hints-where-it-lands ()
+  ;; A link looks actionable (link face plus `mouse-face'), but not where
+  ;; invoking it goes: `agent-shell-markdown--open-link' visits local
+  ;; files in Emacs and sends everything else to the browser.  The hint
+  ;; names that, and is computed on entry so a file appearing or going
+  ;; away later doesn't leave it lying.
+  (let ((linked-file (make-temp-file "agent-shell-test" nil ".el"))
+        (echoed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (setq echoed (apply #'format format-string args)))))
+          (let ((rendered (agent-shell-markdown-convert
+                           (format "[code](%s)" linked-file))))
+            (funcall (seq-first (get-text-property
+                                 0 'cursor-sensor-functions rendered))
+                     nil nil 'entered)
+            (should (equal "Press RET to open file" echoed)))
+          (let ((rendered (agent-shell-markdown-convert
+                           "[docs](https://example.com)")))
+            (funcall (seq-first (get-text-property
+                                 0 'cursor-sensor-functions rendered))
+                     nil nil 'entered)
+            (should (equal "Press RET to open in browser" echoed))))
+      (delete-file linked-file))))
+
 (ert-deftest agent-shell-markdown-image-reconstructs-to-source ()
   ;; A rendered `![alt](url)' image shows only the alt placeholder, but
   ;; `agent-shell-copy-as-markdown' must round-trip it back to the original
@@ -1242,6 +1392,29 @@ body
                   'highlight))
       (should (keymapp (get-text-property i 'keymap with-lang))))))
 
+(ert-deftest agent-shell-markdown-source-block-copy-hint-follows-binding ()
+  ;; The hint the label echoes on cursor entry names whichever key its
+  ;; keymap binds, rather than hardcoding RET (which would start lying
+  ;; the moment the map binds something else).  Mouse bindings are
+  ;; skipped, so the hint always names something pressable.
+  (let* ((rendered (agent-shell-markdown-convert "```
+body
+```
+"))
+         ;; Index 1 is the label's first char (index 0 is the tinted vpad).
+         (map (get-text-property 1 'keymap rendered))
+         (sensor (seq-first (get-text-property 1 'cursor-sensor-functions rendered)))
+         (echoed nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq echoed (apply #'format format-string args)))))
+      (funcall sensor nil nil 'entered)
+      (should (equal "Press RET to copy" echoed))
+      (define-key map (kbd "TAB") (lookup-key map (kbd "RET")))
+      (define-key map (kbd "RET") nil t)
+      (funcall sensor nil nil 'entered)
+      (should (equal "Press TAB to copy" echoed)))))
+
 (ert-deftest agent-shell-markdown-convert-source-block-nested-fences ()
   ;; A 4-backtick outer fence wraps inner 3-backtick fences as
   ;; literal body — the inner ```python ... ``` is *not* re-rendered
@@ -2009,6 +2182,60 @@ after" nil)))))
          (alice-pos (string-match "Alice" s)))
     (should alice-pos)
     (should (eq 'agent-shell-markdown-bold (get-text-property alice-pos 'face s)))))
+
+(ert-deftest agent-shell-markdown-table-hints-cell-navigation ()
+  ;; A rendered table gives no sign its cells are navigable, so entering
+  ;; it echoes the keys `agent-shell-markdown-table-map' binds.  The hint
+  ;; is derived, so rebinding the map re-words it.
+  (let ((agent-shell-markdown-table-map (copy-keymap agent-shell-markdown-table-map))
+        (echoed nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq echoed (apply #'format format-string args)))))
+      (let ((rendered (agent-shell-markdown-convert "| A | B |
+|---|---|
+| 1 | 2 |")))
+        (should (eq agent-shell-markdown-table-map
+                    (get-text-property 0 'keymap rendered)))
+        (funcall (seq-first (get-text-property 0 'cursor-sensor-functions rendered))
+                 nil nil 'entered)
+        (should (equal "Press TAB/<backtab> to move between cells" echoed)))
+      (define-key agent-shell-markdown-table-map (kbd "TAB") nil t)
+      (define-key agent-shell-markdown-table-map (kbd "<backtab>") nil t)
+      (define-key agent-shell-markdown-table-map (kbd "C-c C-n")
+                  #'agent-shell-markdown-table-next-cell)
+      (setq echoed nil)
+      (funcall (seq-first (get-text-property
+                           0 'cursor-sensor-functions
+                           (agent-shell-markdown-convert "| A | B |
+|---|---|
+| 1 | 2 |")))
+               nil nil 'entered)
+      (should (equal "Press C-c C-n to move between cells" echoed)))))
+
+(ert-deftest agent-shell-markdown-table-leaves-cell-link-keys-alone ()
+  ;; Cells hold whatever the inline passes rendered, links included.  The
+  ;; table's keymap fills in around them rather than over them, so RET
+  ;; still opens a link sitting in a cell (and its own hint survives).
+  (let ((rendered (agent-shell-markdown-convert "| A | [docs](https://example.com) |
+|---|---|
+| 1 | 2 |"))
+        (echoed nil))
+    (let ((link-start (string-match "docs" (substring-no-properties rendered))))
+      (should link-start)
+      ;; The border char before the link carries the table's map...
+      (should (eq agent-shell-markdown-table-map
+                  (get-text-property 0 'keymap rendered)))
+      ;; ...while the link keeps its own, opening rather than navigating.
+      (should-not (eq agent-shell-markdown-table-map
+                      (get-text-property link-start 'keymap rendered)))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq echoed (apply #'format format-string args)))))
+        (funcall (seq-first (get-text-property
+                             link-start 'cursor-sensor-functions rendered))
+                 nil nil 'entered)
+        (should (equal "Press RET to open in browser" echoed))))))
 
 (ert-deftest agent-shell-markdown-convert-table-skips-frozen-cell-pipe ()
   ;; `| `a|b` | c |' — inline-code body contains a `|', which our

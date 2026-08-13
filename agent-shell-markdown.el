@@ -199,6 +199,30 @@ When nil, fall back to ASCII pipes and dashes.")
 (defvar agent-shell-markdown-table-zebra-stripe t
   "When non-nil, alternate row backgrounds in tables for readability.")
 
+(defvar agent-shell-markdown-table-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "TAB") #'agent-shell-markdown-table-next-cell)
+    (define-key map (kbd "<backtab>") #'agent-shell-markdown-table-previous-cell)
+    map)
+  "Keymap active on a rendered markdown table.
+
+Applied as a `keymap' text property by
+`agent-shell-markdown--render-table', so cell navigation works wherever
+a table renders rather than only where a host wires it up
+\(`agent-shell-next-item' and the viewport's equivalent dispatch to the
+same commands, for the keys they own).
+
+The keys are named in the hint a table echoes on entry (see
+`agent-shell-markdown--table-hint'), so rebinding one re-words the
+hint too:
+
+  (with-eval-after-load \\='agent-shell-markdown
+    (define-key agent-shell-markdown-table-map
+                (kbd \"C-c C-n\") #\\='agent-shell-markdown-table-next-cell))
+
+Rebind with `define-key' rather than `setq': already rendered tables
+hold on to this keymap object.")
+
 (defvar agent-shell-markdown-list-bullets '("•" "◦")
   "Bullet glyphs for unordered lists, cycled by nesting depth.
 The Nth entry renders at depth N, wrapping past the end, so the
@@ -897,7 +921,10 @@ otherwise group 3 (bare form)."
 
 The bracket/parenthesis markup is stripped; the title is left
 with face `agent-shell-markdown-link' and a keymap text property that
-opens the URL on RET or mouse-1.  Matches preceded by `!' (the
+opens the URL on RET or mouse-1.  Entering the title echoes that key
+along with where it lands, since a local file opens in Emacs while
+anything else goes to the browser (see
+`agent-shell-markdown--action-hint').  Matches preceded by `!' (the
 image syntax) are skipped, as are links inside any of
 AVOID-RANGES.
 
@@ -931,12 +958,25 @@ and a keymap that opens the URL."
             (delete-region markup-start markup-end)
             (goto-char markup-start)
             (insert title)
-            (let ((end (+ markup-start (length title))))
+            (let* ((end (+ markup-start (length title)))
+                   (open-action (lambda () (interactive)
+                                  (agent-shell-markdown--open-link url)))
+                   (link-map (agent-shell-markdown--make-ret-binding-map
+                              open-action)))
               (add-face-text-property markup-start end 'agent-shell-markdown-link)
-              (put-text-property markup-start end 'keymap
-                                 (agent-shell-markdown--make-ret-binding-map
-                                  (lambda () (interactive)
-                                    (agent-shell-markdown--open-link url))))
+              (put-text-property markup-start end 'keymap link-map)
+              ;; Where invoking lands depends on the target (Emacs for a
+              ;; local file, the browser otherwise), so say which rather
+              ;; than leave it to be found out by pressing.
+              (put-text-property markup-start end 'cursor-sensor-functions
+                                 (agent-shell-markdown--make-hint-sensor
+                                  (lambda ()
+                                    (agent-shell-markdown--action-hint
+                                     :action open-action
+                                     :keymap link-map
+                                     :verb (if (agent-shell-markdown--parse-local-link url)
+                                               "open file"
+                                             "open in browser")))))
               (put-text-property markup-start end 'mouse-face 'highlight)
               ;; Expose the target as recoverable metadata so copy/export
               ;; integrations can reconstruct the link once the `(url)' is
@@ -971,15 +1011,18 @@ If URL resolves to an existing local file that is image-supported
 and a graphical display is available, the full markup is replaced
 by the alt text (or a single space if alt is empty) carrying a
 `display' property with the image and a keymap that opens the
-file on RET or mouse-1.  Remote (http) URLs are downloaded into
-IMAGE-CACHE-DIRECTORY first (see
+file on RET or mouse-1.  Entering the image echoes that key and the
+ones that resize it (see `agent-shell-markdown--image-hint'), since
+a displayed image otherwise gives no sign that it acts.  Remote http
+URLs are downloaded into IMAGE-CACHE-DIRECTORY first (see
 `agent-shell-markdown--fetch-remote-image').
 
 When a remote image can't be shown inline (no IMAGE-CACHE-DIRECTORY,
 the download failed, or a non-graphical display), its markup is
 replaced by a link -- the alt text, or the URL when alt is empty --
 faced as `agent-shell-markdown-link' with a keymap that opens the
-URL on RET or mouse-1.  Any other unresolvable markup is left
+URL on RET or mouse-1, echoing that key on entry as a rendered image
+does.  Any other unresolvable markup is left
 untouched.  Images inside any of AVOID-RANGES are left alone.
 
 A bare `(url)' destination and the CommonMark angle-bracketed
@@ -1078,12 +1121,21 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                 (delete-region markup-start content-end)
                 (goto-char markup-start)
                 (insert placeholder)
-                (let ((end (+ markup-start (length placeholder))))
+                (let* ((end (+ markup-start (length placeholder)))
+                       (open-action (lambda () (interactive)
+                                      (find-file path)))
+                       (image-keymap (agent-shell-markdown--make-ret-binding-map
+                                      open-action)))
                   (put-text-property markup-start end 'display image)
-                  (put-text-property markup-start end 'keymap
-                                     (agent-shell-markdown--make-ret-binding-map
-                                      (lambda () (interactive)
-                                        (find-file path))))
+                  (put-text-property markup-start end 'keymap image-keymap)
+                  ;; Nothing about a displayed image says it's actionable, so
+                  ;; echo what its keys do as the cursor enters.
+                  (put-text-property markup-start end 'cursor-sensor-functions
+                                     (agent-shell-markdown--make-hint-sensor
+                                      (lambda ()
+                                        (agent-shell-markdown--image-hint
+                                         :action open-action
+                                         :keymap image-keymap))))
                   ;; A hand pointer signals the image is clickable; unlike
                   ;; `mouse-face', it adds no background that would paint a
                   ;; highlighted box across the image on hover.
@@ -1109,12 +1161,22 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                 (delete-region markup-start content-end)
                 (goto-char markup-start)
                 (insert label)
-                (let ((end (+ markup-start (length label))))
+                (let* ((end (+ markup-start (length label)))
+                       (open-action (lambda () (interactive)
+                                      (agent-shell-markdown--open-link url)))
+                       (link-map (agent-shell-markdown--make-ret-binding-map
+                                  open-action)))
                   (add-face-text-property markup-start end 'agent-shell-markdown-link)
-                  (put-text-property markup-start end 'keymap
-                                     (agent-shell-markdown--make-ret-binding-map
-                                      (lambda () (interactive)
-                                        (agent-shell-markdown--open-link url))))
+                  (put-text-property markup-start end 'keymap link-map)
+                  ;; No resizing hint here: this is a link standing in for an
+                  ;; image we couldn't show, so there's nothing to resize.
+                  (put-text-property markup-start end 'cursor-sensor-functions
+                                     (agent-shell-markdown--make-hint-sensor
+                                      (lambda ()
+                                        (agent-shell-markdown--action-hint
+                                         :action open-action
+                                         :keymap link-map
+                                         :verb "open image in browser"))))
                   (put-text-property markup-start end 'mouse-face 'highlight)
                   (when source
                     (put-text-property markup-start end
@@ -1128,8 +1190,10 @@ supported image extension is treated like an `![alt](url)' image:
 when the path resolves to an existing image-supported file and a
 graphical display is available, the line text is left in place
 carrying a `display' property with the image and a keymap that
-opens the file.  Lines inside any of AVOID-RANGES are left
-untouched, as are unresolvable paths.
+opens the file, whose key is echoed along with the resizing ones as
+the cursor enters the image (see
+`agent-shell-markdown--image-hint').  Lines inside any of
+AVOID-RANGES are left untouched, as are unresolvable paths.
 
 For example, a buffer line containing just `/abs/path/img.png'
 renders the image in place of that text."
@@ -1154,15 +1218,24 @@ renders the image in place of that text."
             (when (and resolved
                        (image-supported-file-p resolved)
                        (display-graphic-p))
-              (let ((image (create-image
-                            resolved nil nil
-                            :max-width (agent-shell-markdown--image-max-width))))
+              (let* ((image (create-image
+                             resolved nil nil
+                             :max-width (agent-shell-markdown--image-max-width)))
+                     (open-action (lambda () (interactive)
+                                    (find-file resolved)))
+                     (image-keymap (agent-shell-markdown--make-ret-binding-map
+                                    open-action)))
                 (image-flush image)
                 (put-text-property path-start path-end 'display image)
-                (put-text-property path-start path-end 'keymap
-                                   (agent-shell-markdown--make-ret-binding-map
-                                    (lambda () (interactive)
-                                      (find-file resolved))))
+                (put-text-property path-start path-end 'keymap image-keymap)
+                ;; Nothing about a displayed image says it's actionable, so
+                ;; echo what its keys do as the cursor enters.
+                (put-text-property path-start path-end 'cursor-sensor-functions
+                                   (agent-shell-markdown--make-hint-sensor
+                                    (lambda ()
+                                      (agent-shell-markdown--image-hint
+                                       :action open-action
+                                       :keymap image-keymap))))
                 ;; A hand pointer signals the image is clickable without the
                 ;; background a `mouse-face' would paint across it on hover.
                 (put-text-property path-start path-end 'pointer 'hand)
@@ -1426,6 +1499,8 @@ with `emacs-lisp-mode' face properties on the body and a
                                                     'agent-shell-markdown-source-block-body)))
                                     (kill-new (buffer-substring-no-properties start end))
                                     (message "Copied"))))
+                   (label-map (agent-shell-markdown--make-ret-binding-map
+                               kill-action))
                    (vpad-line (propertize "\n"
                                           'face 'agent-shell-markdown-source-block
                                           'line-prefix prefix
@@ -1438,12 +1513,14 @@ with `emacs-lisp-mode' face properties on the body and a
                            'face 'agent-shell-markdown-source-block-language
                            'mouse-face 'highlight
                            'pointer 'hand
-                           'keymap (agent-shell-markdown--make-ret-binding-map
-                                    kill-action)
+                           'keymap label-map
                            'cursor-sensor-functions
-                           (list (lambda (_window _old-pos sensor-action)
-                                   (when (eq sensor-action 'entered)
-                                     (message "Press RET to copy"))))
+                           (agent-shell-markdown--make-hint-sensor
+                            (lambda ()
+                              (agent-shell-markdown--action-hint
+                               :action kill-action
+                               :keymap label-map
+                               :verb "copy")))
                            'agent-shell-markdown-frozen t
                            'rear-nonsticky '(agent-shell-markdown-frozen)
                            'line-prefix prefix
@@ -2831,6 +2908,23 @@ natural total — see `agent-shell-markdown--render-table-source'."
             (setq col (1+ col))))))
     min-widths))
 
+(cl-defun agent-shell-markdown--fill-text-property (&key start end property value)
+  "Put PROPERTY VALUE between START and END, skipping chars that carry it.
+
+Leaves the chars that already have PROPERTY alone, so a blanket
+property can be laid over a region holding more specific ones without
+taking them out (a table filling in `keymap' around the links rendered
+inside its cells, say).
+
+For example, over \"ab\" with `keymap' already on \"a\", only \"b\"
+comes away with VALUE."
+  (let ((pos start))
+    (while (< pos end)
+      (let ((next (next-single-property-change pos property nil end)))
+        (unless (get-text-property pos property)
+          (put-text-property pos next property value))
+        (setq pos next)))))
+
 (defun agent-shell-markdown--render-table (table)
   "Render TABLE by replacing [:start, :end] with the rendered :source.
 
@@ -2888,7 +2982,20 @@ rendered region from inheriting either of our two properties."
       ;; (`agent-shell-markdown-rerender-tables' on resize) has no such
       ;; follow-up pass and would otherwise render mostly greyed out.
       (agent-shell-markdown--mirror-face-to-font-lock-face table-start end)
-      (put-text-property table-start end 'fontified t))))
+      (put-text-property table-start end 'fontified t)
+      ;; Cells carry whatever the inline passes left there, links and
+      ;; images included, so fill in around their `keymap' and
+      ;; `cursor-sensor-functions' rather than over them: navigation
+      ;; reaches the rest of the table without taking RET away from a
+      ;; link sitting in a cell.
+      (agent-shell-markdown--fill-text-property
+       :start table-start :end end
+       :property 'keymap :value agent-shell-markdown-table-map)
+      (agent-shell-markdown--fill-text-property
+       :start table-start :end end
+       :property 'cursor-sensor-functions
+       :value (agent-shell-markdown--make-hint-sensor
+               #'agent-shell-markdown--table-hint)))))
 
 (defun agent-shell-markdown-rerender-tables ()
   "Re-lay out tables whose stored width no longer matches the display.
@@ -3703,6 +3810,24 @@ Inverse of `agent-shell-markdown-table-next-cell'."
   (interactive)
   (agent-shell-markdown-table--move-cell :backward))
 
+(defun agent-shell-markdown--table-hint ()
+  "Return the hint text a rendered table echoes as the cursor enters it.
+
+Names the keys `agent-shell-markdown-table-map' binds for moving
+between cells, or nil when it binds none.  Nothing about a rendered
+table says its cells are navigable, so the hint is what makes them
+discoverable.
+
+For example, this returns \"Press TAB/<backtab> to move between
+cells\" with the default bindings."
+  (when-let* ((keys (seq-keep (lambda (action)
+                                (agent-shell-markdown--action-key
+                                 :action action
+                                 :keymap agent-shell-markdown-table-map))
+                              (list #'agent-shell-markdown-table-next-cell
+                                    #'agent-shell-markdown-table-previous-cell))))
+    (format "Press %s to move between cells" (string-join keys "/"))))
+
 (defun agent-shell-markdown-table--move-cell (direction)
   "Move point to the next or previous cell in the table at point.
 DIRECTION is `:forward' or `:backward'.  Signals `user-error' when
@@ -3835,6 +3960,90 @@ is consulted for aliases before the `-mode' suffix is appended."
     (define-key map [mouse-1] fun)
     (define-key map [remap self-insert-command] 'ignore)
     map))
+
+(cl-defun agent-shell-markdown--action-key (&key action keymap)
+  "Return the key running ACTION, as a `key-description' string.
+
+Looks ACTION up in KEYMAP, or in the buffer's active keymaps when
+KEYMAP is nil (which is where mode-level bindings like image resizing
+live).  Skips mouse buttons, so the result is something the user can
+press, and returns nil when ACTION has no such binding.
+
+ACTION is anything `where-is-internal' takes as a definition, so a
+per-image closure works as well as a command symbol.
+
+For example, ACTION `agent-shell-image-scale-increase' returns \"+\"
+in an `agent-shell-mode' buffer, and nil elsewhere."
+  (when-let* ((keys (seq-remove (lambda (key)
+                                  (mouse-event-p (seq-first key)))
+                                (where-is-internal
+                                 action (when keymap (list keymap))))))
+    (key-description (seq-first keys))))
+
+(cl-defun agent-shell-markdown--action-hint (&key action keymap verb)
+  "Return \"Press KEY to VERB\", KEY being what runs ACTION in KEYMAP.
+
+Returns nil where ACTION is bound to no key, so callers stay quiet
+rather than name a key that does nothing.
+
+For example, VERB \"copy\" returns \"Press RET to copy\" on a source
+block's label."
+  (when-let* ((key (agent-shell-markdown--action-key :action action
+                                                     :keymap keymap)))
+    (format "Press %s to %s" key verb)))
+
+(defun agent-shell-markdown--make-hint-sensor (hint)
+  "Return a `cursor-sensor-functions' value echoing HINT on entry.
+
+HINT is a function returning the text to echo, or nil to stay quiet.
+It runs as the cursor enters the propertized text, so the hint names
+the keys bound then rather than the ones bound at render time.
+Echoing needs `cursor-sensor-mode' (which `agent-shell-ui-mode' turns
+on).
+
+For example, a HINT returning \"Press RET to copy\" echoes that line
+as the cursor lands on a source block's label, while one returning
+nil (its key is unbound there) leaves the echo area alone."
+  (list (lambda (_window _old-pos sensor-action)
+          (when (eq sensor-action 'entered)
+            (when-let* ((text (funcall hint)))
+              (message "%s" text))))))
+
+(cl-defun agent-shell-markdown--image-hint (&key action keymap)
+  "Return the hint text for an image ACTION opens via KEYMAP.
+
+Names the key that opens the image, followed by whichever of the keys
+that widen, narrow and reset it are bound here.  Resizing is bound at
+mode level (see `agent-shell-viewport-view-mode-map'), so an image
+carries no keys of its own for it -- the hint is what makes it
+discoverable.  Returns nil when not even ACTION is bound.
+
+Each resizing action is looked up under either name it goes by:
+`agent-shell-mode' binds its own wrappers, so `+' still self-inserts
+while typing a prompt, where the viewport binds the commands below
+directly.
+
+For example, this returns \"Press RET to open image, +/-/0 to
+resize\" in a shell buffer, and \"Press RET to open image\" where
+resizing isn't bound."
+  (when-let* ((open-hint (agent-shell-markdown--action-hint :action action
+                                                            :keymap keymap
+                                                            :verb "open image")))
+    (concat
+     open-hint
+     (when-let* ((scale-keys (seq-keep
+                              (lambda (names)
+                                (seq-some (lambda (name)
+                                            (agent-shell-markdown--action-key
+                                             :action name))
+                                          names))
+                              '((agent-shell-image-scale-increase
+                                 agent-shell-markdown-image-scale-increase)
+                                (agent-shell-image-scale-decrease
+                                 agent-shell-markdown-image-scale-decrease)
+                                (agent-shell-image-scale-reset
+                                 agent-shell-markdown-image-scale-reset)))))
+       (format ", %s to resize" (string-join scale-keys "/"))))))
 
 (defun agent-shell-markdown--open-link (url)
   "Open URL.  Use local navigation for file links, `browse-url' otherwise."
