@@ -3587,6 +3587,34 @@ unaffected."
       (delete-file text)
       (delete-file binary))))
 
+(ert-deftest agent-shell-markdown-visit-file-without-line-range-test ()
+  "Visiting without a line range just opens the file."
+  (let ((file (make-temp-file "agent-shell-tests")))
+    (unwind-protect
+        (save-window-excursion
+          (agent-shell-markdown-visit-file :file file)
+          ;; Compare truenames: `find-file' may resolve symlinks
+          ;; (/var vs /private/var on macOS) depending on config.
+          (should (equal (file-truename file)
+                         (file-truename (buffer-file-name)))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-visit-file-with-line-range-selects-region-test ()
+  "Visiting with a line range selects those lines."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\nthree\nfour\n")))
+    (unwind-protect
+        (save-window-excursion
+          (agent-shell-markdown-visit-file :file file :line-start 2 :line-end 3)
+          (should (equal (file-truename file)
+                         (file-truename (buffer-file-name))))
+          (should (equal "two\nthree"
+                         (buffer-substring-no-properties (point) (mark)))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
 (ert-deftest agent-shell-markdown--open-local-link-binary-vs-text-test ()
   "Test `agent-shell-markdown--open-local-link' routes by file type.
 Text/navigable files open in Emacs; binary files open externally."

@@ -4178,29 +4178,52 @@ This is the heuristic git uses to tell binary from text."
          (insert-file-contents-literally file nil 0 4096)
          (string-search "\0" (buffer-string)))))
 
+(cl-defun agent-shell-markdown-visit-file (&key file line-start line-end)
+  "Visit FILE, selecting lines LINE-START to LINE-END when given.
+
+Without LINE-START, simply visits FILE.  With one, point lands on that
+line, and LINE-END selects through the end of that line, reusing a
+window already showing FILE rather than displacing the current one,
+since a line link usually points at something already on screen.
+Messages instead when FILE no longer exists.
+
+For example, with FILE holding \"one\\ntwo\\nthree\\nfour\",
+LINE-START 2 and LINE-END 3 leave \"two\\nthree\" as the region."
+  (if (not line-start)
+      (find-file file)
+    (if (not (and file (file-exists-p file)))
+        (message "File not found")
+      (if-let* ((window (when (get-file-buffer file)
+                          (get-buffer-window (get-file-buffer file)))))
+          (select-window window)
+        (find-file file))
+      (goto-char (point-min))
+      (forward-line (1- line-start))
+      (when line-end
+        (push-mark (save-excursion
+                     (goto-char (point-min))
+                     (forward-line (1- line-end))
+                     (end-of-line)
+                     (point))
+                   t t)))))
+
 (defun agent-shell-markdown--open-local-link (url)
   "Open URL as a local file link if possible.
 Return non-nil if handled, nil otherwise.
 
 Text/navigable files open in Emacs, jumping to the `#Lnnn' line when URL
 carries one and selecting the lines when it carries a `#Lnnn-Lnnn'
-range.  Binary files (which Emacs can't usefully display) instead
-prompt to open with the operating system's default program, ignoring any
-line (a line number is meaningless for binary)."
+range (see `agent-shell-markdown-visit-file').  Binary files (which
+Emacs can't usefully display) instead prompt to open with the operating
+system's default program, ignoring any line (a line number is
+meaningless for binary)."
   (when-let* ((parsed (agent-shell-markdown--parse-local-link url)))
     (if (agent-shell-markdown--binary-file-p (map-elt parsed :file))
         (agent-shell-markdown--open-externally (map-elt parsed :file))
-      (find-file (map-elt parsed :file))
-      (when-let* ((line-start (map-elt parsed :line-start)))
-        (goto-char (point-min))
-        (forward-line (1- line-start))
-        (when-let* ((line-end (map-elt parsed :line-end)))
-          (push-mark (save-excursion
-                       (goto-char (point-min))
-                       (forward-line (1- line-end))
-                       (end-of-line)
-                       (point))
-                     t t))))
+      (agent-shell-markdown-visit-file
+       :file (map-elt parsed :file)
+       :line-start (map-elt parsed :line-start)
+       :line-end (map-elt parsed :line-end)))
     t))
 
 (defconst agent-shell-markdown--lines-regexp

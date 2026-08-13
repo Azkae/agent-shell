@@ -4334,7 +4334,9 @@ so LABEL is used verbatim (see the BOXED argument of
    :boxed nil
    :action (lambda ()
              (interactive)
-             (agent-shell--visit-file file line-start line-end))
+             (agent-shell-markdown-visit-file :file file
+                                              :line-start line-start
+                                              :line-end line-end))
    :properties (append
                 (when face
                   (list 'font-lock-face face 'face face))
@@ -4343,33 +4345,6 @@ so LABEL is used verbatim (see the BOXED argument of
                         (list (lambda (_window _old-pos action)
                                 (when (eq action 'entered)
                                   (message "Press RET to %s" hint)))))))))
-
-(defun agent-shell--visit-file (file line-start line-end)
-  "Visit FILE, selecting lines LINE-START to LINE-END when given.
-
-Without a line range, simply visits FILE.  With one, selects those
-lines as the region, reusing a window already showing FILE rather than
-displacing the current one, since a region link usually points at
-something already on screen.  Messages instead when FILE no longer
-exists."
-  (if (not line-start)
-      (find-file file)
-    (if (not (and file (file-exists-p file)))
-        (message "File not found")
-      (if-let* ((window (when (get-file-buffer file)
-                          (get-buffer-window (get-file-buffer file)))))
-          (select-window window)
-        (find-file file))
-      (goto-char (point-min))
-      (forward-line (1- line-start))
-      (beginning-of-line)
-      (when line-end
-        (push-mark (save-excursion
-                     (goto-char (point-min))
-                     (forward-line (1- line-end))
-                     (end-of-line)
-                     (point))
-                   t t)))))
 
 (defun agent-shell--buffer-name-prefix (agent-name)
   "Return the prefix a buffer name for AGENT-NAME places before the project.
