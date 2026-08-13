@@ -755,6 +755,72 @@ streaming **not bold**" nil)))))
     (goto-char 5)
     (should (= 1 (agent-shell-markdown--previous-visible-image)))))
 
+(ert-deftest agent-shell-markdown-linkify-bare-url ()
+  ;; A bare URL in prose keeps its text and becomes a link: faced,
+  ;; carrying its target for copy/export, and a stop for item navigation.
+  (with-temp-buffer
+    (insert "see https://example.com now.")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "see https://example.com now."
+                   (buffer-substring-no-properties (point-min) (point-max))))
+    ;; Trailing punctuation stays out of the target.
+    (should (equal "https://example.com"
+                   (agent-shell-markdown-link-url-at-point 5)))
+    (should (equal 'agent-shell-markdown-link (get-text-property 5 'face)))
+    (should (get-text-property 5 'keymap))
+    (should (get-text-property 5 'cursor-sensor-functions))
+    (goto-char (point-min))
+    (should (= 5 (agent-shell-markdown--next-visible-link)))))
+
+(ert-deftest agent-shell-markdown-linkify-bare-url-skips-code ()
+  ;; Code is verbatim: a URL inside inline code or a fenced block is text,
+  ;; not a link.
+  (with-temp-buffer
+    (insert "code `https://example.com` here")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "code https://example.com here"
+                   (buffer-substring-no-properties (point-min) (point-max))))
+    (should (null (agent-shell-markdown-link-url-at-point 6))))
+  (with-temp-buffer
+    (insert "```\nhttps://example.com\n```\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    (should (null (text-property-search-forward 'agent-shell-markdown-url)))))
+
+(ert-deftest agent-shell-markdown-linkify-bare-url-leaves-rendered-images ()
+  ;; A `file://' image path renders as the image, and stays that: linking
+  ;; it as a URL too would swap the keymap opening the file for one
+  ;; opening the URL, and make one image two navigation stops.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image) (lambda (&rest _) '(image :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "file://%s\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (eq 'image (car-safe (get-text-property (point-min) 'display))))
+            (should (null (agent-shell-markdown-link-url-at-point (point-min))))))
+      (delete-file image-file)))
+  ;; A `file://' target that isn't an image is a link, as any URL is.
+  (with-temp-buffer
+    (insert "see file:///tmp/notes.txt here")
+    (agent-shell-markdown-replace-markup :render-images t)
+    (should (equal "file:///tmp/notes.txt"
+                   (agent-shell-markdown-link-url-at-point 5)))))
+
+(ert-deftest agent-shell-markdown-linkify-bare-url-leaves-rendered-links ()
+  ;; A link whose title is itself a URL keeps pointing at its own target,
+  ;; rather than being re-linkified to the text it displays.
+  (with-temp-buffer
+    (insert "[https://label.com](https://target.com)")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "https://label.com"
+                   (buffer-substring-no-properties (point-min) (point-max))))
+    (should (equal "https://target.com"
+                   (agent-shell-markdown-link-url-at-point (point-min))))))
+
 (ert-deftest agent-shell-markdown-remote-image-fallback-is-a-link ()
   ;; A remote image that can't be shown inline renders as a link opening
   ;; it, so it carries its target like any rendered link: recoverable for

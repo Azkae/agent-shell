@@ -67,6 +67,7 @@
 (require 'url)
 (require 'url-parse)
 (require 'url-util)
+(require 'browse-url)
 
 (defgroup agent-shell-markdown nil
   "Render Markdown text into propertized form."
@@ -443,6 +444,9 @@ body un-fontified."
            :complete (or force complete))
           (agent-shell-markdown--replace-image-file-paths
            :avoid-ranges avoid-ranges))
+        ;; After the markup passes, so a URL already consumed as a
+        ;; `[title](url)' destination or an image's is not seen again.
+        (agent-shell-markdown--linkify-urls :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-dividers :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-blockquotes :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-lists :avoid-ranges avoid-ranges)
@@ -916,6 +920,43 @@ otherwise group 3 (bare form)."
   (let ((group (if (match-beginning 2) 2 3)))
     (buffer-substring-no-properties (match-beginning group) (match-end group))))
 
+(cl-defun agent-shell-markdown--apply-link-properties (&key start end url verb)
+  "Make [START, END) a rendered link to URL.
+
+Applies what every link the renderer produces carries: face
+`agent-shell-markdown-link', a keymap opening URL on RET or a mouse
+click, a hint naming that key, `mouse-face', and the target itself on
+`agent-shell-markdown-url' -- which is what
+`agent-shell-markdown-link-url-at-point' reads and what item
+navigation stops on, so a link missing it would open on RET yet stay
+invisible to both.
+
+VERB names the action in the hint.  Defaults to \"open file\" for a
+local file (which opens in Emacs) and \"open in browser\" otherwise,
+resolved as the hint is echoed rather than here, so it reflects the
+file existing then.
+
+For example, over the `docs' of a rendered \"[docs](https://gnu.org)\",
+RET opens the URL and the echo area reads \"Press RET to open in
+browser\"."
+  (let* ((open-action (lambda () (interactive)
+                        (agent-shell-markdown--open-link url)))
+         (link-map (agent-shell-markdown--make-ret-binding-map open-action)))
+    (add-face-text-property start end 'agent-shell-markdown-link)
+    (put-text-property start end 'keymap link-map)
+    (put-text-property start end 'cursor-sensor-functions
+                       (agent-shell-markdown--make-hint-sensor
+                        (lambda ()
+                          (agent-shell-markdown--action-hint
+                           :action open-action
+                           :keymap link-map
+                           :verb (or verb
+                                     (if (agent-shell-markdown--parse-local-link url)
+                                         "open file"
+                                       "open in browser"))))))
+    (put-text-property start end 'mouse-face 'highlight)
+    (put-text-property start end 'agent-shell-markdown-url url)))
+
 (cl-defun agent-shell-markdown--replace-links (&key avoid-ranges)
   "Replace `[title](url)' markup with title faced as link.
 
@@ -958,34 +999,66 @@ and a keymap that opens the URL."
             (delete-region markup-start markup-end)
             (goto-char markup-start)
             (insert title)
-            (let* ((end (+ markup-start (length title)))
-                   (open-action (lambda () (interactive)
-                                  (agent-shell-markdown--open-link url)))
-                   (link-map (agent-shell-markdown--make-ret-binding-map
-                              open-action)))
-              (add-face-text-property markup-start end 'agent-shell-markdown-link)
-              (put-text-property markup-start end 'keymap link-map)
-              ;; Where invoking lands depends on the target (Emacs for a
-              ;; local file, the browser otherwise), so say which rather
-              ;; than leave it to be found out by pressing.
-              (put-text-property markup-start end 'cursor-sensor-functions
-                                 (agent-shell-markdown--make-hint-sensor
-                                  (lambda ()
-                                    (agent-shell-markdown--action-hint
-                                     :action open-action
-                                     :keymap link-map
-                                     :verb (if (agent-shell-markdown--parse-local-link url)
-                                               "open file"
-                                             "open in browser")))))
-              (put-text-property markup-start end 'mouse-face 'highlight)
-              ;; Expose the target as recoverable metadata so copy/export
-              ;; integrations can reconstruct the link once the `(url)' is
-              ;; gone from the buffer (see
-              ;; `agent-shell-markdown-link-url-at-point').
-              (put-text-property markup-start end 'agent-shell-markdown-url url)
+            (let ((end (+ markup-start (length title))))
+              (agent-shell-markdown--apply-link-properties
+               :start markup-start :end end :url url)
               (when source
                 (put-text-property markup-start end
                                    'agent-shell-markdown-source source))))))))))
+
+(cl-defun agent-shell-markdown--linkify-urls (&key avoid-ranges)
+  "Face bare URLs in prose as links, openable from the buffer.
+
+Matches what `browse-url-button-regexp' calls a URL, so what counts
+follows Emacs rather than a list kept here: `http'/`https' and other
+schemes it knows (`ftp', `mailto', `file'), plus a scheme-less `www.'
+host.  A bare host without either (`example.com') stays text, so
+ordinary dotted words don't become links.
+
+There is no markup to strip, so the URL text stays as it stands and
+gains what any rendered link carries (see
+`agent-shell-markdown--apply-link-properties'), including the target
+on `agent-shell-markdown-url', so copy/export and item navigation see
+it as a link too.
+
+URLs inside any of AVOID-RANGES (fenced blocks, inline code) are left
+alone, as is text an earlier pass already rendered: a link's target, an
+image path shown in place (see
+`agent-shell-markdown--replace-image-file-paths', where RET opens the
+file rather than the URL), or an image displayed over text that reads
+as a URL.
+
+Trailing punctuation stays out of the URL, as do the brackets around
+a parenthesised one, since matching is `browse-url-button-regexp'.
+
+For example, the buffer \"see https://example.com now.\" keeps its
+text, with \"https://example.com\" faced and openable."
+  (let ((case-fold-search nil))
+    (goto-char (point-min))
+    (while (re-search-forward browse-url-button-regexp nil t)
+      (let ((start (match-beginning 0))
+            (end (match-end 0)))
+        (if-let* ((avoid (agent-shell-markdown-in-avoid-range-p
+                          start end avoid-ranges)))
+            (goto-char (cdr avoid))
+          (agent-shell-markdown--linkify-url start end))))))
+
+(defun agent-shell-markdown--linkify-url (start end)
+  "Give the URL on [START, END) the properties a rendered link carries.
+
+A no-op when an earlier pass already spoke for that text: a link's or
+fallback image's target, a `file://' image path rendered in place
+\(which tags itself frozen, and whose RET opens the file rather than
+the URL), or an image displayed over text that reads as a URL.
+
+For example, over the URL in \"see https://example.com now\", RET
+there opens it in the browser."
+  (when-let* (((not (get-text-property start 'agent-shell-markdown-url)))
+              ((not (get-text-property start 'agent-shell-markdown-frozen)))
+              ((not (eq (car-safe (get-text-property start 'display)) 'image))))
+    (agent-shell-markdown--apply-link-properties
+     :start start :end end
+     :url (buffer-substring-no-properties start end))))
 
 (defun agent-shell-markdown--image-attributes-pending-p (pos)
   "Return non-nil when an image ending at POS may still gain `{...}' attributes.
@@ -1161,30 +1234,12 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                 (delete-region markup-start content-end)
                 (goto-char markup-start)
                 (insert label)
-                (let* ((end (+ markup-start (length label)))
-                       (open-action (lambda () (interactive)
-                                      (agent-shell-markdown--open-link url)))
-                       (link-map (agent-shell-markdown--make-ret-binding-map
-                                  open-action)))
-                  (add-face-text-property markup-start end 'agent-shell-markdown-link)
-                  (put-text-property markup-start end 'keymap link-map)
-                  ;; No resizing hint here: this is a link standing in for an
-                  ;; image we couldn't show, so there's nothing to resize.
-                  (put-text-property markup-start end 'cursor-sensor-functions
-                                     (agent-shell-markdown--make-hint-sensor
-                                      (lambda ()
-                                        (agent-shell-markdown--action-hint
-                                         :action open-action
-                                         :keymap link-map
-                                         :verb "open image in browser"))))
-                  (put-text-property markup-start end 'mouse-face 'highlight)
-                  ;; Stamped as on any rendered link (see
-                  ;; `agent-shell-markdown--replace-links'): this stands in
-                  ;; for the image as a link to it, so
-                  ;; `agent-shell-markdown-link-url-at-point' recovers the
-                  ;; target and item navigation stops on it.
-                  (put-text-property markup-start end
-                                     'agent-shell-markdown-url url)
+                (let ((end (+ markup-start (length label))))
+                  ;; A link standing in for the image, so the hint says so
+                  ;; and there's no resizing to offer.
+                  (agent-shell-markdown--apply-link-properties
+                   :start markup-start :end end :url url
+                   :verb "open image in browser")
                   (when source
                     (put-text-property markup-start end
                                        'agent-shell-markdown-source source)))))))))))))
