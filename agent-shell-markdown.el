@@ -920,25 +920,40 @@ otherwise group 3 (bare form)."
   (let ((group (if (match-beginning 2) 2 3)))
     (buffer-substring-no-properties (match-beginning group) (match-end group))))
 
+(defun agent-shell-markdown--link-verb (url verb)
+  "Return VERB, or the action opening URL described when VERB is nil.
+
+Describes where invoking lands: \"open file\" for a local file (which
+opens in Emacs) and \"open in browser\" otherwise.  Resolved on each
+call rather than at render time, so a file appearing or going away
+later doesn't leave the wording stale.
+
+For example, URL \"/tmp/notes.org\" returns \"open file\" while it
+exists, and \"open in browser\" once it doesn't."
+  (or verb
+      (if (agent-shell-markdown--parse-local-link url)
+          "open file"
+        "open in browser")))
+
 (cl-defun agent-shell-markdown--apply-link-properties (&key start end url verb)
   "Make [START, END) a rendered link to URL.
 
 Applies what every link the renderer produces carries: face
 `agent-shell-markdown-link', a keymap opening URL on RET or a mouse
-click, a hint naming that key, `mouse-face', and the target itself on
+click, a hint naming that key, a `help-echo' saying the same to the
+mouse, `mouse-face', and the target itself on
 `agent-shell-markdown-url' -- which is what
 `agent-shell-markdown-link-url-at-point' reads and what item
 navigation stops on, so a link missing it would open on RET yet stay
 invisible to both.
 
-VERB names the action in the hint.  Defaults to \"open file\" for a
-local file (which opens in Emacs) and \"open in browser\" otherwise,
-resolved as the hint is echoed rather than here, so it reflects the
-file existing then.
+VERB names the action in both hints (see
+`agent-shell-markdown--link-verb' for the default and when it
+resolves).
 
 For example, over the `docs' of a rendered \"[docs](https://gnu.org)\",
-RET opens the URL and the echo area reads \"Press RET to open in
-browser\"."
+RET opens the URL, the echo area reads \"Press RET to open in
+browser\", and hovering shows \"Click to open in browser\"."
   (let* ((open-action (lambda () (interactive)
                         (agent-shell-markdown--open-link url)))
          (link-map (agent-shell-markdown--make-ret-binding-map open-action)))
@@ -950,10 +965,13 @@ browser\"."
                           (agent-shell-markdown--action-hint
                            :action open-action
                            :keymap link-map
-                           :verb (or verb
-                                     (if (agent-shell-markdown--parse-local-link url)
-                                         "open file"
-                                       "open in browser"))))))
+                           :verb (agent-shell-markdown--link-verb url verb)))))
+    ;; The mouse gets the same wording without a key in it, resolved on
+    ;; hover like the echoed hint is.
+    (put-text-property start end 'help-echo
+                       (lambda (_window _object _pos)
+                         (format "Click to %s"
+                                 (agent-shell-markdown--link-verb url verb))))
     (put-text-property start end 'mouse-face 'highlight)
     (put-text-property start end 'agent-shell-markdown-url url)))
 
@@ -1209,6 +1227,10 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                                         (agent-shell-markdown--image-hint
                                          :action open-action
                                          :keymap image-keymap))))
+                  ;; The mouse gets the same wording without a key in it.
+                  ;; Resizing is left out: it's keys-only.
+                  (put-text-property markup-start end 'help-echo
+                                     "Click to open image")
                   ;; A hand pointer signals the image is clickable; unlike
                   ;; `mouse-face', it adds no background that would paint a
                   ;; highlighted box across the image on hover.
@@ -1298,6 +1320,10 @@ renders the image in place of that text."
                                       (agent-shell-markdown--image-hint
                                        :action open-action
                                        :keymap image-keymap))))
+                ;; The mouse gets the same wording without a key in it.
+                ;; Resizing is left out: it's keys-only.
+                (put-text-property path-start path-end 'help-echo
+                                   "Click to open image")
                 ;; A hand pointer signals the image is clickable without the
                 ;; background a `mouse-face' would paint across it on hover.
                 (put-text-property path-start path-end 'pointer 'hand)

@@ -511,6 +511,57 @@ streaming **not bold**" nil)))))
             (should (equal "Press RET to open in browser" echoed))))
       (delete-file linked-file))))
 
+(ert-deftest agent-shell-markdown-link-help-echo-says-where-it-lands ()
+  ;; The mouse gets the same wording the echo area does, minus the key
+  ;; (a tooltip naming one is no use to whoever is holding a mouse).
+  ;; `help-echo' is a function, so it resolves on hover like the hint.
+  (let ((linked-file (make-temp-file "agent-shell-test" nil ".el")))
+    (unwind-protect
+        (progn
+          (should (equal "Click to open file"
+                         (funcall (get-text-property
+                                   0 'help-echo
+                                   (agent-shell-markdown-convert
+                                    (format "[code](%s)" linked-file)))
+                                  nil nil 0)))
+          (should (equal "Click to open in browser"
+                         (funcall (get-text-property
+                                   0 'help-echo
+                                   (agent-shell-markdown-convert
+                                    "[docs](https://example.com)"))
+                                  nil nil 0)))
+          ;; A remote image falling back to a link keeps its own wording.
+          (should (equal "Click to open image in browser"
+                         (funcall (get-text-property
+                                   0 'help-echo
+                                   (agent-shell-markdown-convert
+                                    "![docs](https://example.com/a.png)"))
+                                  nil nil 0))))
+      (delete-file linked-file))))
+
+(ert-deftest agent-shell-markdown-image-help-echo-says-click-to-open ()
+  ;; Images say the same to the mouse, leaving resizing out since it has
+  ;; no mouse equivalent.
+  (let ((image-file (make-temp-file "agent-shell-test" nil ".svg")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_f) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest _) '(image :type svg :fake t)))
+                  ((symbol-function 'image-flush) (lambda (&rest _) nil)))
+          (with-temp-buffer
+            (insert (format "![svg graphics](%s)\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (equal "Click to open image"
+                           (get-text-property (point-min) 'help-echo))))
+          ;; Same for a bare image path on its own line.
+          (with-temp-buffer
+            (insert (format "%s\n" image-file))
+            (agent-shell-markdown-replace-markup :render-images t)
+            (should (equal "Click to open image"
+                           (get-text-property (point-min) 'help-echo)))))
+      (delete-file image-file))))
+
 (ert-deftest agent-shell-markdown-image-reconstructs-to-source ()
   ;; A rendered `![alt](url)' image shows only the alt placeholder, but
   ;; `agent-shell-copy-as-markdown' must round-trip it back to the original
