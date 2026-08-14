@@ -3615,6 +3615,48 @@ unaffected."
         (kill-buffer (get-file-buffer file)))
       (delete-file file))))
 
+(ert-deftest agent-shell-markdown-visit-file-pushes-xref-marker-test ()
+  "Following a link leaves a way back, as any other jump does.
+
+The spot the link was followed from goes on xref\'s marker stack, so
+`xref-go-back\' returns to it rather than leaving the reader to hunt
+for where they were in the conversation."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\nthree\n"))
+        (origin (generate-new-buffer "*agent-shell-origin*")))
+    (unwind-protect
+        (with-selected-window (frame-first-window)
+          (save-window-excursion
+            (switch-to-buffer origin)
+            (insert "see the link here")
+            (goto-char 5)
+            (agent-shell-markdown-visit-file :file file :line-start 2)
+            (should (equal (file-truename file)
+                           (file-truename (or (buffer-file-name) ""))))
+            (xref-go-back)
+            (should (eq origin (current-buffer)))
+            (should (= 5 (point)))))
+      (kill-buffer origin)
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-visit-file-no-window-pushes-nothing-test ()
+  "An opener showing nothing leaves the marker stack alone.
+
+Pushing regardless would offer a way back to the spot the reader never
+left."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\n"))
+        (pushed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'xref-push-marker-stack)
+                   (lambda (&optional _m) (setq pushed t))))
+          (let ((agent-shell-markdown-open-file-function (lambda (_path) nil)))
+            (agent-shell-markdown-visit-file :file file :line-start 2))
+          (should-not pushed))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
 (ert-deftest agent-shell-markdown-open-file-returns-window-test ()
   "The default opener returns the window showing the file."
   (let ((file (make-temp-file "agent-shell-tests")))

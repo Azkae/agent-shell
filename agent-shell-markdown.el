@@ -67,6 +67,7 @@
 (require 'url)
 (require 'url-parse)
 (require 'url-util)
+(require 'xref)
 (require 'browse-url)
 
 (defgroup agent-shell-markdown nil
@@ -4220,13 +4221,22 @@ one, point lands on that line in the window that function returns, and
 LINE-END selects through the end of its line.  Messages instead when
 FILE no longer exists.
 
+Where the link was followed from goes on xref's marker stack, so
+\\[xref-go-back] comes back to it, as it does from any other jump.
+
+Returns the window FILE was shown in, or nil when it wasn't shown.
+
 For example, with FILE holding \"one\\ntwo\\nthree\\nfour\",
 LINE-START 2 and LINE-END 3 leave \"two\\nthree\" as the region."
-  (if (not line-start)
-      (agent-shell-markdown--open-file file)
-    (if (not (and file (file-exists-p file)))
-        (message "File not found")
-      (when-let* ((window (agent-shell-markdown--open-file file)))
+  (if (and line-start (not (and file (file-exists-p file))))
+      (message "File not found")
+    (when-let* ((origin (point-marker))
+                (window (agent-shell-markdown--open-file file)))
+      ;; Taken before opening, since by now point has moved to FILE, and
+      ;; pushed only once FILE is shown: a link that opened nothing would
+      ;; otherwise offer a way back to the spot the reader never left.
+      (xref-push-marker-stack origin)
+      (when line-start
         (with-selected-window window
           (goto-char (point-min))
           (forward-line (1- line-start))
@@ -4236,7 +4246,8 @@ LINE-START 2 and LINE-END 3 leave \"two\\nthree\" as the region."
                          (forward-line (1- line-end))
                          (end-of-line)
                          (point))
-                       t t)))))))
+                       t t))))
+      window)))
 
 (defun agent-shell-markdown--open-file (path)
   "Return the window PATH was opened in, or nil when none was shown.
