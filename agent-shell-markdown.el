@@ -1208,8 +1208,13 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                  (source (unless (get-text-property markup-start
                                                     'agent-shell-markdown-source)
                            (agent-shell-markdown-reconstruct markup-start content-end)))
+                 ;; `![alt](url)' says an image is meant, so a bare
+                 ;; `logo.png' resolves here where a bare path line's
+                 ;; would not.
                  (path (agent-shell-markdown--resolve-image-url
-                        url image-cache-directory)))
+                        url
+                        :image-cache-directory image-cache-directory
+                        :allow-bare-relative t)))
             (cond
              ((and path
                    (image-supported-file-p path)
@@ -4438,12 +4443,23 @@ an image."
                                            :file cache-path
                                            :content-type-prefix "image/"))))
 
-(defun agent-shell-markdown--resolve-image-url (url &optional image-cache-directory)
+(cl-defun agent-shell-markdown--resolve-image-url (url &key image-cache-directory allow-bare-relative)
   "Resolve image URL to an absolute local file path, or nil.
 Handles http(s) URLs (downloaded into IMAGE-CACHE-DIRECTORY and cached via
 `agent-shell-markdown--fetch-remote-image'; not fetched when
 IMAGE-CACHE-DIRECTORY is nil), file:// URIs, absolute paths, and paths
-starting with `~/', `./', or `../'."
+starting with `~/', `./', or `../'.
+
+ALLOW-BARE-RELATIVE additionally accepts a path naming no directory at
+all, such as `logo.png', resolved against `default-directory'.  Off by
+default, and only `![alt](url)' markup asks for it: that markup says an
+image is meant, whereas a bare path line is just a line that happens to
+end in an image extension, which prose does all the time.  A url with a
+scheme (`data:', `mailto:') is never taken for a path.
+
+For example, with URL \"logo.png\" and a logo.png in `default-directory',
+ALLOW-BARE-RELATIVE nil returns nil while non-nil returns its absolute
+path."
   (if (string-match-p "\\`https?://" url)
       (agent-shell-markdown--fetch-remote-image url image-cache-directory)
     (when-let* ((path (cond
@@ -4456,6 +4472,12 @@ starting with `~/', `./', or `../'."
                             (string-prefix-p "~" url)
                             (string-prefix-p "./" url)
                             (string-prefix-p "../" url))
+                        url)
+                       ((and allow-bare-relative
+                             (not (string-match-p (rx bos alpha
+                                                      (zero-or-more (any alnum "+-."))
+                                                      ":")
+                                                  url)))
                         url)))
                 (expanded (expand-file-name path))
                 ((file-exists-p expanded)))

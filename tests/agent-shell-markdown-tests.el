@@ -3562,6 +3562,31 @@ which is stubbed here so the test exercises only the policy."
     (should-not (agent-shell-markdown--fetch-remote-image "file:///tmp/x.png" "/tmp/img-cache"))
     (should-not (agent-shell-markdown--fetch-remote-image "https://example.com/img?id=1" "/tmp/img-cache"))))
 
+(ert-deftest agent-shell-markdown--resolve-image-url-bare-relative-test ()
+  "Test `agent-shell-markdown--resolve-image-url' gates bare relative paths.
+
+`![alt](logo.png)' resolves, since the markup says an image is meant.
+The same path on its own does not, prose naming a file being far more
+common than an image meant to render."
+  (let* ((directory (make-temp-file "agent-shell-bare" t))
+         (image (expand-file-name "logo.png" directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file image (insert "not really a png"))
+          (let ((default-directory directory))
+            (should (equal (file-truename image)
+                           (file-truename
+                            (agent-shell-markdown--resolve-image-url
+                             "logo.png" :allow-bare-relative t))))
+            (should-not (agent-shell-markdown--resolve-image-url "logo.png"))
+            ;; Absent files stay nil either way.
+            (should-not (agent-shell-markdown--resolve-image-url
+                         "missing.png" :allow-bare-relative t))
+            ;; A scheme is never mistaken for a path.
+            (should-not (agent-shell-markdown--resolve-image-url
+                         "data:image/png;base64,AAAA" :allow-bare-relative t))))
+      (delete-directory directory t))))
+
 (ert-deftest agent-shell-markdown--resolve-image-url-remote-test ()
   "Test that `agent-shell-markdown--resolve-image-url' fetches http(s) urls.
 
@@ -3574,7 +3599,7 @@ unaffected."
                     (format "%s/x.png" image-cache-directory)))))
     ;; Remote url -> fetched; the image-cache-directory argument is forwarded.
     (should (equal (agent-shell-markdown--resolve-image-url
-                    "https://example.com/x.png" "/injected")
+                    "https://example.com/x.png" :image-cache-directory "/injected")
                    "/injected/x.png"))
     ;; No image-cache-directory -> remote image is not fetched (nil).
     (should-not (agent-shell-markdown--resolve-image-url "https://example.com/x.png"))
