@@ -56,7 +56,7 @@
 
 ;;; Customization
 
-(defcustom agent-shell-chat-mode-enabled nil
+(defcustom agent-shell-chat-mode-enabled t
   "Whether a new agent shell enables `agent-shell-chat-mode' by default.
 When non-nil, starting a shell turns the (global) chat mode on, so that
 shell and any others render as a chat.  Toggling the mode off by hand is
