@@ -532,9 +532,12 @@ expectation."
 ;; per call, leaving `setq' and let-binding it working.
 (setq agent-shell-markdown-open-file-function
       (lambda (path)
-        (select-window
-         (display-buffer (find-file-noselect path)
-                         agent-shell-file-display-action))))
+        ;; Nil when the action showed nothing (`display-buffer-no-window'
+        ;; with `allow-no-window'), which is a legal answer meaning "leave
+        ;; point alone" rather than something to select.
+        (when-let* ((window (display-buffer (find-file-noselect path)
+                                            agent-shell-file-display-action)))
+          (select-window window))))
 
 (defcustom agent-shell-prefer-viewport-interaction nil
   "Non-nil makes `agent-shell' prefer viewport interaction over shell interaction.

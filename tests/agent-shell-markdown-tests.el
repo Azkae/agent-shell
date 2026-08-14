@@ -3615,6 +3615,41 @@ unaffected."
         (kill-buffer (get-file-buffer file)))
       (delete-file file))))
 
+(ert-deftest agent-shell-markdown-open-file-returns-window-test ()
+  "The default opener returns the window showing the file."
+  (let ((file (make-temp-file "agent-shell-tests")))
+    (unwind-protect
+        (save-window-excursion
+          (should (windowp (agent-shell-markdown-open-file file))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-visit-file-rejects-non-window-test ()
+  "An opener returning something other than a window is an error.
+
+Returning the buffer is the tempting mistake, and it would otherwise
+leave point somewhere the user can't see rather than fail."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\n")))
+    (unwind-protect
+        (let ((agent-shell-markdown-open-file-function
+               (lambda (path) (find-file-noselect path))))
+          (should-error (agent-shell-markdown-visit-file :file file :line-start 2)
+                        :type 'user-error))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-visit-file-tolerates-no-window-test ()
+  "An opener showing nothing is legal: there is simply no point to move."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\n")))
+    (unwind-protect
+        (let ((agent-shell-markdown-open-file-function (lambda (_path) nil)))
+          (should-not (agent-shell-markdown-visit-file :file file :line-start 2)))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
 (ert-deftest agent-shell-markdown--open-local-link-binary-vs-text-test ()
   "Test `agent-shell-markdown--open-local-link' routes by file type.
 Text/navigable files open in Emacs; binary files open externally."
@@ -3626,14 +3661,14 @@ Text/navigable files open in Emacs; binary files open externally."
           (with-temp-file text (insert "hello"))
           (let ((coding-system-for-write 'binary))
             (with-temp-file binary (insert "x\0y")))
-          (cl-letf (((symbol-function 'find-file)
-                     (lambda (f) (setq action (cons 'find-file f))))
-                    ((symbol-function 'agent-shell-markdown--open-externally)
+          (cl-letf (((symbol-function 'agent-shell-markdown--open-externally)
                      (lambda (f) (setq action (cons 'external f)))))
-            ;; Text file -> find-file (navigable in Emacs).
+            ;; Text file -> opened in Emacs, however the opener displays it.
             (setq action nil)
-            (should (agent-shell-markdown--open-local-link (concat "file://" text)))
-            (should (equal action (cons 'find-file text)))
+            (let ((agent-shell-markdown-open-file-function
+                   (lambda (path) (setq action (cons 'in-emacs path)) nil)))
+              (should (agent-shell-markdown--open-local-link (concat "file://" text))))
+            (should (equal action (cons 'in-emacs text)))
             ;; Binary file -> open externally.
             (setq action nil)
             (should (agent-shell-markdown--open-local-link (concat "file://" binary)))

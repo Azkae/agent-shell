@@ -5559,5 +5559,63 @@ still coming, so nothing else would ever render it."
                                       (point-min) (point-max))))))
       (delete-file image-file))))
 
+(ert-deftest agent-shell-file-display-action-test ()
+  "Files open per `agent-shell-file-display-action\'.
+
+The default takes over the current window, as before the setting
+existed; an action opening elsewhere leaves the conversation in view,
+with the link\'s line range still selected in whichever window the
+file landed in."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\nthree\nfour\n")))
+    (unwind-protect
+        (with-selected-window (frame-first-window)
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer "*scratch*")
+            (let ((agent-shell-file-display-action
+                   '((display-buffer-reuse-window display-buffer-same-window)))
+                  (shell-window (selected-window)))
+              (agent-shell-markdown-visit-file :file file :line-start 2 :line-end 3)
+              ;; Took over the window the link was followed from.
+              (should (eq shell-window (selected-window)))
+              (should (equal (file-truename file)
+                             (file-truename (buffer-file-name))))
+              (should (equal "two\nthree"
+                             (buffer-substring-no-properties (point) (mark)))))
+            (when (get-file-buffer file)
+              (kill-buffer (get-file-buffer file)))
+            (delete-other-windows)
+            (switch-to-buffer "*scratch*")
+            (let ((agent-shell-file-display-action '(display-buffer-pop-up-window))
+                  (shell-window (selected-window)))
+              (agent-shell-markdown-visit-file :file file :line-start 2 :line-end 3)
+              ;; The conversation stays on screen, the file lands elsewhere.
+              (should-not (eq shell-window (selected-window)))
+              (should (window-live-p shell-window))
+              (should (equal "*scratch*" (buffer-name (window-buffer shell-window))))
+              (should (equal (file-truename file)
+                             (file-truename (buffer-file-name))))
+              (should (equal "two\nthree"
+                             (buffer-substring-no-properties (point) (mark)))))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell-file-display-action-showing-nothing-test ()
+  "An action showing no window is legal rather than an error.
+
+`display-buffer-no-window\' with `allow-no-window\' returns nil, which
+`select-window\' would otherwise choke on."
+  (let ((file (make-temp-file "agent-shell-tests" nil nil "one\ntwo\n")))
+    (unwind-protect
+        (with-selected-window (frame-first-window)
+          (save-window-excursion
+            (let ((agent-shell-file-display-action
+                   '(display-buffer-no-window . ((allow-no-window . t)))))
+              (should-not (agent-shell-markdown-visit-file :file file :line-start 2)))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
