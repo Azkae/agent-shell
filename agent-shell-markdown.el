@@ -954,7 +954,7 @@ resolves).
 
 For example, over the `docs' of a rendered \"[docs](https://gnu.org)\",
 RET opens the URL, the echo area reads \"Press RET to open in
-browser\", and hovering shows \"Click to open in browser\"."
+browser\", and hovering shows \"Open in browser\"."
   (let* ((open-action (lambda () (interactive)
                         (agent-shell-markdown--open-link url)))
          (link-map (agent-shell-markdown--make-ret-binding-map open-action)))
@@ -971,8 +971,9 @@ browser\", and hovering shows \"Click to open in browser\"."
     ;; hover like the echoed hint is.
     (put-text-property start end 'help-echo
                        (lambda (_window _object _pos)
-                         (format "Click to %s"
-                                 (agent-shell-markdown--link-verb url verb))))
+                         (let ((text (agent-shell-markdown--link-verb url verb)))
+                           (concat (upcase (substring text 0 1))
+                                   (substring text 1)))))
     (put-text-property start end 'mouse-face 'highlight)
     (put-text-property start end 'agent-shell-markdown-url url)))
 
@@ -1230,8 +1231,7 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                                          :keymap image-keymap))))
                   ;; The mouse gets the same wording without a key in it.
                   ;; Resizing is left out: it's keys-only.
-                  (put-text-property markup-start end 'help-echo
-                                     "Click to open image")
+                  (put-text-property markup-start end 'help-echo "Open image")
                   ;; A hand pointer signals the image is clickable; unlike
                   ;; `mouse-face', it adds no background that would paint a
                   ;; highlighted box across the image on hover.
@@ -1323,8 +1323,7 @@ renders the image in place of that text."
                                        :keymap image-keymap))))
                 ;; The mouse gets the same wording without a key in it.
                 ;; Resizing is left out: it's keys-only.
-                (put-text-property path-start path-end 'help-echo
-                                   "Click to open image")
+                (put-text-property path-start path-end 'help-echo "Open image")
                 ;; A hand pointer signals the image is clickable without the
                 ;; background a `mouse-face' would paint across it on hover.
                 (put-text-property path-start path-end 'pointer 'hand)

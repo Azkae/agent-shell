@@ -5497,7 +5497,7 @@ keeps entries fresh."
                               (if (map-elt header-model :model-name)
                                   (concat " ➤ " (propertize (map-elt header-model :model-name)
                                                             'font-lock-face 'agent-shell-model
-                                                            'help-echo (concat "Click to open LLM model menu "
+                                                            'help-echo (concat "Open LLM model menu "
                                                                                (when model-binding
                                                                                  (propertize model-binding 'face 'agent-shell-key-binding)))
                                                             'mouse-face 'mode-line-highlight
@@ -5510,7 +5510,7 @@ keeps entries fresh."
                               (if (map-elt header-model :thought-level-name)
                                   (concat " ➤ " (propertize (map-elt header-model :thought-level-name)
                                                             'font-lock-face 'agent-shell-thought-level
-                                                            'help-echo (concat "Click to open thought level menu "
+                                                            'help-echo (concat "Open thought level menu "
                                                                                (when thought-level-binding
                                                                                  (propertize thought-level-binding 'face 'agent-shell-key-binding)))
                                                             'mouse-face 'mode-line-highlight
@@ -5523,7 +5523,7 @@ keeps entries fresh."
                               (if (map-elt header-model :mode-name)
                                   (concat " ➤ " (propertize (map-elt header-model :mode-name)
                                                             'font-lock-face 'agent-shell-session-mode
-                                                            'help-echo (concat "Click to open session mode menu "
+                                                            'help-echo (concat "Open session mode menu "
                                                                                (when mode-binding
                                                                                  (propertize mode-binding 'face 'agent-shell-key-binding)))
                                                             'mouse-face 'mode-line-highlight
@@ -5757,7 +5757,7 @@ keeps entries fresh."
                             (format " %s" (with-temp-buffer
                                             (svg-insert-image svg)
                                             (buffer-string)))
-                            'help-echo "Click to open settings menu"
+                            'help-echo "Open settings menu"
                             'mouse-face 'mode-line-highlight
                             'local-map (let ((map (make-sparse-keymap)))
                                          (define-key map [header-line down-mouse-1] #'ignore)
@@ -9804,7 +9804,7 @@ Shows \" ⧉\" when a command prefix is used."
                                         (agent-shell--current-model-id (agent-shell--state)))))
               (concat " " (propertize model-name
                                       'face 'agent-shell-model
-                                      'help-echo (concat "Click to open LLM model menu "
+                                      'help-echo (concat "Open LLM model menu "
                                                          (propertize (key-description (where-is-internal
                                                                                        'agent-shell-set-session-model
                                                                                        agent-shell-mode-map t))
@@ -9817,7 +9817,7 @@ Shows \" ⧉\" when a command prefix is used."
             (when-let* ((thought-level-name (agent-shell-get-thought-level-name (agent-shell--state))))
               (concat " ➤ " (propertize thought-level-name
                                         'face 'agent-shell-thought-level
-                                        'help-echo (concat "Click to open thought level menu "
+                                        'help-echo (concat "Open thought level menu "
                                                            (propertize (key-description (where-is-internal
                                                                                          'agent-shell-set-session-thought-level
                                                                                          agent-shell-mode-map t))
@@ -9832,7 +9832,7 @@ Shows \" ⧉\" when a command prefix is used."
                                     (agent-shell--get-available-modes (agent-shell--state)))))
               (concat " ➤ " (propertize mode-name
                                         'face 'agent-shell-session-mode
-                                        'help-echo (concat "Click to open session mode menu "
+                                        'help-echo (concat "Open session mode menu "
                                                            (propertize (key-description (where-is-internal
                                                                                          'agent-shell-set-session-mode
                                                                                          agent-shell-mode-map t))
