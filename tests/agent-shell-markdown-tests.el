@@ -290,6 +290,34 @@ streaming **not bold**" nil)))))
                    ("docs" (agent-shell-markdown-link))
                    (" please" nil)))))
 
+(ert-deftest agent-shell-markdown-convert-link-with-balanced-parens ()
+  "A bare destination may carry balanced parens, as Wikipedia URLs do.
+
+Without this the destination ended at the inner `)', truncating the URL
+and leaving the outer `)' visible as prose."
+  (should (equal (agent-shell-markdown--deconstruct
+                  (agent-shell-markdown-convert
+                   "see [Bender](https://en.wikipedia.org/wiki/Bender_(Futurama)) please"))
+                 '(("see " nil)
+                   ("Bender" (agent-shell-markdown-link))
+                   (" please" nil))))
+  (should (equal "https://en.wikipedia.org/wiki/Bender_(Futurama)"
+                 (get-text-property
+                  4 'agent-shell-markdown-url
+                  (agent-shell-markdown-convert
+                   "see [Bender](https://en.wikipedia.org/wiki/Bender_(Futurama)) please")))))
+
+(ert-deftest agent-shell-markdown-convert-link-with-unbalanced-paren-left-literal ()
+  "An unbalanced paren still ends the destination, so the markup stays put.
+
+CommonMark asks for it to be escaped or angle-bracketed.  Nothing is
+swallowed either way: the text reads verbatim, and the bare URL within
+it is still picked up by the bare-URL linkifier."
+  (let ((rendered (agent-shell-markdown-convert "see [x](http://a(b) please")))
+    (should (equal "see [x](http://a(b) please" (substring-no-properties rendered)))
+    ;; The label is left as prose rather than becoming a link title.
+    (should-not (get-text-property 5 'agent-shell-markdown-url rendered))))
+
 (ert-deftest agent-shell-markdown-convert-link-with-bold-inside-untouched ()
   ;; Bold inside link title is left literal (mirrors markdown-overlays:
   ;; bold regex requires whitespace/BOL before `**', and `[' isn't either).

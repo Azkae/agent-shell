@@ -900,6 +900,12 @@ The destination accepts both the bare `(url)' form and the
 CommonMark angle-bracketed `(<url>)' form, the latter allowing the
 URL to contain spaces (e.g. `(</path/with spaces.png>)').
 
+A bare destination may carry balanced parentheses, as CommonMark
+allows and as Wikipedia URLs need (e.g.
+`(https://en.wikipedia.org/wiki/Bender_(Futurama))'), so that the
+inner `)' doesn't end the destination early.  An unbalanced one
+still does, and has to be escaped or angle-bracketed.
+
 Capture groups: group 1 is the label (link title or image alt);
 group 2 is the angle-bracketed destination body; group 3 is the
 bare destination body.  Exactly one of groups 2 and 3 participates
@@ -911,7 +917,8 @@ in any match — read the URL from whichever did."
          "]"
          "("
          (or (seq "<" (group (zero-or-more (not (any "<" ">" "\n")))) ">")
-             (group (one-or-more (not (any ")")))))
+             (group (one-or-more (or (not (any "(" ")"))
+                                     (seq "(" (zero-or-more (not (any "(" ")"))) ")")))))
          ")")
    t))
 
