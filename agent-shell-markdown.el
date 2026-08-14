@@ -1214,7 +1214,7 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                 (insert placeholder)
                 (let* ((end (+ markup-start (length placeholder)))
                        (open-action (lambda () (interactive)
-                                      (find-file path)))
+                                      (agent-shell-markdown-visit-file :file path)))
                        (image-keymap (agent-shell-markdown--make-ret-binding-map
                                       open-action)))
                   (put-text-property markup-start end 'display image)
@@ -1306,7 +1306,7 @@ renders the image in place of that text."
                              resolved nil nil
                              :max-width (agent-shell-markdown--image-max-width)))
                      (open-action (lambda () (interactive)
-                                    (find-file resolved)))
+                                    (agent-shell-markdown-visit-file :file resolved)))
                      (image-keymap (agent-shell-markdown--make-ret-binding-map
                                     open-action)))
                 (image-flush image)
@@ -4178,34 +4178,76 @@ This is the heuristic git uses to tell binary from text."
          (insert-file-contents-literally file nil 0 4096)
          (string-search "\0" (buffer-string)))))
 
+(defun agent-shell-markdown-open-file (path)
+  "Open PATH in the current window, returning the window showing it.
+
+Reuses a window already showing PATH rather than displacing the current
+one, a file link usually pointing at something already on screen.
+
+The default `agent-shell-markdown-open-file-function'."
+  (if-let* ((window (when (get-file-buffer path)
+                      (get-buffer-window (get-file-buffer path)))))
+      (select-window window)
+    (find-file path)
+    (selected-window)))
+
+(defvar agent-shell-markdown-open-file-function #'agent-shell-markdown-open-file
+  "Function opening the file a link points at.
+
+Called with the file's path, having decided the file opens in Emacs
+\(binary files the operating system handles never reach it).  It is
+free to display the file however it likes, and must return the window
+showing it, or nil when it displayed nothing.
+
+That window is where point lands for a link naming a line, so a
+function returning the buffer instead leaves point where the user
+can't see it, and is rejected (see
+`agent-shell-markdown-visit-file').
+
+For example, to open beside the shell rather than over it:
+
+  (setq agent-shell-markdown-open-file-function
+        (lambda (path)
+          (display-buffer (find-file-noselect path)
+                          \\='(display-buffer-pop-up-window))))")
+
 (cl-defun agent-shell-markdown-visit-file (&key file line-start line-end)
   "Visit FILE, selecting lines LINE-START to LINE-END when given.
 
-Without LINE-START, simply visits FILE.  With one, point lands on that
-line, and LINE-END selects through the end of that line, reusing a
-window already showing FILE rather than displacing the current one,
-since a line link usually points at something already on screen.
-Messages instead when FILE no longer exists.
+Opens FILE through `agent-shell-markdown-open-file-function', which
+owns where it is displayed.  Without LINE-START, that is all.  With
+one, point lands on that line in the window that function returns, and
+LINE-END selects through the end of its line.  Messages instead when
+FILE no longer exists.
 
 For example, with FILE holding \"one\\ntwo\\nthree\\nfour\",
 LINE-START 2 and LINE-END 3 leave \"two\\nthree\" as the region."
   (if (not line-start)
-      (find-file file)
+      (agent-shell-markdown--open-file file)
     (if (not (and file (file-exists-p file)))
         (message "File not found")
-      (if-let* ((window (when (get-file-buffer file)
-                          (get-buffer-window (get-file-buffer file)))))
-          (select-window window)
-        (find-file file))
-      (goto-char (point-min))
-      (forward-line (1- line-start))
-      (when line-end
-        (push-mark (save-excursion
-                     (goto-char (point-min))
-                     (forward-line (1- line-end))
-                     (end-of-line)
-                     (point))
-                   t t)))))
+      (when-let* ((window (agent-shell-markdown--open-file file)))
+        (with-selected-window window
+          (goto-char (point-min))
+          (forward-line (1- line-start))
+          (when line-end
+            (push-mark (save-excursion
+                         (goto-char (point-min))
+                         (forward-line (1- line-end))
+                         (end-of-line)
+                         (point))
+                       t t)))))))
+
+(defun agent-shell-markdown--open-file (path)
+  "Return the window PATH was opened in, or nil when none was shown.
+Opens via `agent-shell-markdown-open-file-function', erroring when that
+returns something other than a window, which would otherwise silently
+leave point unmoved."
+  (let ((window (funcall agent-shell-markdown-open-file-function path)))
+    (unless (or (null window) (windowp window))
+      (user-error "`agent-shell-markdown-open-file-function' must return the window showing the file (got %S)"
+                  window))
+    window))
 
 (defun agent-shell-markdown--open-local-link (url)
   "Open URL as a local file link if possible.

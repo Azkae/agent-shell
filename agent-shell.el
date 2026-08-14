@@ -505,6 +505,37 @@ See `display-buffer' for the format of display actions."
   :type '(cons (repeat function) alist)
   :group 'agent-shell)
 
+(defcustom agent-shell-file-display-action
+  '((display-buffer-reuse-window display-buffer-same-window))
+  "Display action for files opened from a link, image, or `@file' mention.
+
+See `display-buffer' for the format of display actions: a list of
+functions to try, optionally consed onto an alist of parameters.  The
+default reuses a window already showing the file, else takes over the
+current one.  To keep the conversation in view instead, open beside it:
+
+  (setq agent-shell-file-display-action
+        \='(display-buffer-pop-up-window))
+
+The window is selected either way, a link being followed to read what
+it points at.  Binary files the operating system handles never reach
+this: they open externally.
+
+Note `agent-shell-diff-visit-file' ignores this.  It is a command the
+user invokes, where replacing the current window is the usual
+expectation."
+  :type '(cons (repeat function) alist)
+  :group 'agent-shell)
+
+;; Injected rather than read directly: agent-shell-markdown.el knows
+;; nothing of agent-shell.  Wrapped in a lambda so the setting is read
+;; per call, leaving `setq' and let-binding it working.
+(setq agent-shell-markdown-open-file-function
+      (lambda (path)
+        (select-window
+         (display-buffer (find-file-noselect path)
+                         agent-shell-file-display-action))))
+
 (defcustom agent-shell-prefer-viewport-interaction nil
   "Non-nil makes `agent-shell' prefer viewport interaction over shell interaction.
 
