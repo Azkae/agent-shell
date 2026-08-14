@@ -362,9 +362,9 @@ streaming **not bold**" nil)))))
       (delete-file image-file))))
 
 (ert-deftest agent-shell-markdown-image-hints-open-key ()
-  ;; A rendered image gives no hint that it's actionable (it deliberately
-  ;; gets no `mouse-face', which would paint a box across it on hover), so
-  ;; entering it echoes whichever key its keymap binds to open the file.
+  ;; A rendered image gives no hint that it's actionable beyond the hand
+  ;; pointer, which only the mouse sees, so entering it echoes whichever
+  ;; key its keymap binds to open the file.
   (let ((image-file (make-temp-file "agent-shell-test" nil ".svg"))
         (echoed nil))
     (unwind-protect
@@ -486,8 +486,7 @@ streaming **not bold**" nil)))))
       (should (equal "Press RET to open image in browser" echoed)))))
 
 (ert-deftest agent-shell-markdown-link-hints-where-it-lands ()
-  ;; A link looks actionable (link face plus `mouse-face'), but not where
-  ;; invoking it goes: `agent-shell-markdown--open-link' visits local
+  ;; A link looks actionable (link face), but not where invoking it goes: `agent-shell-markdown--open-link' visits local
   ;; files in Emacs and sends everything else to the browser.  The hint
   ;; names that, and is computed on entry so a file appearing or going
   ;; away later doesn't leave it lying.
@@ -1520,8 +1519,7 @@ body
     (dolist (i '(1 8))
       (should (eq (get-text-property i 'face with-lang)
                   'agent-shell-markdown-source-block-language))
-      (should (eq (get-text-property i 'mouse-face with-lang)
-                  'highlight))
+      (should (eq (get-text-property i 'pointer with-lang) 'hand))
       (should (keymapp (get-text-property i 'keymap with-lang))))))
 
 (ert-deftest agent-shell-markdown-source-block-copy-hint-follows-binding ()

@@ -942,7 +942,7 @@ exists, and \"open in browser\" once it doesn't."
 Applies what every link the renderer produces carries: face
 `agent-shell-markdown-link', a keymap opening URL on RET or a mouse
 click, a hint naming that key, a `help-echo' saying the same to the
-mouse, `mouse-face', and the target itself on
+mouse, a hand pointer, and the target itself on
 `agent-shell-markdown-url' -- which is what
 `agent-shell-markdown-link-url-at-point' reads and what item
 navigation stops on, so a link missing it would open on RET yet stay
@@ -974,7 +974,8 @@ browser\", and hovering shows \"Open in browser\"."
                          (let ((text (agent-shell-markdown--link-verb url verb)))
                            (concat (upcase (substring text 0 1))
                                    (substring text 1)))))
-    (put-text-property start end 'mouse-face 'highlight)
+    ;; A hand pointer when over is enough. No need for `mouse-face'.
+    (put-text-property start end 'pointer 'hand)
     (put-text-property start end 'agent-shell-markdown-url url)))
 
 (cl-defun agent-shell-markdown--replace-links (&key avoid-ranges)
@@ -1232,9 +1233,7 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                   ;; The mouse gets the same wording without a key in it.
                   ;; Resizing is left out: it's keys-only.
                   (put-text-property markup-start end 'help-echo "Open image")
-                  ;; A hand pointer signals the image is clickable; unlike
-                  ;; `mouse-face', it adds no background that would paint a
-                  ;; highlighted box across the image on hover.
+                  ;; A hand pointer when over is enough. No need for `mouse-face'.
                   (put-text-property markup-start end 'pointer 'hand)
                   (when source
                     (put-text-property markup-start end
@@ -1324,8 +1323,7 @@ renders the image in place of that text."
                 ;; The mouse gets the same wording without a key in it.
                 ;; Resizing is left out: it's keys-only.
                 (put-text-property path-start path-end 'help-echo "Open image")
-                ;; A hand pointer signals the image is clickable without the
-                ;; background a `mouse-face' would paint across it on hover.
+                ;; A hand pointer when over is enough. No need for `mouse-face'.
                 (put-text-property path-start path-end 'pointer 'hand)
                 ;; A bare-path image is sized by the default
                 ;; `agent-shell-markdown-image-max-width', so mark it
@@ -1599,7 +1597,6 @@ with `emacs-lisp-mode' face properties on the body and a
                    (label (propertize
                            label-text
                            'face 'agent-shell-markdown-source-block-language
-                           'mouse-face 'highlight
                            'pointer 'hand
                            'keymap label-map
                            'cursor-sensor-functions
