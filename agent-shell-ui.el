@@ -240,29 +240,14 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                     (goto-char block-start)
                     (skip-chars-backward "\n")
                     (setq padding-start (point)))
-                  (when new-label-left
-                    (agent-shell-ui--replace-label
-                     qualified-id 'label-left new-label-left))
-                  (when new-label-right
-                    (agent-shell-ui--replace-label
-                     qualified-id 'label-right new-label-right))
-                  ;; Derive the block extent here, after the label
-                  ;; replacements.  `agent-shell-ui--replace-label' can change
-                  ;; a label's length, which shifts everything below it — an
-                  ;; extent captured before the replacements would point at
-                  ;; the wrong chars (e.g. handing `replace-body' a stale
-                  ;; range corrupts the body boundary and leaks its content
-                  ;; past the collapse).
-                  ;;
-                  ;; Held as a marker rather than re-derived per use.  Finding
-                  ;; it means walking every text-property interval in the
-                  ;; block, and a streamed body accrues an interval per chunk,
-                  ;; so each rescan costs O(chunks so far).  The marker tracks
-                  ;; the edits below for free (issue #757).
-                  ;;
-                  ;; A cached end is itself a marker, read here rather than at
-                  ;; lookup so a label rewritten just above it is accounted
-                  ;; for, same as deriving it at this point would be.
+                  ;; Derive the block extent once, up front, and hold it as
+                  ;; a marker.  Finding it means walking every text-property
+                  ;; interval in the block, and a streamed body accrues an
+                  ;; interval per chunk, so each rescan costs O(chunks so
+                  ;; far).  A marker tracks every edit below for free,
+                  ;; including a label rewrite that changes length and shifts
+                  ;; everything under it, so it stays right where a position
+                  ;; captured here would go stale (issue #757).
                   (setq block-end
                         (copy-marker (or (and cached
                                               (marker-position
@@ -272,6 +257,14 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                                   :end)
                                          (and match (prop-match-end match)))
                                      t))
+                  (when new-label-left
+                    (agent-shell-ui--replace-label
+                     qualified-id 'label-left new-label-left
+                     block-start block-end))
+                  (when new-label-right
+                    (agent-shell-ui--replace-label
+                     qualified-id 'label-right new-label-right
+                     block-start block-end))
                   (when new-body
                     (let* ((current-block-end (marker-position block-end))
                            (existing-body-range
@@ -599,28 +592,29 @@ uniform on both."
                                        (length text))))))
              (>= position end)))))
 
-(defun agent-shell-ui--replace-label (qualified-id section new-text)
+(defun agent-shell-ui--replace-label (qualified-id section new-text block-start block-end)
   "Replace the SECTION region of fragment QUALIFIED-ID with NEW-TEXT.
 
 SECTION is one of `label-left' or `label-right'.  Only the named label
 region is rewritten — the other label, the indicator, and the body of
 the same block stay untouched, so block tagging and fragment identity
-are preserved across label updates."
+are preserved across label updates.
+
+BLOCK-START and BLOCK-END bound QUALIFIED-ID's block, as the caller
+already resolved it.  Labels sit at the top of a block, so searching
+down from BLOCK-START lands on one within a few intervals.  Locating the
+block here instead meant walking back from `point-max' over everything
+below it, and an activity group's header, relabeled on every chunk, sits
+above its group's whole accumulated body (issue #757).  BLOCK-END is
+read at the point of use, so a marker following the edits made here can
+be handed in."
   (when (stringp new-text)
-    (when-let* ((block-match
+    (when-let* ((region
                  (save-excursion
-                   (goto-char (point-max))
-                   (text-property-search-backward
-                    'agent-shell-ui-state nil
-                    (lambda (_ state)
-                      (equal (map-elt state :qualified-id) qualified-id))
-                    t)))
-                (region
-                 (save-excursion
-                   (goto-char (prop-match-beginning block-match))
+                   (goto-char block-start)
                    (when-let* ((m (text-property-search-forward
                                    'agent-shell-ui-section section t t)))
-                     (when (<= (prop-match-end m) (prop-match-end block-match))
+                     (when (<= (prop-match-end m) block-end)
                        (cons (prop-match-beginning m)
                              (prop-match-end m))))))
                 ;; Skip the rewrite when the label already renders

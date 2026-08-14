@@ -999,6 +999,59 @@ otherwise signal."
     (should (eq #'newline (key-binding (kbd "RET"))))
     (should (eq #'self-insert-command (key-binding [?x])))))
 
+(ert-deftest agent-shell-ui-replace-both-labels-keeps-block-extent-test ()
+  "Replacing both labels at once leaves the block and its neighbour intact.
+
+`agent-shell-ui--replace-label' is handed the block extent its caller
+already resolved, as a marker, so the second replacement sees the width
+the first one left behind."
+  (cl-flet ((searched (qualified-id)
+              (save-mark-and-excursion
+                (goto-char (point-min))
+                (when-let* ((match (text-property-search-forward
+                                    'agent-shell-ui-state nil
+                                    (lambda (_ state)
+                                      (equal (map-elt state :qualified-id)
+                                             qualified-id))
+                                    t)))
+                  (agent-shell-ui--block-range
+                   :position (prop-match-beginning match))))))
+    (with-temp-buffer
+      (agent-shell-ui-mode 1)
+      (dolist (block-id '("1" "2"))
+        (agent-shell-ui-update-fragment
+         (agent-shell-ui-make-fragment-model
+          :namespace-id "ns" :block-id block-id
+          :label-left "run" :label-right block-id :body "output\n")
+         :expanded t :navigation 'always))
+      (let* ((second (searched "ns-2"))
+             (untouched (buffer-substring-no-properties (map-elt second :start)
+                                                        (map-elt second :end))))
+        ;; Both labels change at once, first much wider then much narrower.
+        (dolist (labels '(("a considerably longer status" "a considerably longer title")
+                          ("ok" "1")))
+          (let ((range (map-elt (agent-shell-ui-update-fragment
+                                 (agent-shell-ui-make-fragment-model
+                                  :namespace-id "ns" :block-id "1"
+                                  :label-left (nth 0 labels)
+                                  :label-right (nth 1 labels))
+                                 :navigation 'always)
+                                :block))
+                (block (searched "ns-1")))
+            ;; The extent the update reports is the one a fresh search finds.
+            (should (equal block range))
+            (let ((text (buffer-substring-no-properties (map-elt block :start)
+                                                        (map-elt block :end))))
+              (should (string-match-p (regexp-quote (nth 0 labels)) text))
+              (should (string-match-p (regexp-quote (nth 1 labels)) text))
+              (should (string-match-p "output" text)))
+            ;; The block below keeps its own chars.
+            (let ((second (searched "ns-2")))
+              (should (equal untouched
+                             (buffer-substring-no-properties
+                              (map-elt second :start)
+                              (map-elt second :end)))))))))))
+
 ;;; provide
 
 (provide 'agent-shell-ui-tests)
