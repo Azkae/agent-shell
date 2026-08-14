@@ -1230,7 +1230,7 @@ VIEWPORT-BUFFER is the viewport buffer to check."
   "Keymap for `agent-shell-viewport-view-mode'.")
 
 (transient-define-prefix agent-shell-viewport--help-menu ()
-  "`agent-shell' viewport help menu"
+  "`agent-shell' viewport help menu."
   [:class transient-columns
           :setup-children
           (lambda (_)
@@ -1327,7 +1327,7 @@ VIEWPORT-BUFFER is the viewport buffer to check."
   (call-interactively #'agent-shell-viewport--help-menu))
 
 (transient-define-prefix agent-shell-viewport--compose-help-menu ()
-  "`agent-shell' viewport compose help menu"
+  "`agent-shell' viewport compose help menu."
   [:class transient-columns
           :setup-children
           (lambda (_)

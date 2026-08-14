@@ -4,8 +4,8 @@
 ;;
 ;; Run via:
 ;;
-;;   emacs -batch -l ert -l tests/agent-shell-markdown-tests.el \
-;;         -f ert-run-tests-batch-and-exit
+;;   `emacs -batch -l ert -l tests/agent-shell-markdown-tests.el \
+;;          -f ert-run-tests-batch-and-exit'
 
 ;;; Code:
 

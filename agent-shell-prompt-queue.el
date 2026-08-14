@@ -117,7 +117,7 @@ Remove: M-x agent-shell-prompt-queue-remove
 ACTIVE-PROMPT is the prompt currently running, or nil if none.
 
 PENDING-PROMPTS is a list of pending prompt strings, in the same form as
-\(map-elt agent-shell--state :pending-prompts).
+the :pending-prompts entry in variable `agent-shell--state'.
 
 Each prompt is shown on a single line, prefixed by a status column
 \(\"active\" or \"queued\"), and truncated to fit the frame width so it

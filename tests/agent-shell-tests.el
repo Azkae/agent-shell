@@ -781,20 +781,18 @@ bar
                     :buffer (current-buffer)
                     :from (point-min)
                     :to (point-max))
-                   "   1: 
-   2: foo
-   3: 
-   4: bar
-   5: "))
+                   (string-join
+                    '("   1: " "   2: foo" "   3: " "   4: bar" "   5: ")
+                    "\n")))
     ;; With TRIM: empty boundary lines are stripped, internal empty kept.
     (should (equal (agent-shell--get-numbered-region
                     :buffer (current-buffer)
                     :from (point-min)
                     :to (point-max)
                     :trim t)
-                   "   2: foo
-   3: 
-   4: bar")))
+                   (string-join
+                    '("   2: foo" "   3: " "   4: bar")
+                    "\n"))))
   (with-temp-buffer
     (insert "foo
 bar

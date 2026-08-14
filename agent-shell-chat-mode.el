@@ -356,7 +356,7 @@ the marker and the extra blank lines around it with a `display' of \"\",
 and renders the label via a `before-string' padded by one blank line on
 each side.  Keeps the input's line terminator visible: hiding that
 newline would merge the input line into the response for line motion
-(e.g. `end-of-visual-line').  Updates in place; idempotent."
+\(e.g. `end-of-visual-line').  Updates in place; idempotent."
   (save-excursion
     (goto-char (point-min))
     (let ((label (agent-shell-chat--label
@@ -471,7 +471,8 @@ Backfills existing turns, subscribes to shell events so a coalesced
 relabel tracks submissions, streaming responses, turn completion and
 reloads (`session-restored'), and adds a buffer-local
 `shell-maker-finish-output-hook' so `clear' and the other internal
-commands (which reprint the prompt with no agent-shell event) relabel too."
+commands (which reprint the prompt with no `agent-shell' event) relabel
+too."
   (unless agent-shell-chat--labeled
     (setq-local agent-shell-chat--labeled t)
     (agent-shell-chat--relabel)

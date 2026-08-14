@@ -4,8 +4,10 @@
 (require 'agent-shell)
 (require 'agent-shell-anthropic)
 
+;;; Code:
+
 (ert-deftest agent-shell-anthropic-make-claude-client-test ()
-  "Test agent-shell-anthropic-make-claude-client function."
+  "Test `agent-shell-anthropic-make-claude-client' function."
   ;; Mock executable-find to always return the command path
   (cl-letf (((symbol-function 'executable-find)
              (lambda (_) "/usr/bin/claude-agent-acp")))
@@ -104,7 +106,7 @@
           (kill-buffer test-buffer))))))
 
 (ert-deftest agent-shell-anthropic-default-model-id-function-test ()
-  "Test that agent-shell-anthropic-default-model-id accepts a function."
+  "Test that `agent-shell-anthropic-default-model-id' accepts a function."
   (let* ((config (agent-shell-anthropic-make-claude-code-config))
          (default-model-id-fn (map-elt config :default-model-id)))
 

@@ -164,9 +164,10 @@ window edge."
 
 (defface agent-shell-markdown-list-marker
   '((t :inherit default))
-  "Face for list bullets, task checkboxes, and ordered-list numbers
-rendered by `agent-shell-markdown-convert'.  Plain by default;
-restyle this face to colour or emphasise list markers."
+  "Face for list markers rendered by `agent-shell-markdown-convert'.
+
+Covers list bullets, task checkboxes, and ordered-list numbers.  Plain
+by default; restyle this face to colour or emphasise list markers."
   :group 'agent-shell-markdown)
 
 (defface agent-shell-markdown-list-done
@@ -350,7 +351,7 @@ passes should leave alone.
 
 Italic, bold, and strike passes loop until a full round makes no
 changes, so adjacent delimiters peel one layer per round
-(e.g. `**_X_**' resolves in two rounds).  Headers, inline code,
+\(e.g. `**_X_**' resolves in two rounds).  Headers, inline code,
 links, images, bare image-path lines, dividers, source-block
 styling, and table styling run once after the loop.
 
@@ -361,7 +362,7 @@ instead of `point-min'.  The watermark is read off the
 `agent-shell-markdown-watermark' text property on the first
 character and re-stamped at the end of the call.  Pass FORCE
 non-nil to drop the watermark and re-render the whole buffer
-(useful after mid-buffer edits, or for tests).
+\(useful after mid-buffer edits, or for tests).
 
 Pass COMPLETE non-nil when no more text will be appended, so
 markup held back while it could still grow renders now: an image
@@ -376,7 +377,7 @@ file; nil leaves the markup as-is.  IMAGE-CACHE-DIRECTORY is where
 remote (http) image URLs are downloaded and cached; when nil
 \(the default), remote images are not fetched and their markup is
 left as text.  HIGHLIGHT-BLOCKS, when non-nil
-(the default), runs the fenced-block body through the language's
+\(the default), runs the fenced-block body through the language's
 major-mode font-lock to colour keywords / strings / etc.; nil
 strips the fences and inserts the action label but leaves the
 body un-fontified."
@@ -983,7 +984,7 @@ browser\", and hovering shows \"Open in browser\"."
 
 The bracket/parenthesis markup is stripped; the title is left
 with face `agent-shell-markdown-link' and a keymap text property that
-opens the URL on RET or mouse-1.  Entering the title echoes that key
+opens the URL on RET or \\`mouse-1'.  Entering the title echoes that key
 along with where it lands, since a local file opens in Emacs while
 anything else goes to the browser (see
 `agent-shell-markdown--action-hint').  Matches preceded by `!' (the
@@ -1105,7 +1106,7 @@ If URL resolves to an existing local file that is image-supported
 and a graphical display is available, the full markup is replaced
 by the alt text (or a single space if alt is empty) carrying a
 `display' property with the image and a keymap that opens the
-file on RET or mouse-1.  Entering the image echoes that key and the
+file on RET or \\`mouse-1'.  Entering the image echoes that key and the
 ones that resize it (see `agent-shell-markdown--image-hint'), since
 a displayed image otherwise gives no sign that it acts.  Remote http
 URLs are downloaded into IMAGE-CACHE-DIRECTORY first (see
@@ -1115,7 +1116,7 @@ When a remote image can't be shown inline (no IMAGE-CACHE-DIRECTORY,
 the download failed, or a non-graphical display), its markup is
 replaced by a link -- the alt text, or the URL when alt is empty --
 faced as `agent-shell-markdown-link' with a keymap that opens the
-URL on RET or mouse-1, echoing that key on entry as a rendered image
+URL on RET or \\`mouse-1', echoing that key on entry as a rendered image
 does.  Any other unresolvable markup is left
 untouched.  Images inside any of AVOID-RANGES are left alone.
 
@@ -1343,7 +1344,7 @@ renders the image in place of that text."
   "Render `---' / `***' / `___' horizontal-rule lines as styled rules.
 
 Each line consisting of 3+ matching dash/star/underscore chars
-(optionally surrounded by spaces or tabs) gets a `display' text
+\(optionally surrounded by spaces or tabs) gets a `display' text
 property that draws an underlined rule across the window, plus a
 `agent-shell-markdown-frozen' tag so subsequent calls don't re-process
 it.  Dividers inside any of AVOID-RANGES are left untouched.
@@ -1675,8 +1676,9 @@ with `emacs-lisp-mode' face properties on the body and a
 
 (defconst agent-shell-markdown--table-pending-line-regexp
   (rx line-start (zero-or-more (any " \t")) "|")
-  "Lenient regexp matching a line that might still be streaming into
-a table row — anything starting with `|' (after optional leading
+  "Regexp matching a line that might still be streaming into a table row.
+
+Lenient: anything starting with `|' (after optional leading
 whitespace).  Used by `--extending-table-start' so the watermark
 can back off past a partial separator like `|---|---|----' that
 hasn't grown its closing `|' yet.")
@@ -1774,6 +1776,10 @@ adds the base indent, and the line is tagged
 `agent-shell-markdown-list-rendered' so `--pad-rendered-blocks'
 frames it.  A checked task item's text gets
 `agent-shell-markdown-list-done'.
+
+LINE-START and LINE-END bound the line being rendered.  MARKER-START
+and MARKER-END bound its list marker, and CONTENT-START is where the
+item's text begins.
 
 Depth is measured in two-column units of INDENT-WIDTH, so ordinary
 two-space nesting steps one glyph per level.  For example the line
@@ -2253,8 +2259,9 @@ Two flavours of region are collected:
     table with new rows.  The combined source is stashed and the
     region is re-rendered.
 
-A rendered table with no extension is skipped — re-rendering
-unchanged source is a no-op."
+A rendered table with no extension is skipped, since re-rendering
+unchanged source is a no-op.  Tables inside any of AVOID-RANGES are
+left untouched."
   ;; agent-shell tags its body chars with `field output' while the
   ;; `\\n's between rows may not carry the same field value; without
   ;; this binding, `forward-line' / `line-end-position' would stop at
@@ -2552,10 +2559,12 @@ ASCII content with no face properties uses the cheap
 width — e.g. a theme styling inline-code with a wider family),
 routes through `window-text-pixel-size' so column widths reflect
 the actual rendered pixel width rather than a `string-width'
-approximation.  Mixing the two paths within a column (some rows
-ASCII-padded, some pixel-padded) accumulates fractional drift on
-the right edge of the column and visibly misaligns the vertical
-pipes between rows."
+approximation.  WINDOW supplies the font metrics for that pixel
+path; without a live one, the `string-width' path is taken.
+
+Mixing the two paths within a column (some rows ASCII-padded, some
+pixel-padded) accumulates fractional drift on the right edge of the
+column and visibly misaligns the vertical pipes between rows."
   (if (and window
            (window-live-p window)
            (fboundp 'window-text-pixel-size)
@@ -2652,7 +2661,7 @@ different pixel width than `string-width' reports."
 (defvar-local agent-shell-markdown--table-face-width-cache nil
   "Hash table mapping face value → pixel-width ratio vs unfaced text.
 Cache lives in the destination buffer so per-buffer font settings
-(text scaling, face remapping) get their own ratios.  Lazily
+\(text scaling, face remapping) get their own ratios.  Lazily
 initialized.")
 
 (defun agent-shell-markdown--table-face-width-ratio (face window)
@@ -2660,8 +2669,8 @@ initialized.")
 A ratio of 1.0 means FACE doesn't affect rendered char width.
 Cached per face in the destination buffer.
 
-Ratios are always positive floats, so `nil' from `gethash' reliably
-means \"not cached yet\" — no sentinel needed."
+Ratios are always positive floats, so nil from `gethash' reliably
+means \"not cached yet\", no sentinel needed."
   (with-current-buffer (window-buffer window)
     (unless agent-shell-markdown--table-face-width-cache
       (setq agent-shell-markdown--table-face-width-cache
@@ -2811,9 +2820,10 @@ width exceeds the column budget, drifting the right pipe."
 ASCII-only strings take the cheap `string-width' + spaces path.
 Any non-ASCII content (single-codepoint emoji, CJK, ZWJ
 sequences, regional-indicator flags, VS-16 emoji) routes through
-pixel-accurate measurement.  Mixing the two paths within a
-column accumulates fractional drift between rows and visibly
-misaligns the right-edge pipes.
+pixel-accurate measurement, which needs a live WINDOW for its font
+metrics.  Mixing the two paths within a column accumulates
+fractional drift between rows and visibly misaligns the right-edge
+pipes.
 
 When FORCE-PIXEL is non-nil, the pixel path is taken regardless of
 STR's content.  Callers use this to keep all wrapped lines of one
@@ -2861,7 +2871,9 @@ via different paths and drift sub-pixel on their right edge."
     (agent-shell-markdown--pad-table-string-ascii :str str :width width)))
 
 (cl-defun agent-shell-markdown--pad-table-string-ascii (&key str width)
-  "ASCII / fallback padding: append plain spaces to reach WIDTH columns."
+  "Pad STR with plain spaces to reach WIDTH columns.
+
+This is the ASCII / fallback path."
   (let ((current (string-width str)))
     (if (>= current width)
         str
@@ -2999,9 +3011,13 @@ containing emoji/CJK line up with the column's right border."
           (cons :processed-rows (nreverse processed-rows)))))
 
 (cl-defun agent-shell-markdown--table-min-widths (&key processed-rows window)
-  "Return the minimum (longest-word) widths per column.
-Called only when a table needs to be allocated narrower than its
-natural total — see `agent-shell-markdown--render-table-source'."
+  "Return the minimum (longest-word) widths per column in PROCESSED-ROWS.
+
+PROCESSED-ROWS is the `:processed-rows' entry from
+`agent-shell-markdown--preprocess-table', and WINDOW is used for
+measurement as in that function.  Called only when a table needs to be
+allocated narrower than its natural total, see
+`agent-shell-markdown--render-table-source'."
   (let ((min-widths nil))
     (dolist (entry processed-rows)
       (let ((cells (cdr entry))
@@ -3044,8 +3060,8 @@ The rendered chars carry:
     column widths.
 
 Caller-set text properties at the table's start position (e.g.,
-`read-only', application-specific tags like an agent-shell block
-id) are also carried onto the rendered region — otherwise the
+`read-only', application-specific tags like an `agent-shell' block
+id) are also carried onto the rendered region, otherwise the
 delete+insert would drop them and break callers that look up
 regions by text property.
 
@@ -3672,7 +3688,7 @@ Filters out properties our rendering itself sets (`face',
 `font-lock-face', `agent-shell-markdown-frozen',
 `agent-shell-markdown-table-source', `agent-shell-markdown-source',
 `rear-nonsticky') so callers' application-level properties such as
-`read-only' or agent-shell block ids survive on the rendered
+`read-only' or `agent-shell' block ids survive on the rendered
 output.  `font-lock-face' in particular must not be carried: the
 first char's value (e.g. a table border) would otherwise be
 spread uniformly across the re-rendered region, greying out the
@@ -4008,8 +4024,8 @@ caller's seeded face shows through."
 
 `font-lock-mode' takes ownership of the `face' property and
 clears it on re-fontification, which would wipe out our markup
-styling in buffers that fontify continuously (comint, shell-maker,
-agent-shell, etc.).  `font-lock-face' is the property reserved
+styling in buffers that fontify continuously (`comint', `shell-maker',
+`agent-shell', etc.).  `font-lock-face' is the property reserved
 for callers who want their face to coexist — when font-lock is
 on, the display engine renders `font-lock-face' as if it were
 `face' and font-lock leaves it alone; when font-lock is off,
@@ -4061,7 +4077,7 @@ is consulted for aliases before the `-mode' suffix is appended."
         mode))))
 
 (defun agent-shell-markdown--make-ret-binding-map (fun)
-  "Return a sparse keymap binding RET and mouse-1 to FUN."
+  "Return a sparse keymap binding RET and \\`mouse-1' to FUN."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") fun)
     (define-key map [mouse-1] fun)
@@ -4441,7 +4457,7 @@ starting with `~/', `./', or `../'."
 (defun agent-shell-markdown--image-max-width ()
   "Return the maximum image width in pixels.
 Resolves `agent-shell-markdown-image-max-width' which may be an integer
-(pixels) or a float between 0 and 1 (ratio of window body width)."
+\(pixels) or a float between 0 and 1 (ratio of window body width)."
   (if (floatp agent-shell-markdown-image-max-width)
       ;; Prefer a window actually showing this buffer (any frame); only
       ;; guess with `frame-first-window' when none does.
@@ -4601,7 +4617,7 @@ point, a table from there can no longer accumulate."
 SOURCE-BLOCKS is the descriptor list from
 `agent-shell-markdown--source-blocks' taken earlier this pass.  Its
 `:block' markers have tracked every edit since, so the open fence
-(the last block whose `:block' end is still `point-max') is read
+\(the last block whose `:block' end is still `point-max') is read
 from them directly rather than re-scanning.
 
 Safe-frontier = start of the last line in the buffer, clamped
