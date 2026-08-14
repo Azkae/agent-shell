@@ -315,7 +315,7 @@ Only the live prompt shows an empty `Me', and neither claims input."
       (should (string-match-p "❯" (overlay-get (nth 2 me) 'before-string))))))
 
 (ert-deftest agent-shell-chat-empty-response-not-labeled-test ()
-  "A turn with no response text is not given an agent label."
+  "A completed turn with no response text is not given an agent label."
   (agent-shell-chat-mode-tests--with-shell
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (insert "hello\n")
@@ -325,6 +325,17 @@ Only the live prompt shows an empty `Me', and neither claims input."
     (agent-shell-chat--relabel)
     ;; The empty response gets no agent label.
     (should-not (agent-shell-chat-mode-tests--agent-overlays))))
+
+(ert-deftest agent-shell-chat-active-turn-labeled-test ()
+  "A just-submitted turn is labeled before its output streams.
+The marker sits at end of buffer with no response yet; it is the active
+turn, not a completed empty one, so the agent label shows immediately."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (agent-shell-chat--relabel)
+    (should (= 1 (length (agent-shell-chat-mode-tests--agent-overlays))))))
 
 (ert-deftest agent-shell-chat-code-block-padding-preserved-test ()
   "A prompt after a code block panel keeps the panel's tinted padding.

@@ -403,15 +403,15 @@ newline would merge the input line into the response for line motion
                                    "\n"
                                  "\n\n")
                                label "\n\n"))
-               ;; A turn with no response text (a tool-only turn, or a
-               ;; restored empty turn) is not labeled: the marker is followed
-               ;; only by whitespace up to end of buffer, another marker, or
-               ;; the next prompt.
+               ;; A completed turn with no response text (a tool-only turn, or
+               ;; a restored empty turn) is not labeled: another marker or the
+               ;; next prompt follows the marker with only whitespace between.
+               ;; A marker at end of buffer is the active, just-submitted turn
+               ;; (its output has not streamed yet), so it IS labeled.
                (response-empty (save-excursion
                                  (goto-char mend)
                                  (skip-chars-forward " \t\n")
-                                 (or (eobp)
-                                     (get-text-property (point) 'shell-maker--marker)
+                                 (or (get-text-property (point) 'shell-maker--marker)
                                      (agent-shell-chat--prompt-face-p
                                       (get-text-property (point) 'font-lock-face))))))
           (if response-empty
