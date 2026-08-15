@@ -7191,9 +7191,18 @@ pending-restore state once replay completes."
       ;; through the output filter), so the process mark can be left at the
       ;; start of the live prompt.  Left there, the first submit captures the
       ;; `PROMPT> ' text as part of the input, corrupting the message sent to
-      ;; the agent and conflating the prompt/input faces.
+      ;; the agent and conflating the prompt/input faces.  Sync to the end of
+      ;; the prompt rather than `point-max': type-ahead entered while the
+      ;; session restored sits between the two, and a mark past it makes
+      ;; comint read what was typed as output, so `comint-kill-input' deletes
+      ;; nothing and submitting sends an empty message.
       (when-let* ((process (get-buffer-process (current-buffer))))
-        (set-marker (process-mark process) (point-max)))
+        (set-marker (process-mark process)
+                    (if (and comint-last-prompt
+                             (marker-position (cdr comint-last-prompt))
+                             (agent-shell--live-input-prompt-p comint-last-prompt))
+                        (cdr comint-last-prompt)
+                      (point-max))))
       ;; The restored history landed above the early prompt, shifting any
       ;; type-ahead down along with the undo entries recorded for it.
       (agent-shell--reset-undo-history)

@@ -4309,7 +4309,7 @@ agent activity; consecutive user chunks stay in the same turn."
       (agent-shell--append-restore-notification state notif))
     (should (= 1 (length (agent-shell-tests--pending-restore-prompt-turns state))))))
 
-(cl-defun agent-shell-tests--render-pending-restore (&key last-entry-type typed-input undo)
+(cl-defun agent-shell-tests--render-pending-restore (&key last-entry-type typed-input undo kill-input)
   "Restore a single replayed turn ending in LAST-ENTRY-TYPE.
 
 Drives `agent-shell--render-pending-restore' as a `session/load' whose
@@ -4319,7 +4319,9 @@ LAST-ENTRY-TYPE, mimicking what the real notification dispatch leaves
 behind.
 
 TYPED-INPUT is type-ahead entered at the early prompt before the load
-completes.  UNDO undoes once after the replay settles.
+completes.  UNDO undoes once after the replay settles.  KILL-INPUT
+runs `comint-kill-input' once it settles, which clears whatever comint
+considers unsent input and leaves the rest of the buffer alone.
 
 Returns the resulting buffer string, with the live prompt trailing."
   (let ((fake-process (start-process "fake-agent" nil "cat")))
@@ -4364,7 +4366,9 @@ Returns the resulting buffer string, with the live prompt trailing."
                 ;; Stands in for the command loop, which boundaries the
                 ;; undo list before running the undo command.
                 (undo-boundary)
-                (undo)))
+                (undo))
+              (when kill-input
+                (comint-kill-input)))
             (buffer-substring-no-properties (point-min) (point-max))))
       (when (process-live-p fake-process)
         (delete-process fake-process)))))
@@ -4400,6 +4404,25 @@ restored history instead of what was typed."
                   :last-entry-type "agent_message_chunk"
                   :typed-input "hi there"
                   :undo t)
+                 "Claude> replayedClaude> ")))
+
+(ert-deftest agent-shell--render-pending-restore-keeps-type-ahead-editable-test ()
+  "Test type-ahead is still comint's input after a restore.
+Regression: the replay re-synced the process mark to `point-max',
+which sits past type-ahead entered at the early prompt.  comint read
+the text as output from then on, so `comint-kill-input' deleted
+nothing and submitting sent an empty message, leaving what was typed
+in the buffer."
+  (should (equal (agent-shell-tests--render-pending-restore
+                  :last-entry-type "agent_message_chunk"
+                  :typed-input "hi there"
+                  :kill-input t)
+                 "Claude> replayedClaude> "))
+  ;; With an empty input area the mark still lands past the `PROMPT> '
+  ;; text, so it's never captured as input.
+  (should (equal (agent-shell-tests--render-pending-restore
+                  :last-entry-type "agent_message_chunk"
+                  :kill-input t)
                  "Claude> replayedClaude> ")))
 
 (ert-deftest agent-shell--use-session-load-p-modes ()
