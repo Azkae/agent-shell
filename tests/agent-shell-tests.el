@@ -5638,5 +5638,104 @@ file landed in."
         (kill-buffer (get-file-buffer file)))
       (delete-file file))))
 
+;;; Tests for scheduled directory cleanup
+
+(ert-deftest agent-shell--clean-up-deletes-pending-directory-test ()
+  "Test killing a shell deletes the directory it scheduled."
+  (let ((temp-dir (make-temp-file "temp-" t))
+        ;; Trashing can outlive the kill, so assert on an outright delete.
+        (delete-by-moving-to-trash nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer (generate-new-buffer " *agent-shell-cleanup-test*")
+            (setq major-mode 'agent-shell-mode)
+            (setq-local agent-shell--state (agent-shell--make-state))
+            (setq-local agent-shell--pending-directory-cleanup temp-dir)
+            (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
+            (kill-buffer))
+          (should-not (file-directory-p temp-dir)))
+      (when (file-directory-p temp-dir)
+        (delete-directory temp-dir t)))))
+
+(ert-deftest agent-shell--clean-up-ignores-default-directory-test ()
+  "Test cleanup spares the shell's `default-directory'.
+
+A temp shell's `default-directory' can end up outside the directory it
+created (project detection resolves \"/tmp\" as the root when
+\"/tmp/.git\" exists).  Cleanup must delete what was scheduled, never
+where the buffer happens to point."
+  (let ((temp-dir (make-temp-file "temp-" t))
+        (sibling-file (make-temp-file "agent-shell-bystander"))
+        (delete-by-moving-to-trash nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer (generate-new-buffer " *agent-shell-cleanup-test*")
+            (setq major-mode 'agent-shell-mode)
+            (setq-local agent-shell--state (agent-shell--make-state))
+            (setq-local agent-shell--pending-directory-cleanup temp-dir)
+            (setq-local default-directory temporary-file-directory)
+            (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
+            (kill-buffer))
+          (should-not (file-directory-p temp-dir))
+          (should (file-directory-p temporary-file-directory))
+          (should (file-exists-p sibling-file)))
+      (when (file-directory-p temp-dir)
+        (delete-directory temp-dir t))
+      (delete-file sibling-file))))
+
+(ert-deftest agent-shell--clean-up-without-pending-directory-test ()
+  "Test cleanup deletes nothing when no directory was scheduled.
+
+Shells working in the user's own directories schedule nothing, so the
+cleanup every shell runs has nothing to delete."
+  (let ((project-dir (make-temp-file "agent-shell-project" t))
+        (delete-by-moving-to-trash nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer (generate-new-buffer " *agent-shell-cleanup-test*")
+            (setq major-mode 'agent-shell-mode)
+            (setq-local agent-shell--state (agent-shell--make-state))
+            (setq-local default-directory project-dir)
+            (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
+            (kill-buffer))
+          (should (file-directory-p project-dir)))
+      (delete-directory project-dir t))))
+
+(ert-deftest agent-shell-restart-inherits-pending-directory-cleanup-test ()
+  "Test restarting a temp shell hands its directory to the new shell.
+
+Restart kills the shell buffer, so the outgoing buffer must unschedule
+the directory and the incoming one take it over.  Otherwise the restarted
+shell is left working in a directory that was just deleted."
+  (let ((temp-dir (make-temp-file "temp-" t))
+        (delete-by-moving-to-trash nil)
+        (new-shell-buffer nil)
+        (shell-buffer (generate-new-buffer " *agent-shell-restart-test*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer shell-buffer
+            (setq major-mode 'agent-shell-mode)
+            (setq-local agent-shell--state (agent-shell--make-state))
+            (setq-local agent-shell--pending-directory-cleanup temp-dir)
+            (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
+            (cl-letf (((symbol-function 'agent-shell--start)
+                       (lambda (&rest _args)
+                         (setq new-shell-buffer
+                               (generate-new-buffer " *agent-shell-restart-test-new*"))))
+                      ((symbol-function 'shell-maker-set-buffer-name) #'ignore)
+                      ((symbol-function 'agent-shell--display-buffer) #'ignore)
+                      ((symbol-function 'agent-shell-viewport--show-buffer) #'ignore))
+              (agent-shell-restart)))
+          (should (file-directory-p temp-dir))
+          (should (equal (buffer-local-value 'agent-shell--pending-directory-cleanup
+                                             new-shell-buffer)
+                         temp-dir)))
+      (when (buffer-live-p shell-buffer)
+        (kill-buffer shell-buffer))
+      (when (buffer-live-p new-shell-buffer)
+        (kill-buffer new-shell-buffer))
+      (when (file-directory-p temp-dir)
+        (delete-directory temp-dir t)))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

@@ -1235,13 +1235,16 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
 (defvar-local agent-shell--transcript-file nil
   "Path to the shell's transcript file.")
 
-(defun agent-shell--cleanup-default-directory ()
-  "Delete the current buffer's `default-directory'.
-Only attach this to shells created by `agent-shell-new-temp-shell',
-whose `default-directory' is a disposable temp dir.  Attaching it to
-an ordinary shell would delete its working directory."
-  (when (file-directory-p default-directory)
-    (delete-directory default-directory t t)))
+(defvar-local agent-shell--pending-directory-cleanup nil
+  "Directory to delete when the shell is cleaned up.
+
+Set by shells that created a directory of their own and must dispose of
+it, for example the \"/tmp/temp-a1B2c3\" that `agent-shell-new-temp-shell'
+makes.  Nil in shells whose working directory belongs to the user.
+
+Recorded on creation rather than read from `default-directory' at cleanup
+time, which project detection can resolve to a directory we don't own
+\(e.g. \"/tmp\" when \"/tmp/.git\" exists).")
 
 (defvar agent-shell--shell-maker-config nil)
 
@@ -1436,9 +1439,7 @@ When NO-DISPLAY is non-nil, don't display the shell buffer."
                                                :config config
                                                :no-display no-display)))
     (with-current-buffer shell-buffer
-      (add-hook 'kill-buffer-hook
-                #'agent-shell--cleanup-default-directory
-                nil t))
+      (setq-local agent-shell--pending-directory-cleanup location))
     shell-buffer))
 
 ;;;###autoload
@@ -1501,16 +1502,17 @@ Works from both shell and viewport buffers."
          (config (map-elt (buffer-local-value 'agent-shell--state shell-buffer)
                           :agent-config))
          (shell-dir (buffer-local-value 'default-directory shell-buffer))
-         (has-cleanup-hook (memq #'agent-shell--cleanup-default-directory
-                                 (buffer-local-value 'kill-buffer-hook
-                                                     shell-buffer)))
+         (pending-directory-cleanup
+          (buffer-local-value 'agent-shell--pending-directory-cleanup shell-buffer))
          ;; Remember where the shell is currently displayed
          (windows (get-buffer-window-list shell-buffer nil t)))
     (with-current-buffer shell-buffer
       (when (and (agent-shell--active-requests-p (agent-shell--state))
                  (not (y-or-n-p "Agent is busy.  Restart anyway?")))
         (user-error "Cancelled"))
-      (remove-hook 'kill-buffer-hook #'agent-shell--cleanup-default-directory t))
+      ;; The restarted shell inherits the directory, so unschedule it here to
+      ;; keep this buffer's cleanup from deleting it.
+      (setq-local agent-shell--pending-directory-cleanup nil))
     (kill-buffer shell-buffer)
     (let* ((default-directory shell-dir)
            (new-shell-buffer (agent-shell--start
@@ -1520,11 +1522,10 @@ Works from both shell and viewport buffers."
                               :new-session t
                               :no-focus t)))
       (shell-maker-set-buffer-name new-shell-buffer shell-buffer-name)
-      (when has-cleanup-hook
+      (when pending-directory-cleanup
         (with-current-buffer new-shell-buffer
-          (add-hook 'kill-buffer-hook
-                    #'agent-shell--cleanup-default-directory
-                    nil t)))
+          (setq-local agent-shell--pending-directory-cleanup
+                      pending-directory-cleanup)))
       (if (or from-viewport agent-shell-prefer-viewport-interaction)
           (agent-shell-viewport--show-buffer
            :shell-buffer new-shell-buffer)
@@ -4025,7 +4026,11 @@ For example, shut down ACP client."
                                   :shell-buffer (map-elt (agent-shell--state) :buffer)
                                   :existing-only t))
                 (buffer-live-p viewport-buffer))
-      (kill-buffer viewport-buffer))))
+      (kill-buffer viewport-buffer))
+    ;; Last, so the agent is gone before its working directory can be.
+    (when (and agent-shell--pending-directory-cleanup
+               (file-directory-p agent-shell--pending-directory-cleanup))
+      (delete-directory agent-shell--pending-directory-cleanup t t))))
 
 (defun agent-shell--shutdown ()
   "Shut down shell activity."
