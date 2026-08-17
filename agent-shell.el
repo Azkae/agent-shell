@@ -4,10 +4,10 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/agent-shell
-;; Version: 0.73.2
-;; Package-Requires: ((emacs "29.1") (shell-maker "0.97.1") (acp "0.13.1"))
+;; Version: 0.73.3
+;; Package-Requires: ((emacs "29.1") (shell-maker "0.97.2") (acp "0.13.1"))
 
-(defconst agent-shell--version "0.73.2")
+(defconst agent-shell--version "0.73.3")
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -7191,23 +7191,6 @@ pending-restore state once replay completes."
       ;; prompt.  Return it to the input area so the cursor lands where the
       ;; user types (matching pre-early-prompt restore behavior).
       (goto-char (point-max))
-      ;; Re-sync the process mark to the input area.  Replay inserts the
-      ;; restored history above the early prompt with plain `insert' (not
-      ;; through the output filter), so the process mark can be left at the
-      ;; start of the live prompt.  Left there, the first submit captures the
-      ;; `PROMPT> ' text as part of the input, corrupting the message sent to
-      ;; the agent and conflating the prompt/input faces.  Sync to the end of
-      ;; the prompt rather than `point-max': type-ahead entered while the
-      ;; session restored sits between the two, and a mark past it makes
-      ;; comint read what was typed as output, so `comint-kill-input' deletes
-      ;; nothing and submitting sends an empty message.
-      (when-let* ((process (get-buffer-process (current-buffer))))
-        (set-marker (process-mark process)
-                    (if (and comint-last-prompt
-                             (marker-position (cdr comint-last-prompt))
-                             (agent-shell--live-input-prompt-p comint-last-prompt))
-                        (cdr comint-last-prompt)
-                      (point-max))))
       ;; The restored history landed above the early prompt, shifting any
       ;; type-ahead down along with the undo entries recorded for it.
       (agent-shell--reset-undo-history)

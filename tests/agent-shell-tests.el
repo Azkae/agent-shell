@@ -4324,11 +4324,14 @@ runs `comint-kill-input' once it settles, which clears whatever comint
 considers unsent input and leaves the rest of the buffer alone.
 
 Returns the resulting buffer string, with the live prompt trailing."
-  (let ((fake-process (start-process "fake-agent" nil "cat")))
+  (let* ((buffer (generate-new-buffer " *agent-shell-restore-test*"))
+         (fake-process (start-process "fake-agent" buffer "cat")))
+    (set-process-query-on-exit-flag fake-process nil)
     (unwind-protect
-        (with-temp-buffer
+        (with-current-buffer buffer
+          (comint-mode)
+          (setq-local comint-prompt-regexp "^Claude> ")
           (buffer-enable-undo)
-          (set-process-buffer fake-process (current-buffer))
           (let ((state (list (cons :buffer (current-buffer))
                              (cons :active-requests nil)
                              (cons :last-entry-type nil)
@@ -4339,25 +4342,24 @@ Returns the resulting buffer string, with the live prompt trailing."
             (cl-letf (((symbol-function 'shell-maker--process) (lambda () fake-process))
                       ((symbol-function 'agent-shell--create-bootstrapping-placeholders)
                        #'ignore)
-                      ;; Emitting reads shell state, which this plain
-                      ;; temp buffer has no business carrying.
+                      ;; Emitting reads shell state, which this bare
+                      ;; comint buffer has no business carrying.
                       ((symbol-function 'agent-shell--emit-event) #'ignore)
                       ((symbol-function 'agent-shell--effective-restore-verbosity)
                        (lambda (_state) 'last))
                       ((symbol-function 'agent-shell--replay-turn)
                        (lambda (state _turn)
-                         (goto-char (point-max))
-                         (insert "Claude> replayed")
+                         (let ((inhibit-read-only t))
+                           (goto-char (point-max))
+                           (insert "Claude> replayed"))
                          (map-put! state :last-entry-type last-entry-type))))
-              ;; A live prompt awaiting input, as left by shell-maker
-              ;; before the load completes.  Both markers have insertion
-              ;; type nil (as `shell-maker--output-filter' leaves them):
-              ;; replayed history lands above the start marker and
-              ;; type-ahead lands after the end marker.
-              (let ((prompt-start (copy-marker (point) nil)))
-                (insert "Claude> ")
-                (setq-local comint-last-prompt
-                            (cons prompt-start (copy-marker (point) nil))))
+              ;; A live prompt awaiting input, emitted the way shell-maker
+              ;; emits it before the load completes, so `comint-last-prompt'
+              ;; and the process mark start out where a real shell leaves
+              ;; them: replayed history lands above the prompt and
+              ;; type-ahead after it, with the mark in between.
+              (shell-maker--output-filter fake-process "Claude> ")
+              (goto-char (point-max))
               (when typed-input
                 (insert typed-input)
                 (undo-boundary))
@@ -4371,7 +4373,8 @@ Returns the resulting buffer string, with the live prompt trailing."
                 (comint-kill-input)))
             (buffer-substring-no-properties (point-min) (point-max))))
       (when (process-live-p fake-process)
-        (delete-process fake-process)))))
+        (delete-process fake-process))
+      (kill-buffer buffer))))
 
 (ert-deftest agent-shell--render-pending-restore-closes-trailing-user-prompt-test ()
   "Test a replay ending on a user prompt is closed above the live prompt.
@@ -4408,20 +4411,31 @@ restored history instead of what was typed."
 
 (ert-deftest agent-shell--render-pending-restore-keeps-type-ahead-editable-test ()
   "Test type-ahead is still comint's input after a restore.
-Regression: the replay re-synced the process mark to `point-max',
-which sits past type-ahead entered at the early prompt.  comint read
-the text as output from then on, so `comint-kill-input' deleted
-nothing and submitting sent an empty message, leaving what was typed
-in the buffer."
+A replay ending on a user turn closes it with shell-maker's
+end-of-prompt marker, emitted under the narrowing that ends before the
+live prompt.  The process mark must come back to the prompt's end: at
+the prompt's start the `PROMPT> ' text joins the next message, and past
+the type-ahead comint reads what was typed as output, so
+`comint-kill-input' deletes nothing and submitting sends an empty
+message."
   (should (equal (agent-shell-tests--render-pending-restore
-                  :last-entry-type "agent_message_chunk"
+                  :last-entry-type "user_message_chunk"
                   :typed-input "hi there"
                   :kill-input t)
-                 "Claude> replayedClaude> "))
+                 (concat "Claude> replayed<shell-maker-end-of-prompt>\n\n"
+                         "Claude> ")))
   ;; With an empty input area the mark still lands past the `PROMPT> '
   ;; text, so it's never captured as input.
   (should (equal (agent-shell-tests--render-pending-restore
+                  :last-entry-type "user_message_chunk"
+                  :kill-input t)
+                 (concat "Claude> replayed<shell-maker-end-of-prompt>\n\n"
+                         "Claude> ")))
+  ;; A replay ending on agent output emits no marker, so nothing moves
+  ;; the mark off the prompt to begin with.
+  (should (equal (agent-shell-tests--render-pending-restore
                   :last-entry-type "agent_message_chunk"
+                  :typed-input "hi there"
                   :kill-input t)
                  "Claude> replayedClaude> ")))
 
