@@ -3699,12 +3699,17 @@ window\") and an integer as pixels (350 as \"350px\")."
 Filters out properties our rendering itself sets (`face',
 `font-lock-face', `agent-shell-markdown-frozen',
 `agent-shell-markdown-table-source', `agent-shell-markdown-source',
-`rear-nonsticky') so callers' application-level properties such as
-`read-only' or `agent-shell' block ids survive on the rendered
-output.  `font-lock-face' in particular must not be carried: the
-first char's value (e.g. a table border) would otherwise be
-spread uniformly across the re-rendered region, greying out the
-per-cell styling on re-render."
+`rear-nonsticky', `keymap', `cursor-sensor-functions') so callers'
+application-level properties such as `read-only' or `agent-shell'
+block ids survive on the rendered output.
+
+The three that are ours but not obviously so must not be carried,
+since the first char's value would be spread uniformly across the
+re-rendered region: `font-lock-face' (e.g. a table border) greys out
+the per-cell styling, while `keymap' and `cursor-sensor-functions'
+(a table's own, from `agent-shell-markdown--fill-text-property')
+take RET and the hint away from a link rendered inside a cell.  Each
+is re-established after the insert anyway."
   (let ((props (text-properties-at pos))
         (carried nil))
     (while props
@@ -3715,7 +3720,9 @@ per-cell styling on re-render."
                             agent-shell-markdown-frozen
                             agent-shell-markdown-table-source
                             agent-shell-markdown-source
-                            rear-nonsticky))
+                            rear-nonsticky
+                            keymap
+                            cursor-sensor-functions))
           (setq carried (cons val (cons key carried))))
         (setq props (cddr props))))
     (nreverse carried)))

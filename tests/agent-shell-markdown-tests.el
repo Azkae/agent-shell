@@ -3099,6 +3099,33 @@ after" nil)))))
     (should-error (agent-shell-markdown-table-next-cell) :type 'user-error)
     (should-error (agent-shell-markdown-table-previous-cell) :type 'user-error)))
 
+(ert-deftest agent-shell-markdown-table-link-keeps-ret-across-rerenders ()
+  "A link in a cell keeps its keymap when later rows stream in.
+
+The table re-renders from its stashed source on each new row, carrying
+the properties at its start position across the delete+insert.  Its own
+`keymap' sits there from the previous pass, so carrying it would spread
+the cell-navigation map over every cell and take RET away from the
+links (see `agent-shell-markdown--carry-properties').
+
+Navigation is unaffected: plain cell text still answers TAB."
+  (with-temp-buffer
+    (insert "| Bag | Link |\n|---|---|\n| Wool | [wool.com](https://wool.com/x) |\n")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-max))
+    (insert "| July | [july.com](https://july.com/y) |\n")
+    (agent-shell-markdown-replace-markup)
+    (dolist (needle '("wool.com" "july.com"))
+      (goto-char (point-min))
+      (should (search-forward needle nil t))
+      (should (lookup-key (get-text-property (match-beginning 0) 'keymap)
+                          (kbd "RET"))))
+    (goto-char (point-min))
+    (should (search-forward "Wool" nil t))
+    (should (eq #'agent-shell-markdown-table-next-cell
+                (lookup-key (get-text-property (match-beginning 0) 'keymap)
+                            (kbd "TAB"))))))
+
 (ert-deftest agent-shell-markdown-convert-table-in-fenced-block-untouched ()
   ;; A table inside a fenced block stays untouched (source-block body
   ;; is frozen, so table detection skips it — and source-block fences
