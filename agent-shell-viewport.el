@@ -79,6 +79,8 @@
 (declare-function agent-shell-completion-mode "agent-shell-completion")
 (declare-function agent-shell-yank-dwim "agent-shell")
 
+(defvar-local agent-shell-viewport--clean-up t)
+
 (defvar agent-shell-header-style)
 (defvar agent-shell-prefer-viewport-interaction)
 (defvar agent-shell-viewport-dismiss-on-send)
@@ -1488,8 +1490,6 @@ on current major mode."
                                                                  (:mode . ,mode-binding)
                                                                  (:thought-level . ,thought-level-binding))))))
       (setq-local header-line-format header))))
-
-(defvar-local agent-shell-viewport--clean-up t)
 
 (cl-defun agent-shell-viewport--shell-buffer (&optional viewport-buffer)
   "Get the shell buffer associated with VIEWPORT-BUFFER.
