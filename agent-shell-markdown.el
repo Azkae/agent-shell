@@ -968,13 +968,13 @@ browser\", and hovering shows \"Open in browser\"."
          (link-map (agent-shell-markdown--make-ret-binding-map open-action)))
     (add-face-text-property start end 'agent-shell-markdown-link)
     (put-text-property start end 'keymap link-map)
-    (put-text-property start end 'cursor-sensor-functions
-                       (agent-shell-markdown--make-hint-sensor
-                        (lambda ()
-                          (agent-shell-markdown--action-hint
-                           :action open-action
-                           :keymap link-map
-                           :verb (agent-shell-markdown--link-verb url verb)))))
+    (agent-shell-markdown--put-hint-sensor
+     start end
+     (lambda ()
+       (agent-shell-markdown--action-hint
+        :action open-action
+        :keymap link-map
+        :verb (agent-shell-markdown--link-verb url verb))))
     ;; The mouse gets the same wording without a key in it, resolved on
     ;; hover like the echoed hint is.
     (put-text-property start end 'help-echo
@@ -1237,12 +1237,12 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                   (put-text-property markup-start end 'keymap image-keymap)
                   ;; Nothing about a displayed image says it's actionable, so
                   ;; echo what its keys do as the cursor enters.
-                  (put-text-property markup-start end 'cursor-sensor-functions
-                                     (agent-shell-markdown--make-hint-sensor
-                                      (lambda ()
-                                        (agent-shell-markdown--image-hint
-                                         :action open-action
-                                         :keymap image-keymap))))
+                  (agent-shell-markdown--put-hint-sensor
+                   markup-start end
+                   (lambda ()
+                     (agent-shell-markdown--image-hint
+                      :action open-action
+                      :keymap image-keymap)))
                   ;; The mouse gets the same wording without a key in it.
                   ;; Resizing is left out: it's keys-only.
                   (put-text-property markup-start end 'help-echo "Open image")
@@ -1327,12 +1327,12 @@ renders the image in place of that text."
                 (put-text-property path-start path-end 'keymap image-keymap)
                 ;; Nothing about a displayed image says it's actionable, so
                 ;; echo what its keys do as the cursor enters.
-                (put-text-property path-start path-end 'cursor-sensor-functions
-                                   (agent-shell-markdown--make-hint-sensor
-                                    (lambda ()
-                                      (agent-shell-markdown--image-hint
-                                       :action open-action
-                                       :keymap image-keymap))))
+                (agent-shell-markdown--put-hint-sensor
+                 path-start path-end
+                 (lambda ()
+                   (agent-shell-markdown--image-hint
+                    :action open-action
+                    :keymap image-keymap)))
                 ;; The mouse gets the same wording without a key in it.
                 ;; Resizing is left out: it's keys-only.
                 (put-text-property path-start path-end 'help-echo "Open image")
@@ -1620,7 +1620,11 @@ with `emacs-lisp-mode' face properties on the body and a
                                :keymap label-map
                                :verb "copy")))
                            'agent-shell-markdown-frozen t
-                           'rear-nonsticky '(agent-shell-markdown-frozen)
+                           ;; `cursor-sensor-functions' included so the
+                           ;; hint stops at the label rather than showing
+                           ;; on the character after it.
+                           'rear-nonsticky '(agent-shell-markdown-frozen
+                                             cursor-sensor-functions)
                            'line-prefix prefix
                            'wrap-prefix prefix))
                    ;; Top vpad `\\n' + label + middle vpad `\\n' + a
@@ -3130,7 +3134,11 @@ rendered region from inheriting either of our two properties."
        :start table-start :end end
        :property 'cursor-sensor-functions
        :value (agent-shell-markdown--make-hint-sensor
-               #'agent-shell-markdown--table-hint)))))
+               #'agent-shell-markdown--table-hint))
+      ;; Stops both the table's hint and a cell's link hint at their last
+      ;; character, rather than answering one position past it.
+      (agent-shell-markdown--add-rear-nonsticky
+       table-start end 'cursor-sensor-functions))))
 
 (defun agent-shell-markdown-rerender-tables ()
   "Re-lay out tables whose stored width no longer matches the display.
@@ -4133,6 +4141,39 @@ block's label."
   (when-let* ((key (agent-shell-markdown--action-key :action action
                                                      :keymap keymap)))
     (format "Press %s to %s" key verb)))
+
+(defun agent-shell-markdown--put-hint-sensor (start end hint)
+  "Echo HINT as the cursor enters [START, END).
+
+Puts HINT's sensor (see `agent-shell-markdown--make-hint-sensor') and
+marks `cursor-sensor-functions' rear-nonsticky across the span, which
+is what stops the hint at the span's last character.
+
+`cursor-sensor' reads the property with `get-pos-property' before
+falling back to `get-char-property', and `get-pos-property' reports
+what text inserted at a position would inherit rather than what sits
+there.  A sticky value therefore still answers one position past the
+end, showing a link's hint while point is on the space after it."
+  (put-text-property start end 'cursor-sensor-functions
+                     (agent-shell-markdown--make-hint-sensor hint))
+  (agent-shell-markdown--add-rear-nonsticky start end 'cursor-sensor-functions))
+
+(defun agent-shell-markdown--add-rear-nonsticky (start end property)
+  "Mark PROPERTY rear-nonsticky between START and END.
+
+Adds to whatever `rear-nonsticky' is already there rather than
+replacing it, the span typically carrying others (a table's own, say)
+whose stickiness would otherwise be dropped."
+  (let ((pos start))
+    (while (< pos end)
+      (let ((next (next-single-property-change pos 'rear-nonsticky nil end))
+            (sticky (get-text-property pos 'rear-nonsticky)))
+        ;; `t' already means every property is rear-nonsticky.
+        (unless (eq sticky t)
+          (put-text-property pos next 'rear-nonsticky
+                             (cons property
+                                   (delq property (copy-sequence sticky)))))
+        (setq pos next)))))
 
 (defun agent-shell-markdown--make-hint-sensor (hint)
   "Return a `cursor-sensor-functions' value echoing HINT on entry.

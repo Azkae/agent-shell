@@ -290,6 +290,38 @@ streaming **not bold**" nil)))))
                    ("docs" (agent-shell-markdown-link))
                    (" please" nil)))))
 
+(ert-deftest agent-shell-markdown-hint-stops-at-end-of-what-it-describes ()
+  "A hint answers on its own text and not on the character after it.
+
+`cursor-sensor' reads `cursor-sensor-functions' with
+`get-pos-property' before falling back to `get-char-property', and
+`get-pos-property' reports what text inserted at a position would
+inherit rather than what sits there.  Unless the span is
+rear-nonsticky the hint still answers one position past its end, so a
+link's \"Press RET to open in browser\" shows while point sits on the
+space after the link."
+  (with-temp-buffer
+    (insert "see [wool.com](https://wool.com/x) ok\n\n"
+            "| A | L |\n|---|---|\n| x | [j.com](https://j.com/y) |\n\n"
+            "```elisp\n(hi)\n```\n")
+    (agent-shell-markdown-replace-markup :force t)
+    (let ((pos (point-min))
+          (spans 0))
+      (while (setq pos (text-property-not-all
+                        pos (point-max) 'cursor-sensor-functions nil))
+        (let ((end (or (next-single-property-change pos 'cursor-sensor-functions)
+                       (point-max))))
+          (setq spans (1+ spans))
+          ;; Reaches its own first character.
+          (should (or (get-pos-property pos 'cursor-sensor-functions)
+                      (get-char-property pos 'cursor-sensor-functions)))
+          ;; ...and doesn't leak past its last.  Checked with
+          ;; `get-pos-property' alone: `get-char-property' there would
+          ;; report whatever span comes next, which is legitimate.
+          (should-not (get-pos-property end 'cursor-sensor-functions))
+          (setq pos end)))
+      (should (> spans 0)))))
+
 (ert-deftest agent-shell-markdown-convert-link-with-balanced-parens ()
   "A bare destination may carry balanced parens, as Wikipedia URLs do.
 
