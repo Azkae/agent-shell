@@ -2373,52 +2373,22 @@ after" nil)))))
     (should alice-pos)
     (should (eq 'agent-shell-markdown-bold (get-text-property alice-pos 'face s)))))
 
-(ert-deftest agent-shell-markdown-table-hints-cell-navigation ()
-  ;; A rendered table gives no sign its cells are navigable, so entering
-  ;; it echoes the keys `agent-shell-markdown-table-map' binds.  The hint
-  ;; is derived, so rebinding the map re-words it.
-  (let ((agent-shell-markdown-table-map (copy-keymap agent-shell-markdown-table-map))
-        (echoed nil))
-    (cl-letf (((symbol-function 'message)
-               (lambda (format-string &rest args)
-                 (setq echoed (apply #'format format-string args)))))
-      (let ((rendered (agent-shell-markdown-convert "| A | B |
-|---|---|
-| 1 | 2 |")))
-        (should (eq agent-shell-markdown-table-map
-                    (get-text-property 0 'keymap rendered)))
-        (funcall (seq-first (get-text-property 0 'cursor-sensor-functions rendered))
-                 nil nil 'entered)
-        (should (equal "Press TAB/<backtab> to move between cells" echoed)))
-      (define-key agent-shell-markdown-table-map (kbd "TAB") nil t)
-      (define-key agent-shell-markdown-table-map (kbd "<backtab>") nil t)
-      (define-key agent-shell-markdown-table-map (kbd "C-c C-n")
-                  #'agent-shell-markdown-table-next-cell)
-      (setq echoed nil)
-      (funcall (seq-first (get-text-property
-                           0 'cursor-sensor-functions
-                           (agent-shell-markdown-convert "| A | B |
-|---|---|
-| 1 | 2 |")))
-               nil nil 'entered)
-      (should (equal "Press C-c C-n to move between cells" echoed)))))
-
 (ert-deftest agent-shell-markdown-table-leaves-cell-link-keys-alone ()
-  ;; Cells hold whatever the inline passes rendered, links included.  The
-  ;; table's keymap fills in around them rather than over them, so RET
-  ;; still opens a link sitting in a cell (and its own hint survives).
+  ;; Cells hold whatever the inline passes rendered, links included.  A
+  ;; table claims no keys and echoes no hint of its own (item navigation
+  ;; walks its cells like any other item), so a link sitting in a cell
+  ;; keeps both: RET opens it, and entering it says so.
   (let ((rendered (agent-shell-markdown-convert "| A | [docs](https://example.com) |
 |---|---|
 | 1 | 2 |"))
         (echoed nil))
     (let ((link-start (string-match "docs" (substring-no-properties rendered))))
       (should link-start)
-      ;; The border char before the link carries the table's map...
-      (should (eq agent-shell-markdown-table-map
-                  (get-text-property 0 'keymap rendered)))
-      ;; ...while the link keeps its own, opening rather than navigating.
-      (should-not (eq agent-shell-markdown-table-map
-                      (get-text-property link-start 'keymap rendered)))
+      ;; The border char before the link carries neither...
+      (should-not (get-text-property 0 'keymap rendered))
+      (should-not (get-text-property 0 'cursor-sensor-functions rendered))
+      ;; ...while the link keeps its own, opening the URL.
+      (should (get-text-property link-start 'keymap rendered))
       (cl-letf (((symbol-function 'message)
                  (lambda (format-string &rest args)
                    (setq echoed (apply #'format format-string args)))))
@@ -3124,6 +3094,101 @@ after" nil)))))
         ;; The continuation line "longer description" is NOT a cell.
         (should-error (agent-shell-markdown-table-next-cell) :type 'user-error)))))
 
+(ert-deftest agent-shell-markdown-table-entry-position-resolves-from-outside-only ()
+  ;; A table is entered at its first cell, so a position inside one
+  ;; resolves there.  Coming from inside that same table it doesn't:
+  ;; navigation walks its cells and their links one by one.
+  (with-temp-buffer
+    (insert "before
+
+| A | B |
+|---|---|
+| 1 | see [docs](https://example.com) |
+")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    (should (search-forward "A"))
+    (let ((first-cell (match-beginning 0))
+          (outside (point-min)))
+      (should (search-forward "docs"))
+      (let ((link (match-beginning 0)))
+        (should (eq first-cell
+                    (agent-shell-markdown-table--entry-position
+                     :position link :from outside)))
+        (should (eq link
+                    (agent-shell-markdown-table--entry-position
+                     :position link :from first-cell)))
+        ;; A position outside any table is nobody's entry point.
+        (should (eq outside
+                    (agent-shell-markdown-table--entry-position
+                     :position outside :from link)))))))
+
+(ert-deftest agent-shell-markdown-table-first-cell-returns-to-entry-point ()
+  (with-temp-buffer
+    (insert "| A | B |
+|---|---|
+| 1 | 2 |
+")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    (should (search-forward "A"))
+    ;; Any position in the table resolves to its first cell.
+    (let ((first-cell (match-beginning 0)))
+      (should (search-forward "2"))
+      (goto-char (match-beginning 0))
+      (should (eq first-cell (agent-shell-markdown-table--first-cell (point)))))
+    ;; Outside a table there's no cell to resolve to.
+    (goto-char (point-max))
+    (should-not (agent-shell-markdown-table--first-cell (point)))))
+
+(ert-deftest agent-shell-markdown-visible-search-finds-nearest-table-cell ()
+  ;; Cell starts are what item navigation searches for to find a table.
+  (with-temp-buffer
+    (insert "before
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+after
+")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-min))
+    ;; Forward from outside, the next cell is the table's first one.
+    (should (eq (save-excursion
+                  (should (search-forward "A"))
+                  (match-beginning 0))
+                (agent-shell-markdown--search-visible
+                 :property 'agent-shell-markdown-table-cell-start)))
+    (goto-char (point-max))
+    ;; Backward from outside, it's the last one (callers resolve it to
+    ;; the first with `agent-shell-markdown-table--first-cell').
+    (should (eq (save-excursion
+                  (goto-char (point-min))
+                  (should (search-forward "2"))
+                  (match-beginning 0))
+                (agent-shell-markdown--search-visible
+                 :property 'agent-shell-markdown-table-cell-start
+                 :backwards t)))))
+
+(ert-deftest agent-shell-markdown-visible-search-skips-hidden-table ()
+  ;; A table inside collapsed text is text nothing shows, so navigation
+  ;; doesn't enter it.
+  (with-temp-buffer
+    (insert "| A | B |
+|---|---|
+| 1 | 2 |
+")
+    (agent-shell-markdown-replace-markup)
+    (put-text-property (point-min) (point-max) 'invisible t)
+    (goto-char (point-min))
+    (should-not (agent-shell-markdown--search-visible
+                 :property 'agent-shell-markdown-table-cell-start))
+    (goto-char (point-max))
+    (should-not (agent-shell-markdown--search-visible
+                 :property 'agent-shell-markdown-table-cell-start
+                 :backwards t))))
+
 (ert-deftest agent-shell-markdown-table-next-cell-errors-outside-table ()
   (with-temp-buffer
     (insert "not a table at all")
@@ -3135,12 +3200,13 @@ after" nil)))))
   "A link in a cell keeps its keymap when later rows stream in.
 
 The table re-renders from its stashed source on each new row, carrying
-the properties at its start position across the delete+insert.  Its own
-`keymap' sits there from the previous pass, so carrying it would spread
-the cell-navigation map over every cell and take RET away from the
-links (see `agent-shell-markdown--carry-properties').
+the properties at its start position across the delete+insert.  A
+link's `keymap' can sit there, so carrying it would spread that one
+link's map over every cell (see
+`agent-shell-markdown--carry-properties').
 
-Navigation is unaffected: plain cell text still answers TAB."
+Plain cell text keeps no keymap of its own, leaving the buffer's own
+keys to navigate it."
   (with-temp-buffer
     (insert "| Bag | Link |\n|---|---|\n| Wool | [wool.com](https://wool.com/x) |\n")
     (agent-shell-markdown-replace-markup)
@@ -3154,9 +3220,7 @@ Navigation is unaffected: plain cell text still answers TAB."
                           (kbd "RET"))))
     (goto-char (point-min))
     (should (search-forward "Wool" nil t))
-    (should (eq #'agent-shell-markdown-table-next-cell
-                (lookup-key (get-text-property (match-beginning 0) 'keymap)
-                            (kbd "TAB"))))))
+    (should-not (get-text-property (match-beginning 0) 'keymap))))
 
 (ert-deftest agent-shell-markdown-convert-table-in-fenced-block-untouched ()
   ;; A table inside a fenced block stays untouched (source-block body

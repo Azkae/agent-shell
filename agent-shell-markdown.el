@@ -202,30 +202,6 @@ When nil, fall back to ASCII pipes and dashes.")
 (defvar agent-shell-markdown-table-zebra-stripe t
   "When non-nil, alternate row backgrounds in tables for readability.")
 
-(defvar agent-shell-markdown-table-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "TAB") #'agent-shell-markdown-table-next-cell)
-    (define-key map (kbd "<backtab>") #'agent-shell-markdown-table-previous-cell)
-    map)
-  "Keymap active on a rendered markdown table.
-
-Applied as a `keymap' text property by
-`agent-shell-markdown--render-table', so cell navigation works wherever
-a table renders rather than only where a host wires it up
-\(`agent-shell-next-item' and the viewport's equivalent dispatch to the
-same commands, for the keys they own).
-
-The keys are named in the hint a table echoes on entry (see
-`agent-shell-markdown--table-hint'), so rebinding one re-words the
-hint too:
-
-  (with-eval-after-load \\='agent-shell-markdown
-    (define-key agent-shell-markdown-table-map
-                (kbd \"C-c C-n\") #\\='agent-shell-markdown-table-next-cell))
-
-Rebind with `define-key' rather than `setq': already rendered tables
-hold on to this keymap object.")
-
 (defvar agent-shell-markdown-list-bullets '("•" "◦")
   "Bullet glyphs for unordered lists, cycled by nesting depth.
 The Nth entry renders at depth N, wrapping past the end, so the
@@ -3047,23 +3023,6 @@ allocated narrower than its natural total, see
             (setq col (1+ col))))))
     min-widths))
 
-(cl-defun agent-shell-markdown--fill-text-property (&key start end property value)
-  "Put PROPERTY VALUE between START and END, skipping chars that carry it.
-
-Leaves the chars that already have PROPERTY alone, so a blanket
-property can be laid over a region holding more specific ones without
-taking them out (a table filling in `keymap' around the links rendered
-inside its cells, say).
-
-For example, over \"ab\" with `keymap' already on \"a\", only \"b\"
-comes away with VALUE."
-  (let ((pos start))
-    (while (< pos end)
-      (let ((next (next-single-property-change pos property nil end)))
-        (unless (get-text-property pos property)
-          (put-text-property pos next property value))
-        (setq pos next)))))
-
 (defun agent-shell-markdown--render-table (table)
   "Render TABLE by replacing [:start, :end] with the rendered :source.
 
@@ -3122,21 +3081,11 @@ rendered region from inheriting either of our two properties."
       ;; follow-up pass and would otherwise render mostly greyed out.
       (agent-shell-markdown--mirror-face-to-font-lock-face table-start end)
       (put-text-property table-start end 'fontified t)
-      ;; Cells carry whatever the inline passes left there, links and
-      ;; images included, so fill in around their `keymap' and
-      ;; `cursor-sensor-functions' rather than over them: navigation
-      ;; reaches the rest of the table without taking RET away from a
-      ;; link sitting in a cell.
-      (agent-shell-markdown--fill-text-property
-       :start table-start :end end
-       :property 'keymap :value agent-shell-markdown-table-map)
-      (agent-shell-markdown--fill-text-property
-       :start table-start :end end
-       :property 'cursor-sensor-functions
-       :value (agent-shell-markdown--make-hint-sensor
-               #'agent-shell-markdown--table-hint))
-      ;; Stops both the table's hint and a cell's link hint at their last
-      ;; character, rather than answering one position past it.
+      ;; A table echoes no hint of its own, but the blanket
+      ;; `rear-nonsticky' above replaced what a link rendered inside a
+      ;; cell left there.  Re-adding `cursor-sensor-functions' is what
+      ;; stops that link's hint at its last character, rather than
+      ;; answering one position past it.
       (agent-shell-markdown--add-rear-nonsticky
        table-start end 'cursor-sensor-functions))))
 
@@ -3579,8 +3528,7 @@ collapsed text are skipped, as for
 For example, in \"see docs and more\" where `docs' renders a link,
 returns the position of `docs'."
   (agent-shell-markdown--search-visible
-   :property 'agent-shell-markdown-url
-   :predicate #'identity))
+   :property 'agent-shell-markdown-url))
 
 (defun agent-shell-markdown--previous-visible-link ()
   "From point, return the start of the previous visible rendered link, or nil.
@@ -3588,7 +3536,6 @@ Skips links hidden inside collapsed text (see
 `agent-shell-markdown--next-visible-link')."
   (agent-shell-markdown--search-visible
    :property 'agent-shell-markdown-url
-   :predicate #'identity
    :backwards t))
 
 (defun agent-shell-markdown--next-visible-source-block ()
@@ -3602,8 +3549,7 @@ first line.  Blocks hidden inside collapsed text are skipped, as for
 For example, in a buffer holding one rendered \"python ⧉\" block,
 returns the position of its `⧉'."
   (agent-shell-markdown--search-visible
-   :property 'agent-shell-markdown-source-block-copy
-   :predicate #'identity))
+   :property 'agent-shell-markdown-source-block-copy))
 
 (defun agent-shell-markdown--previous-visible-source-block ()
   "From point, return the position of the previous visible source block, or nil.
@@ -3611,21 +3557,28 @@ Skips blocks hidden inside collapsed text (see
 `agent-shell-markdown--next-visible-source-block')."
   (agent-shell-markdown--search-visible
    :property 'agent-shell-markdown-source-block-copy
-   :predicate #'identity
    :backwards t))
 
-(cl-defun agent-shell-markdown--search-visible (&key property predicate backwards)
+(cl-defun agent-shell-markdown--search-visible (&key property (predicate #'identity) backwards)
   "From point, return the start of the nearest visible PROPERTY run, or nil.
 
 PREDICATE is called with the run's PROPERTY value and returns non-nil
-for a run worth stopping at.  Searches forward, or backwards when
-BACKWARDS is non-nil.  The run point is already on isn't a match, so
-repeated calls advance rather than sticking.  Runs whose start is
-`invisible' are skipped, being text nothing shows.
+for a run worth stopping at, defaulting to stopping at any run
+carrying PROPERTY.  Searches forward, or backwards when BACKWARDS is
+non-nil.  The run point is already on isn't a match, so repeated calls
+advance rather than sticking.  Runs whose start is `invisible' are
+skipped, being text nothing shows.
 
 For example, with PROPERTY `display' and a PREDICATE matching image
-values, returns the position of the next image."
+values, returns the position of the next image, and with PROPERTY
+`agent-shell-markdown-table-cell-start' alone the next table cell."
   (catch 'found
+    ;; Skipping an invisible run terminates because the search leaves
+    ;; point past the run it answered with (at its end going forward, at
+    ;; its start going backwards), so each pass has less buffer left to
+    ;; cover and eventually answers nil at either end.  Point moving is
+    ;; the whole of it: wrap the search in a `save-excursion' and the
+    ;; same run matches forever.
     (while t
       (let ((match (funcall (if backwards
                                 #'text-property-search-backward
@@ -3714,10 +3667,9 @@ block ids survive on the rendered output.
 The three that are ours but not obviously so must not be carried,
 since the first char's value would be spread uniformly across the
 re-rendered region: `font-lock-face' (e.g. a table border) greys out
-the per-cell styling, while `keymap' and `cursor-sensor-functions'
-(a table's own, from `agent-shell-markdown--fill-text-property')
-take RET and the hint away from a link rendered inside a cell.  Each
-is re-established after the insert anyway."
+the per-cell styling, while `keymap' and `cursor-sensor-functions' (a
+link's own, say) take RET and the hint away from a link rendered
+inside a cell.  Each is re-established after the insert anyway."
   (let ((props (text-properties-at pos))
         (carried nil))
     (while props
@@ -3960,44 +3912,56 @@ Inverse of `agent-shell-markdown-table-next-cell'."
   (interactive)
   (agent-shell-markdown-table--move-cell :backward))
 
-(defun agent-shell-markdown--table-hint ()
-  "Return the hint text a rendered table echoes as the cursor enters it.
-
-Names the keys `agent-shell-markdown-table-map' binds for moving
-between cells, or nil when it binds none.  Nothing about a rendered
-table says its cells are navigable, so the hint is what makes them
-discoverable.
-
-For example, this returns \"Press TAB/<backtab> to move between
-cells\" with the default bindings."
-  (when-let* ((keys (seq-keep (lambda (action)
-                                (agent-shell-markdown--action-key
-                                 :action action
-                                 :keymap agent-shell-markdown-table-map))
-                              (list #'agent-shell-markdown-table-next-cell
-                                    #'agent-shell-markdown-table-previous-cell))))
-    (format "Press %s to move between cells" (string-join keys "/"))))
-
 (defun agent-shell-markdown-table--move-cell (direction)
   "Move point to the next or previous cell in the table at point.
 DIRECTION is `:forward' or `:backward'.  Signals `user-error' when
-there's no cell in that direction."
-  (let* ((cells (agent-shell-markdown-table--cell-starts))
-         ;; Largest cell-start index whose position is <= point — the
-         ;; cell currently containing point.  -1 means point is before
-         ;; the first cell.  CELLS is sorted ascending so we just walk
-         ;; it tracking the last index that still satisfies the bound.
-         (point-pos (point))
-         (current -1)
-         (i 0))
-    (dolist (c cells)
-      (when (<= c point-pos)
-        (setq current i))
-      (setq i (1+ i)))
-    (let ((target (if (eq direction :forward) (1+ current) (1- current))))
-      (if (and cells (<= 0 target) (< target (length cells)))
-          (goto-char (nth target cells))
-        (user-error "No more cells left")))))
+there's no cell in that direction, that is at the table's edges (its
+last cell going forward, its first going backward) and outside a table."
+  (if-let* ((cells (agent-shell-markdown-table--cell-starts))
+            ;; Cells at or before point, the last of them being the one
+            ;; point is in.  None of them when point sits ahead of the
+            ;; first cell (on the table's top border, say), so
+            ;; `:forward' lands on that first cell.
+            (target (+ (seq-count (lambda (cell)
+                                    (<= cell (point)))
+                                  cells)
+                       (if (eq direction :forward) 0 -2)))
+            ((<= 0 target))
+            (position (nth target cells)))
+      (goto-char position)
+    (user-error "No more cells left")))
+
+(cl-defun agent-shell-markdown-table--entry-position (&key position from)
+  "Return where navigating to POSITION lands, with point coming FROM.
+
+That's the first cell of the table POSITION sits in, a table being
+entered at its first cell whatever part of one navigation found (a link
+rendered in its third cell, say).  POSITION comes back unchanged when
+it's outside any table, and when it's inside the same table as FROM,
+whose cells and the links in them navigation walks one by one.
+
+For example, with POSITION on a link in the last cell of a table,
+returns that table's first cell for a FROM ahead of the table, and the
+link itself for a FROM already inside it."
+  (or (when-let* ((table (save-excursion
+                           (goto-char position)
+                           (agent-shell-markdown-table--region-at-point)))
+                  ((not (and (<= (car table) from)
+                             (< from (cdr table))))))
+        (agent-shell-markdown-table--first-cell position))
+      position))
+
+(defun agent-shell-markdown-table--first-cell (position)
+  "Return the first navigable cell of the table at POSITION, or nil.
+Nil when POSITION isn't inside a rendered table.
+
+A table's entry point (see
+`agent-shell-markdown-table--entry-position'), and where
+`agent-shell-backward-up-item' returns point to from whichever cell
+navigation walked into."
+  (save-excursion
+    (goto-char position)
+    (seq-first (agent-shell-markdown-table--cell-starts))))
 
 (defun agent-shell-markdown-table--cell-starts ()
   "Return a sorted list of cell-start positions in the table at point.

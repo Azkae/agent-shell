@@ -5751,5 +5751,191 @@ shell is left working in a directory that was just deleted."
       (when (file-directory-p temp-dir)
         (delete-directory temp-dir t)))))
 
+(defmacro agent-shell-tests--with-rendered-shell (markdown &rest body)
+  "Render MARKDOWN in a temporary shell buffer and run BODY with point at start.
+
+Only the markdown items (links, images, source blocks and tables) are
+left navigable: prompts, blocks and permission buttons need a live
+shell, so item navigation finds none of them here."
+  (declare (indent 1) (debug t))
+  `(with-temp-buffer
+     (setq major-mode 'agent-shell-mode)
+     (insert ,markdown)
+     (agent-shell-markdown-replace-markup)
+     (goto-char (point-min))
+     (cl-letf (((symbol-function 'agent-shell--typing-at-prompt-p) #'ignore)
+               ((symbol-function 'comint-next-prompt) #'ignore)
+               ((symbol-function 'agent-shell-ui-forward-block) #'ignore)
+               ((symbol-function 'agent-shell-ui-backward-block) #'ignore)
+               ((symbol-function 'agent-shell-next-permission-button) #'ignore)
+               ((symbol-function 'agent-shell-previous-permission-button) #'ignore))
+       ,@body)))
+
+(ert-deftest agent-shell-next-item-walks-into-and-out-of-a-table ()
+  "Next item enters a table at its first cell, walks it, then moves on."
+  (agent-shell-tests--with-rendered-shell
+      "Intro [before](https://before.com/x)
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+Then [after](https://after.com/y)
+"
+    (agent-shell-next-item)
+    (should (looking-at-p "before"))
+    ;; The table is entered at its first cell, not at whatever part of it
+    ;; comes first.
+    (agent-shell-next-item)
+    (should (eq (char-after) ?A))
+    (agent-shell-next-item)
+    (should (eq (char-after) ?B))
+    (agent-shell-next-item)
+    (should (eq (char-after) ?1))
+    (agent-shell-next-item)
+    (should (eq (char-after) ?2))
+    ;; Past the last cell, navigation leaves the table.
+    (agent-shell-next-item)
+    (should (looking-at-p "after"))))
+
+(ert-deftest agent-shell-next-item-reaches-a-link-sitting-mid-cell ()
+  "Inside a table, a cell's link is an item of its own.
+
+Otherwise a link that doesn't start its cell is unreachable: navigation
+would step over it to the next cell, leaving nothing to press RET on."
+  (agent-shell-tests--with-rendered-shell
+      "| A | B |
+|---|---|
+| 1 | see [docs](https://docs.example.com) |
+
+Then [after](https://after.example.com)
+"
+    (should (search-forward "see"))
+    (goto-char (match-beginning 0))
+    (agent-shell-next-item)
+    (should (looking-at-p "docs"))
+    ;; Past the table's last item, navigation leaves it.
+    (agent-shell-next-item)
+    (should (looking-at-p "after"))
+    (agent-shell-previous-item)
+    (should (eq (char-after) ?A))))
+
+(ert-deftest agent-shell-next-item-leaves-a-table-with-a-prefix ()
+  "A prefix carries navigation past the table point is in.
+
+Only from inside one: outside, a table is entered deliberately, on its
+first cell, so there's nothing for the prefix to leave."
+  (agent-shell-tests--with-rendered-shell
+      "Intro [before](https://before.example.com)
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+Then [after](https://after.example.com)
+"
+    ;; From the first cell, rather than walking B, 1 and 2.
+    (should (search-forward "A"))
+    (goto-char (match-beginning 0))
+    (agent-shell-next-item t)
+    (should (looking-at-p "after"))
+    (agent-shell-previous-item)
+    (should (eq (char-after) ?A))
+    (agent-shell-previous-item t)
+    (should (looking-at-p "before"))
+    ;; Outside a table the prefix changes nothing.
+    (agent-shell-next-item t)
+    (should (eq (char-after) ?A))))
+
+(ert-deftest agent-shell-next-item-enters-a-table-ahead-of-its-links ()
+  "A link in a cell is reached by walking the table, not entered at directly."
+  (agent-shell-tests--with-rendered-shell
+      "| A | B |
+|---|---|
+| 1 | [two](https://two.com/x) |
+"
+    (agent-shell-next-item)
+    (should (eq (char-after) ?A))
+    (agent-shell-next-item)
+    (should (eq (char-after) ?B))
+    (agent-shell-next-item)
+    (should (eq (char-after) ?1))
+    (agent-shell-next-item)
+    (should (looking-at-p "two"))))
+
+(ert-deftest agent-shell-table-cells-claim-no-keys-of-their-own ()
+  "A rendered table leaves the buffer's keys alone.
+
+Cell navigation used to come from a keymap text property, which took
+precedence over `agent-shell-mode-map' and so kept TAB from ever
+reaching item navigation."
+  (agent-shell-tests--with-rendered-shell
+      "| A | [docs](https://example.com) |
+|---|---|
+| 1 | 2 |
+"
+    (use-local-map agent-shell-mode-map)
+    (should (search-forward "A"))
+    (goto-char (match-beginning 0))
+    (should-not (get-text-property (point) 'keymap))
+    (should (eq #'agent-shell-next-item (key-binding (kbd "TAB"))))
+    ;; A link in a cell still keeps its own.
+    (should (search-forward "docs"))
+    (goto-char (match-beginning 0))
+    (should (get-text-property (point) 'keymap))))
+
+(ert-deftest agent-shell-backward-up-item-returns-to-a-table-s-first-cell ()
+  (agent-shell-tests--with-rendered-shell
+      "| A | B |
+|---|---|
+| 1 | 2 |
+"
+    (should (search-forward "A"))
+    (let ((first-cell (match-beginning 0)))
+      (should (search-forward "2"))
+      (goto-char (match-beginning 0))
+      (agent-shell-backward-up-item)
+      (should (eq first-cell (point))))
+    ;; Outside a table the key keeps its usual meaning, which at top
+    ;; level is `backward-up-list' reporting there's nothing to go up to.
+    (goto-char (point-max))
+    (should-error (agent-shell-backward-up-item) :type 'user-error)))
+
+(ert-deftest agent-shell-previous-item-enters-a-table-at-its-first-cell ()
+  "Previous item enters the table above at its first cell, then leaves it."
+  (agent-shell-tests--with-rendered-shell
+      "Intro [before](https://before.com/x)
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+Then [after](https://after.com/y)
+"
+    (should (search-forward "after"))
+    (goto-char (match-beginning 0))
+    (agent-shell-previous-item)
+    (should (eq (char-after) ?A))
+    ;; Ahead of the first cell there's nowhere left in the table to go,
+    ;; so navigation leaves it.
+    (agent-shell-previous-item)
+    (should (looking-at-p "before"))))
+
+(ert-deftest agent-shell-previous-item-walks-cells-in-reverse ()
+  "Previous item walks back through the cells of the table point is in."
+  (agent-shell-tests--with-rendered-shell
+      "| A | B |
+|---|---|
+| 1 | 2 |
+"
+    (should (search-forward "2"))
+    (goto-char (match-beginning 0))
+    (agent-shell-previous-item)
+    (should (eq (char-after) ?1))
+    (agent-shell-previous-item)
+    (should (eq (char-after) ?B))
+    (agent-shell-previous-item)
+    (should (eq (char-after) ?A))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

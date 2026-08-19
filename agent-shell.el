@@ -2117,6 +2117,7 @@ copy depending on selection direction."
   "<backtab>" #'agent-shell-previous-item
   "n" #'agent-shell-next-item
   "p" #'agent-shell-previous-item
+  "C-M-u" #'agent-shell-backward-up-item
   "r" #'agent-shell-quote-region
   "+" #'agent-shell-image-scale-increase
   "-" #'agent-shell-image-scale-decrease
@@ -5044,16 +5045,24 @@ APPEND and CREATE-NEW control update behavior."
   (acp-reset-logs :client (map-elt (agent-shell--state) :client))
   (message "Logs reset"))
 
-(defun agent-shell-next-item ()
+(defun agent-shell-next-item (&optional leave-table)
   "Go to next item.
 
 Could be a prompt, an expandable item, a displayed image, a rendered
-link, or a source block.  When point is inside a rendered markdown
-table, navigate to the next table cell instead.
+link, a source block, or a rendered markdown table.  A table is entered
+at its first cell, then walked one cell (and one link inside a cell) at
+a time, moving on to the item after it once past its last one.
+
+With prefix LEAVE-TABLE, carry on from the end of the table point is
+in, landing on the item after it rather than on its next cell.  A wide
+table is many items to walk, and outside one there's nothing to leave,
+so the prefix does nothing there: a table is always entered
+deliberately, on its first cell.
+
 If point is at the input prompt and a character key was pressed,
 insert the character instead."
   (declare (modes agent-shell-mode))
-  (interactive)
+  (interactive "P")
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
   (cond
@@ -5062,12 +5071,15 @@ insert the character instead."
    ((agent-shell--typing-at-prompt-p)
     ;; At prompt, insert character.
     (self-insert-command 1))
-   ;; Inside a rendered markdown table — navigate cells.
-   ((get-text-property (point) 'agent-shell-markdown-table-source)
-    (agent-shell-markdown-table-next-cell))
    (t
-    ;; Otherwise navigate.
-    (let* ((prompt-pos (save-mark-and-excursion
+    ;; Otherwise navigate, from the end of the table point is leaving
+    ;; when there's a prefix: its own cells and the links in them are
+    ;; behind the search from there, so it lands past the table.
+    (when-let* ((leave-table)
+                (table (agent-shell-markdown-table--region-at-point)))
+      (goto-char (cdr table)))
+    (let* ((current-pos (point))
+           (prompt-pos (save-mark-and-excursion
                          (when (comint-next-prompt 1)
                            (point))))
            (block-pos (save-mark-and-excursion
@@ -5080,28 +5092,44 @@ insert the character instead."
                        (agent-shell-markdown--next-visible-link)))
            (source-block-pos (save-mark-and-excursion
                                (agent-shell-markdown--next-visible-source-block)))
-           (next-pos (apply #'min (delq nil (list prompt-pos
-                                                  block-pos
-                                                  button-pos
-                                                  image-pos
-                                                  link-pos
-                                                  source-block-pos)))))
+           (table-pos (save-mark-and-excursion
+                        (agent-shell-markdown--search-visible
+                         :property 'agent-shell-markdown-table-cell-start)))
+           (positions (seq-filter (lambda (position)
+                                    (> position current-pos))
+                                  (seq-map (lambda (position)
+                                             (agent-shell-markdown-table--entry-position
+                                              :position position :from current-pos))
+                                           (delq nil (list prompt-pos
+                                                           block-pos
+                                                           button-pos
+                                                           image-pos
+                                                           link-pos
+                                                           source-block-pos
+                                                           table-pos)))))
+           (next-pos (when positions
+                       (seq-min positions))))
       (when next-pos
         (deactivate-mark)
         (goto-char next-pos)
         (when (eq next-pos prompt-pos)
           (comint-skip-prompt)))))))
 
-(defun agent-shell-previous-item ()
+(defun agent-shell-previous-item (&optional leave-table)
   "Go to previous item.
 
 Could be a prompt, an expandable item, a displayed image, a rendered
-link, or a source block.  When point is inside a rendered markdown
-table, navigate to the previous table cell instead.
+link, a source block, or a rendered markdown table.  A table above is
+entered at its first cell, so navigating again from there leaves it for
+the item above it.
+
+With prefix LEAVE-TABLE, carry on from the start of the table point is
+in, as `agent-shell-next-item' does from its end.
+
 If point is at the input prompt and a character key was pressed,
 insert the character instead."
   (declare (modes agent-shell-mode))
-  (interactive)
+  (interactive "P")
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
   (cond
@@ -5110,51 +5138,64 @@ insert the character instead."
    ((agent-shell--typing-at-prompt-p)
     ;; At prompt, insert character.
     (self-insert-command 1))
-   ;; Inside a rendered markdown table — navigate cells.
-   ((get-text-property (point) 'agent-shell-markdown-table-source)
-    (agent-shell-markdown-table-previous-cell))
    (t
-    ;; Otherwise navigate.
+    ;; Otherwise navigate, from the start of the table point is leaving
+    ;; when there's a prefix, as `agent-shell-next-item' does from its
+    ;; end.
+    (when-let* ((leave-table)
+                (table (agent-shell-markdown-table--region-at-point)))
+      (goto-char (car table)))
     (let* ((current-pos (point))
            (prompt-pos (save-mark-and-excursion
                          (when (comint-next-prompt (- 1))
-                           (let ((pos (point)))
-                             (when (< pos current-pos)
-                               pos)))))
+                           (point))))
            (block-pos (save-mark-and-excursion
-                        (let ((pos (agent-shell-ui-backward-block)))
-                          (when (and pos (< pos current-pos))
-                            pos))))
+                        (agent-shell-ui-backward-block)))
            (button-pos (save-mark-and-excursion
-                         (let ((pos (agent-shell-previous-permission-button)))
-                           (when (and pos (< pos current-pos))
-                             pos))))
+                         (agent-shell-previous-permission-button)))
            (image-pos (save-mark-and-excursion
-                        (when-let* ((pos (agent-shell-markdown--previous-visible-image))
-                                    ((< pos current-pos)))
-                          pos)))
+                        (agent-shell-markdown--previous-visible-image)))
            (link-pos (save-mark-and-excursion
-                       (when-let* ((pos (agent-shell-markdown--previous-visible-link))
-                                   ((< pos current-pos)))
-                         pos)))
+                       (agent-shell-markdown--previous-visible-link)))
            (source-block-pos
             (save-mark-and-excursion
-              (when-let* ((pos (agent-shell-markdown--previous-visible-source-block))
-                          ((< pos current-pos)))
-                pos)))
-           (positions (delq nil (list prompt-pos
-                                      block-pos
-                                      button-pos
-                                      image-pos
-                                      link-pos
-                                      source-block-pos)))
+              (agent-shell-markdown--previous-visible-source-block)))
+           (table-pos (save-mark-and-excursion
+                        (agent-shell-markdown--search-visible
+                         :property 'agent-shell-markdown-table-cell-start
+                         :backwards t)))
+           (positions (seq-filter (lambda (position)
+                                    (< position current-pos))
+                                  (seq-map (lambda (position)
+                                             (agent-shell-markdown-table--entry-position
+                                              :position position :from current-pos))
+                                           (delq nil (list prompt-pos
+                                                           block-pos
+                                                           button-pos
+                                                           image-pos
+                                                           link-pos
+                                                           source-block-pos
+                                                           table-pos)))))
            (next-pos (when positions
-                       (apply #'max positions))))
+                       (seq-max positions))))
       (when next-pos
         (deactivate-mark)
         (goto-char next-pos)
         (when (eq next-pos prompt-pos)
           (comint-skip-prompt)))))))
+
+(defun agent-shell-backward-up-item ()
+  "Go to the start of the item point navigated into.
+
+In a rendered markdown table that's its first cell, whichever cell
+`agent-shell-next-item' walked point into, so it is to a table what
+`backward-up-list' is to a list.  Anywhere else it runs
+`backward-up-list' itself, leaving the key its usual meaning while
+composing a prompt."
+  (interactive)
+  (if-let* ((position (agent-shell-markdown-table--first-cell (point))))
+      (goto-char position)
+    (call-interactively #'backward-up-list)))
 
 (cl-defun agent-shell-make-environment-variables (&rest vars &key inherit-env load-env &allow-other-keys)
   "Return VARS in the form expected by `process-environment'.
@@ -10123,7 +10164,8 @@ with ON-SUCCESS function."
   "Transient menu for `agent-shell' commands."
   [["Navigation"
     ("<tab>" "Next item" agent-shell-next-item :transient t)
-    ("<backtab>" "Previous item" agent-shell-previous-item :transient t)]
+    ("<backtab>" "Previous item" agent-shell-previous-item :transient t)
+    ("C-M-u" "Up to table's first cell" agent-shell-backward-up-item :transient t)]
    ["Insert"
     ("!" "Shell command" agent-shell-insert-shell-command-output :transient t)
     ("@" "File" agent-shell-insert-file :transient t)
