@@ -145,6 +145,18 @@ so this marks whitespace the prompt overlay must not swallow."
               (and (facep f) (eq (face-attribute f :extend nil t) t)))
             (if (proper-list-p face) face (list face))))
 
+(defun agent-shell-chat--marker-starts-line-p (pos)
+  "Return non-nil when the end-of-prompt marker ending at POS starts its line.
+POS is just past the marker's last character.  An interrupted turn
+appends its notice right before the marker, leaving the marker mid-line,
+so a label following it needs a full pad rather than a single newline."
+  (let ((beg pos))
+    (while (and (> beg (point-min))
+                (get-text-property (1- beg) 'shell-maker--marker))
+      (setq beg (1- beg)))
+    (or (= beg (point-min))
+        (eq (char-before beg) ?\n))))
+
 (defun agent-shell-chat--overlay-in (beg end category)
   "Return an existing label overlay of CATEGORY between BEG and END, or nil."
   (seq-find (lambda (overlay) (eq (overlay-get overlay 'category) category))
@@ -173,7 +185,18 @@ span changed), otherwise creates one."
     (map-do (lambda (property value)
               (unless (equal (overlay-get overlay property) value)
                 (overlay-put overlay property value)))
-            props)))
+            props)
+    overlay))
+
+(defun agent-shell-chat--gc-overlays (categories kept)
+  "Delete label overlays of CATEGORIES not in KEPT (a list of overlays).
+Removes stale labels whose prompt run or marker was deleted (e.g. a live
+prompt a `session/push' removed), which relabeling would not otherwise
+reach."
+  (dolist (overlay (overlays-in (point-min) (point-max)))
+    (when (and (memq (overlay-get overlay 'category) categories)
+               (not (memq overlay kept)))
+      (delete-overlay overlay))))
 
 (defun agent-shell-chat--prompt-runs ()
   "Return each prompt-face run in the current buffer as a list of (BEG . END).
@@ -212,7 +235,9 @@ The overlay swallows the blank lines around the prompt so the label is
 padded by exactly one blank line on each side.  Updates in place."
   (save-excursion
     (let ((runs (agent-shell-chat--prompt-runs))
-          (prev-end nil))
+          (prev-end nil)
+          (pending-lead nil)
+          (kept nil))
       (while runs
         (let* ((pos (caar runs))
                (run-end (cdar runs))
@@ -261,7 +286,14 @@ padded by exactly one blank line on each side.  Updates in place."
                ;; `end-of-visual-line').  The other cases already leave a
                ;; visible terminator (a stale prompt, marker, or panel newline).
                (keep-term (and (not stacked) (not after-marker) (not after-panel)
-                               (< raw-start pos) (eq (char-after raw-start) ?\n)))
+                               (< raw-start pos) (eq (char-after raw-start) ?\n)
+                               ;; Only a visible terminator ends the content
+                               ;; line.  A collapsed fragment hides its own
+                               ;; trailing newline, and leaving that outside
+                               ;; the label spends the single leading newline
+                               ;; ending the line instead of separating it,
+                               ;; butting the label against the content.
+                               (not (get-char-property raw-start 'invisible))))
                (start (if keep-term (1+ raw-start) raw-start))
                ;; The live prompt keeps its in-progress input (never swallow
                ;; it); a submitted turn swallows the input's leading blank lines.
@@ -280,13 +312,22 @@ padded by exactly one blank line on each side.  Updates in place."
                ;; renders one blank line when `start' is mid-line after content.
                ;; Several cases need fewer, to keep it at exactly one:
                (lead (cond
-                      ;; Directly stacked on the previous label (empty
-                      ;; submissions in a row): its trailing `pad' already
-                      ;; supplies the one blank line, so add none.
-                      (stacked "")
-                      ;; Directly after an (empty) agent response: the agent
-                      ;; label's trailing pad supplies the one blank line.
-                      (after-marker "")
+                      ;; Directly stacked on the previous prompt run (empty
+                      ;; submissions in a row).  That run is hidden (an empty
+                      ;; submission is unlabeled), so it emitted no pad to
+                      ;; separate this label: reuse the lead it would have
+                      ;; used, which keeps one blank line however many empty
+                      ;; submissions stack up.
+                      (stacked (or pending-lead ""))
+                      ;; Directly after an end-of-prompt marker: the response
+                      ;; between it and this prompt is empty, so it carries no
+                      ;; agent label whose pad would separate them.  A marker
+                      ;; starting its line needs one newline; a turn
+                      ;; interrupted mid-line (its notice sits right before the
+                      ;; marker) needs the full pad to end that line first.
+                      (after-marker (if (agent-shell-chat--marker-starts-line-p raw-start)
+                                        (propertize "\n" 'face 'default)
+                                      pad))
                       ;; After a code block panel: its tinted padding already
                       ;; separates the label, so one newline keeps exactly one.
                       (after-panel (propertize "\n" 'face 'default))
@@ -315,38 +356,46 @@ padded by exactly one blank line on each side.  Updates in place."
                         ;; A submitted turn: `Me', its input following as
                         ;; buffer text.
                         (t (concat lead me-label pad)))))
-          (agent-shell-chat--upsert-overlay
-           'agent-shell-chat-me pos run-end start end
-           ;; Render the label as a `before-string' (like the agent label) and
-           ;; hide the covered prompt with a `display' of \"\".  A `display'
-           ;; string is backed by the covered buffer positions, so vertical
-           ;; motion (`next-line'/`previous-line') lands the cursor on the
-           ;; label; a `before-string' is not, so the cursor skips it.  Empty
-           ;; `line-prefix'/`wrap-prefix' drop any tinted gutter inherited from
-           ;; the covered text.
-           (list (cons 'before-string before)
-                 (cons 'display "")
-                 (cons 'line-prefix "")
-                 (cons 'wrap-prefix "")))
+          (push
+           (agent-shell-chat--upsert-overlay
+            'agent-shell-chat-me pos run-end start end
+            ;; Render the label as a `before-string' (like the agent label) and
+            ;; hide the covered prompt with a `display' of \"\".  A `display'
+            ;; string is backed by the covered buffer positions, so vertical
+            ;; motion (`next-line'/`previous-line') lands the cursor on the
+            ;; label; a `before-string' is not, so the cursor skips it.  Empty
+            ;; `line-prefix'/`wrap-prefix' drop any tinted gutter inherited from
+            ;; the covered text.
+            (list (cons 'before-string before)
+                  (cons 'display "")
+                  (cons 'line-prefix "")
+                  (cons 'wrap-prefix "")))
+           kept)
           ;; Indent a submitted turn's input so it aligns with the response
           ;; body.  The live prompt (input flows after the marker) and empty
           ;; prompts have no input to indent.
-          (if (or blank live)
-              (when-let* ((stale (agent-shell-chat--overlay-in
-                                  end (1+ end) 'agent-shell-chat-me-input)))
-                (delete-overlay stale))
+          (unless (or blank live)
             ;; End at the input's last real character, not `input-end': the
             ;; agent label's `before-string' renders in the trailing newline
             ;; before the marker, and would inherit this `line-prefix'.
             (let ((input-last (save-excursion (goto-char input-end)
                                               (skip-chars-backward " \t\n")
                                               (point))))
-              (agent-shell-chat--upsert-overlay
-               'agent-shell-chat-me-input end input-last end input-last
-               (list (cons 'line-prefix agent-shell-chat--body-indent)
-                     (cons 'wrap-prefix agent-shell-chat--body-indent)))))
+              (push
+               (agent-shell-chat--upsert-overlay
+                'agent-shell-chat-me-input end input-last end input-last
+                (list (cons 'line-prefix agent-shell-chat--body-indent)
+                      (cons 'wrap-prefix agent-shell-chat--body-indent)))
+               kept)))
+          ;; A hidden label emits no pad of its own, so hand its lead to
+          ;; whichever label renders next.
+          (setq pending-lead (and (string-empty-p before) lead))
           (setq prev-end run-end)
-          (setq runs (cdr runs)))))))
+          (setq runs (cdr runs))))
+      ;; Drop stale labels whose prompt run was deleted (e.g. a live prompt a
+      ;; `session/push' removed) and which no upsert above reached.
+      (agent-shell-chat--gc-overlays
+       '(agent-shell-chat-me agent-shell-chat-me-input) kept))))
 
 (defun agent-shell-chat--label-responses ()
   "Overlay the agent label before every response in the current buffer.
@@ -361,7 +410,8 @@ newline would merge the input line into the response for line motion
     (goto-char (point-min))
     (let ((label (agent-shell-chat--label
                   (agent-shell-chat--agent-name)
-                  'agent-shell-chat-agent-label)))
+                  'agent-shell-chat-agent-label))
+          (kept nil))
       (while (re-search-forward "<shell-maker-end-of-prompt>" nil t)
         (let* ((mbeg (match-beginning 0))
                (mend (match-end 0))
@@ -414,18 +464,18 @@ newline would merge the input line into the response for line motion
                                  (or (get-text-property (point) 'shell-maker--marker)
                                      (agent-shell-chat--prompt-face-p
                                       (get-text-property (point) 'font-lock-face))))))
-          (if response-empty
-              ;; Drop any label from a turn that no longer has a response.
-              (dolist (overlay (overlays-in mbeg (max end (1+ mbeg))))
-                (when (eq (overlay-get overlay 'category) 'agent-shell-chat-agent)
-                  (delete-overlay overlay)))
-            ;; Anchor the reuse search on the whole span, not just the marker:
-            ;; a restored turn's overlay starts past the marker (keeping the
-            ;; terminator visible), so a marker-only anchor would miss it and
-            ;; pile up duplicates.
-            (agent-shell-chat--upsert-overlay
-             'agent-shell-chat-agent mbeg end start end
-             (list (cons 'before-string before) (cons 'display "")))))))))
+          ;; A turn with no response is not labeled; its stale overlay, if
+          ;; any, is dropped by the `--gc-overlays' sweep below.  Anchor the
+          ;; reuse search on the whole span, not just the marker: a restored
+          ;; turn's overlay starts past the marker (keeping the terminator
+          ;; visible), so a marker-only anchor would miss it.
+          (unless response-empty
+            (push
+             (agent-shell-chat--upsert-overlay
+              'agent-shell-chat-agent mbeg end start end
+              (list (cons 'before-string before) (cons 'display "")))
+             kept))))
+      (agent-shell-chat--gc-overlays '(agent-shell-chat-agent) kept))))
 
 (defun agent-shell-chat--relabel ()
   "Apply the `Me' and agent labels to the current buffer (idempotent).

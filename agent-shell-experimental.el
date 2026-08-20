@@ -39,6 +39,7 @@
 (declare-function acp-make-error "acp")
 (declare-function agent-shell-heartbeat-start "agent-shell-heartbeat")
 (declare-function agent-shell-heartbeat-stop "agent-shell-heartbeat")
+(declare-function shell-maker-insert-end-of-prompt-marker "shell-maker")
 
 (defvar agent-shell-show-busy-indicator)
 (defvar shell-maker--busy)
@@ -71,6 +72,13 @@ in progress), the request is immediately rejected with an error."
                 (cons request (map-elt state :active-requests))))
     ;; Remove trailing empty shell prompt before push notifications render.
     (agent-shell-experimental--remove-trailing-prompt)
+    ;; Give the pushed agent content its own end-of-prompt boundary so it
+    ;; renders as an agent turn.  Without it the content attaches to the
+    ;; previous turn with no agent marker, and chat mode (which anchors the
+    ;; agent label on the marker) mislabels it as a user `Me' turn.
+    (when-let* ((buffer (map-elt state :buffer)))
+      (with-current-buffer buffer
+        (shell-maker-insert-end-of-prompt-marker)))
     ;; Mark busy so requests are queued rather than sent mid-push.
     ;; Cleared on session_push_end via `shell-maker-finish-output'.
     (setq shell-maker--busy t)
