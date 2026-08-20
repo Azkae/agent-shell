@@ -268,13 +268,18 @@ block matches, moves OFFSET lines into it.
 
 HINT-LINE, when non-nil, is the ACP-reported line of the change; it is
 used to pick between duplicate matches.  Leaves point at the top when
-neither block is found or both are empty."
+neither block is found or both are empty.
+
+A region left active in the buffer is dropped either way: point has
+moved out from under it, so what it spans is no longer what anything
+selected."
   (if-let* ((position (or (agent-shell-diff--search-block old-block hint-line)
                           (agent-shell-diff--search-block new-block hint-line))))
       (progn
         (goto-char position)
         (forward-line offset))
     (goto-char (point-min)))
+  (deactivate-mark)
   (recenter))
 
 (defun agent-shell-diff--search-block (block hint-line)

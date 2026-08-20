@@ -931,6 +931,179 @@ it is still picked up by the bare-URL linkifier."
     (should (equal "https://target.com"
                    (agent-shell-markdown-link-url-at-point (point-min))))))
 
+(ert-deftest agent-shell-markdown-linkify-file-reference ()
+  ;; Agents cite their sources as `path:line', which is plain text until
+  ;; this pass makes it a link: faced, carrying its target for
+  ;; copy/export, and a stop for item navigation.
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (format "see %s:2 now." file))
+          (agent-shell-markdown-replace-markup)
+          (should (equal (format "see %s:2 now." file)
+                         (buffer-substring-no-properties (point-min) (point-max))))
+          ;; The trailing period is prose, not part of the reference.
+          (should (equal (format "%s:2" file)
+                         (agent-shell-markdown-link-url-at-point 5)))
+          (should (equal 'agent-shell-markdown-link (get-text-property 5 'face)))
+          (should (get-text-property 5 'keymap))
+          (should (get-text-property 5 'cursor-sensor-functions))
+          (goto-char (point-min))
+          (should (= 5 (agent-shell-markdown--next-visible-link))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-forms ()
+  ;; The forms agents write: a line, a range, a line and column, and
+  ;; GitHub's anchor.
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (dolist (suffix '(":2" ":1-3" ":2:5" "#L2"))
+          (with-temp-buffer
+            (insert (format "see %s%s here" file suffix))
+            (agent-shell-markdown-replace-markup)
+            (should (equal (concat file suffix)
+                           (agent-shell-markdown-link-url-at-point 5)))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-skips-code ()
+  ;; Code is verbatim: a reference inside inline code or a fenced block
+  ;; is text, not a link.
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (insert (format "code `%s:2` here" file))
+            (agent-shell-markdown-replace-markup)
+            (should (equal (format "code %s:2 here" file)
+                           (buffer-substring-no-properties (point-min) (point-max))))
+            (should (null (agent-shell-markdown-link-url-at-point 6))))
+          (with-temp-buffer
+            (insert (format "```\n%s:2\n```\n" file))
+            (agent-shell-markdown-replace-markup)
+            (goto-char (point-min))
+            (should (null (text-property-search-forward 'agent-shell-markdown-url)))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-needs-a-file-and-a-line ()
+  ;; What keeps prose from turning into links: the path has to name a
+  ;; file that exists, and the reference has to name a line.  A number
+  ;; running into a word isn't a line either.
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (dolist (text (list "see /does/not/exist.el:2 here"
+                            "meeting at 12:30 here"
+                            (format "see %s here" file)
+                            (format "see %s:2xy here" file)))
+          (with-temp-buffer
+            (insert text)
+            (agent-shell-markdown-replace-markup)
+            (goto-char (point-min))
+            (should (null (text-property-search-forward
+                           'agent-shell-markdown-url)))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-while-streaming ()
+  ;; A reference arrives a chunk at a time, and `file:1' is a reference
+  ;; to line 1 in its own right.  Each chunk has to redo it, or it stays
+  ;; pointing at a line that is real but not the cited one.
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el"
+                              "one\ntwo\nthree\nfour\nfive\n")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (format "see %s:1" file))
+          (agent-shell-markdown-replace-markup)
+          (should (equal (format "%s:1" file)
+                         (agent-shell-markdown-link-url-at-point 5)))
+          (insert "-")
+          (agent-shell-markdown-replace-markup)
+          (insert "4 done")
+          (agent-shell-markdown-replace-markup)
+          (should (equal (format "%s:1-4" file)
+                         (agent-shell-markdown-link-url-at-point 5)))
+          ;; Redone, not composed with itself.
+          (should (equal 'agent-shell-markdown-link (get-text-property 5 'face))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-bare-url-while-streaming ()
+  ;; Same for a URL: a truncated one is a URL too, so what was linked
+  ;; while the rest streamed in has to grow with it rather than stay a
+  ;; link to the prefix.
+  (with-temp-buffer
+    (insert "see https://example.com/fo")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "https://example.com/fo"
+                   (agent-shell-markdown-link-url-at-point 5)))
+    (insert "o/ba")
+    (agent-shell-markdown-replace-markup)
+    (insert "r now")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "https://example.com/foo/bar"
+                   (agent-shell-markdown-link-url-at-point 5)))
+    ;; The whole URL is faced, and faced once.
+    (should (equal 'agent-shell-markdown-link (get-text-property 5 'face)))
+    (should (equal 'agent-shell-markdown-link (get-text-property 30 'face)))
+    ;; One link, so one stop for item navigation.
+    (goto-char (point-min))
+    (should (= 5 (agent-shell-markdown--next-visible-link)))
+    (goto-char 5)
+    (should (null (agent-shell-markdown--next-visible-link)))))
+
+(ert-deftest agent-shell-markdown-linkify-keeps-composed-faces ()
+  ;; A link inside bold keeps both faces, the link face going on once.
+  (with-temp-buffer
+    (insert "**see https://example.com/fo**")
+    (agent-shell-markdown-replace-markup)
+    (goto-char (point-max))
+    (insert "o now")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "https://example.com/foo"
+                   (agent-shell-markdown-link-url-at-point 5)))
+    (should (equal '(agent-shell-markdown-link agent-shell-markdown-bold)
+                   (get-text-property 5 'face)))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-leaves-urls-alone ()
+  ;; A URL's port is not a line number, and the URL pass has already
+  ;; claimed the text by the time references are looked for.
+  (with-temp-buffer
+    (insert "see https://example.com:8080/x now")
+    (agent-shell-markdown-replace-markup)
+    (should (equal "https://example.com:8080/x"
+                   (agent-shell-markdown-link-url-at-point 5)))))
+
+(ert-deftest agent-shell-markdown--open-local-link-lands-on-column-test ()
+  "Test `agent-shell-markdown--open-local-link' reaches a cited column.
+
+The `file:line:column' agents cite has to survive parsing and opening,
+not just linkify, so this walks the whole way in."
+  (let ((file (make-temp-file "agent-shell-column" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (save-window-excursion
+          (should (agent-shell-markdown--open-local-link (concat file ":3:4")))
+          (should (equal 3 (line-number-at-pos (point))))
+          (should (equal 3 (current-column))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-visit-file-with-column-test ()
+  "Test `agent-shell-markdown-visit-file' honours a column.
+
+Columns are counted from 1, as the agents citing them do, so column 3
+lands on `current-column' 2.  A column past the end of the line settles
+for its end."
+  (let ((file (make-temp-file "agent-shell-column" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (save-window-excursion
+          (agent-shell-markdown-visit-file :file file :line-start 3 :column 3)
+          (should (equal 3 (line-number-at-pos (point))))
+          (should (equal 2 (current-column)))
+          (agent-shell-markdown-visit-file :file file :line-start 1 :column 99)
+          (should (equal 1 (line-number-at-pos (point))))
+          (should (equal 3 (current-column))))
+      (when (get-file-buffer file)
+        (kill-buffer (get-file-buffer file)))
+      (delete-file file))))
+
 (ert-deftest agent-shell-markdown-remote-image-fallback-is-a-link ()
   ;; A remote image that can't be shown inline renders as a link opening
   ;; it, so it carries its target like any rendered link: recoverable for
@@ -3904,9 +4077,9 @@ plainer `#L10-24' both have to land."
   (let ((file (make-temp-file "agent-shell-lines" nil ".el" "one\ntwo\nthree\nfour\nfive\n")))
     (unwind-protect
         (progn
-          (should (equal (list (cons :line-start nil) (cons :line-end nil))
-                         (seq-drop (agent-shell-markdown--parse-local-link file) 1)))
-          (should (equal (list (cons :line-start 2) (cons :line-end nil))
+          ;; No location named, so nothing beyond the file itself.
+          (should-not (seq-drop (agent-shell-markdown--parse-local-link file) 1))
+          (should (equal (list (cons :line-start 2))
                          (seq-drop (agent-shell-markdown--parse-local-link
                                     (concat file "#L2")) 1)))
           (should (equal (list (cons :line-start 2) (cons :line-end 4))
@@ -3918,6 +4091,10 @@ plainer `#L10-24' both have to land."
           (should (equal (list (cons :line-start 3) (cons :line-end 5))
                          (seq-drop (agent-shell-markdown--parse-local-link
                                     (concat file ":3-5")) 1)))
+          ;; Agents cite a column as readily as a line.
+          (should (equal (list (cons :line-start 3) (cons :column 5))
+                         (seq-drop (agent-shell-markdown--parse-local-link
+                                    (concat file ":3:5")) 1)))
           ;; Garbage after the digits is still rejected outright.
           (should-not (agent-shell-markdown--parse-local-link (concat file "#L2xy"))))
       (delete-file file))))
@@ -3925,7 +4102,9 @@ plainer `#L10-24' both have to land."
 (ert-deftest agent-shell-markdown--open-local-link-selects-range-test ()
   "Test `agent-shell-markdown--open-local-link' selects a linked range.
 
-Without a range it only moves point, leaving the mark alone."
+Without a range it only moves point, and drops a region an earlier
+jump into the same file left active: point having moved out from under
+it, what it now spans is neither jump's."
   (let ((file (make-temp-file "agent-shell-range" nil ".el" "one\ntwo\nthree\nfour\nfive\n")))
     (unwind-protect
         (save-window-excursion
@@ -3933,7 +4112,6 @@ Without a range it only moves point, leaving the mark alone."
           (should (equal 2 (line-number-at-pos (point))))
           (should (equal "two\nthree\nfour"
                          (buffer-substring-no-properties (point) (mark))))
-          (deactivate-mark)
           (should (agent-shell-markdown--open-local-link (concat file "#L3")))
           (should (equal 3 (line-number-at-pos (point))))
           (should-not (region-active-p)))

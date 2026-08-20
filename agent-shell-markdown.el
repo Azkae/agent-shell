@@ -41,6 +41,9 @@
 ;;   image       `![alt](url)'            `display' property carries image
 ;;                 (`(<url>)' also OK — angle brackets allow spaces in the url)
 ;;   image path  bare image path on a line  same as `![alt](url)' (no markup)
+;;   file ref    `path:12' in prose       face `agent-shell-markdown-link',
+;;                                         RET opens the file at that line
+;;                 (`path:12-24', `path:12:5' and `path#L12' also OK)
 ;;   divider     `---' / `***' / `___'    rendered as an underlined rule line
 ;;   fenced code ```LANG\nX\n```          body syntax-highlighted via LANG mode
 ;;   tables      `| A | B |' grid rows    rendered with aligned columns,
@@ -425,6 +428,9 @@ body un-fontified."
         ;; After the markup passes, so a URL already consumed as a
         ;; `[title](url)' destination or an image's is not seen again.
         (agent-shell-markdown--linkify-urls :avoid-ranges avoid-ranges)
+        ;; After the URL pass, so a port already claimed as part of
+        ;; `https://host:8080/x' is not read as a line number too.
+        (agent-shell-markdown--linkify-file-references :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-dividers :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-blockquotes :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-lists :avoid-ranges avoid-ranges)
@@ -942,7 +948,7 @@ browser\", and hovering shows \"Open in browser\"."
   (let* ((open-action (lambda () (interactive)
                         (agent-shell-markdown--open-link url)))
          (link-map (agent-shell-markdown--make-ret-binding-map open-action)))
-    (add-face-text-property start end 'agent-shell-markdown-link)
+    (agent-shell-markdown--add-link-face start end)
     (put-text-property start end 'keymap link-map)
     (agent-shell-markdown--put-hint-sensor
      start end
@@ -961,6 +967,29 @@ browser\", and hovering shows \"Open in browser\"."
     ;; A hand pointer when over is enough. No need for `mouse-face'.
     (put-text-property start end 'pointer 'hand)
     (put-text-property start end 'agent-shell-markdown-url url)))
+
+(defun agent-shell-markdown--add-link-face (start end)
+  "Add the link face over [START, END), skipping where it already is.
+
+`add-face-text-property' drops a face the text already carries, but
+only where that face is all it carries.  Over text faced
+`(agent-shell-markdown-link agent-shell-markdown-bold)' -- a link
+inside bold -- re-applying ours composes a second copy of it instead.
+
+A link redone at a new length (see
+`agent-shell-markdown--outgrown-link-p') covers text it faced already,
+so this adds per sub-range: what the text legitimately carries is kept,
+and ours goes on once.
+
+For example, over a span whose first half is already a link, only the
+second half gains the face."
+  (let ((pos start))
+    (while (< pos end)
+      (let ((next (next-single-property-change pos 'face nil end)))
+        (unless (memq 'agent-shell-markdown-link
+                      (ensure-list (get-text-property pos 'face)))
+          (add-face-text-property pos next 'agent-shell-markdown-link))
+        (setq pos next)))))
 
 (cl-defun agent-shell-markdown--replace-links (&key avoid-ranges)
   "Replace `[title](url)' markup with title faced as link.
@@ -1056,14 +1085,44 @@ fallback image's target, a `file://' image path rendered in place
 \(which tags itself frozen, and whose RET opens the file rather than
 the URL), or an image displayed over text that reads as a URL.
 
+The exception is a link of this pass's own making that has since
+outgrown itself, which is redone at its new length (see
+`agent-shell-markdown--outgrown-link-p').
+
 For example, over the URL in \"see https://example.com now\", RET
 there opens it in the browser."
-  (when-let* (((not (get-text-property start 'agent-shell-markdown-url)))
-              ((not (get-text-property start 'agent-shell-markdown-frozen)))
-              ((not (eq (car-safe (get-text-property start 'display)) 'image))))
+  (when-let* (((not (get-text-property start 'agent-shell-markdown-frozen)))
+              ((not (eq (car-safe (get-text-property start 'display)) 'image)))
+              ((or (not (get-text-property start 'agent-shell-markdown-url))
+                   (agent-shell-markdown--outgrown-link-p start end))))
     (agent-shell-markdown--apply-link-properties
      :start start :end end
      :url (buffer-substring-no-properties start end))))
+
+(defun agent-shell-markdown--outgrown-link-p (start end)
+  "Return non-nil when the link at START covers only part of [START, END).
+
+Text streams in a chunk at a time, so a URL or file reference is
+rendered while the rest of it is still coming: \"https://example.com/fo\"
+is a URL in its own right, and `foo.el:1' a reference to line 1, until
+the next chunk lands.  Since a rendered link is not linkified twice,
+what was linked stays short -- pointing somewhere real but wrong --
+unless the grown text is recognized as the same link.
+
+That it is one of ours is what makes redoing it safe: a link this pass
+rendered targets the very text under it, so a target matching the text
+it covers means we are looking at our own work rather than at a
+`[title](url)' link that happens to display a URL.
+
+For example, with \"https://example.com/fo\" linked and \"o\" just
+streamed in, returns non-nil for the span covering
+\"https://example.com/foo\"."
+  (when-let* ((url (get-text-property start 'agent-shell-markdown-url))
+              (link-end (next-single-property-change
+                         start 'agent-shell-markdown-url nil end))
+              ((< link-end end))
+              ((equal url (buffer-substring-no-properties start link-end))))
+    t))
 
 (defun agent-shell-markdown--image-attributes-pending-p (pos)
   "Return non-nil when an image ending at POS may still gain `{...}' attributes.
@@ -4248,14 +4307,17 @@ For example, to open beside the shell rather than over it:
           (display-buffer (find-file-noselect path)
                           \\='(display-buffer-pop-up-window))))")
 
-(cl-defun agent-shell-markdown-visit-file (&key file line-start line-end)
+(cl-defun agent-shell-markdown-visit-file (&key file line-start line-end column)
   "Visit FILE, selecting lines LINE-START to LINE-END when given.
 
 Opens FILE through `agent-shell-markdown-open-file-function', which
 owns where it is displayed.  Without LINE-START, that is all.  With
 one, point lands on that line in the window that function returns, and
-LINE-END selects through the end of its line.  Messages instead when
-FILE no longer exists.
+LINE-END selects through the end of its line.  Without one, any region
+left active in FILE by an earlier jump is deactivated, point having
+moved out from under it.  COLUMN, counted from 1 as the agents citing
+one do, moves point that far into the line, stopping at its end when
+the line is shorter.  Messages instead when FILE no longer exists.
 
 Where the link was followed from goes on xref's marker stack, so
 \\[xref-go-back] comes back to it, as it does from any other jump.
@@ -4276,13 +4338,22 @@ LINE-START 2 and LINE-END 3 leave \"two\\nthree\" as the region."
         (with-selected-window window
           (goto-char (point-min))
           (forward-line (1- line-start))
-          (when line-end
-            (push-mark (save-excursion
-                         (goto-char (point-min))
-                         (forward-line (1- line-end))
-                         (end-of-line)
-                         (point))
-                       t t))))
+          (when column
+            (forward-char (min (max 0 (1- column))
+                               (- (line-end-position) (point)))))
+          (if line-end
+              (push-mark (save-excursion
+                           (goto-char (point-min))
+                           (forward-line (1- line-end))
+                           (end-of-line)
+                           (point))
+                         t t)
+            ;; Point just moved, so a region still active from an earlier
+            ;; jump into this same file now runs from that jump's mark to
+            ;; wherever this one landed, highlighting a span nothing asked
+            ;; for.  Only the activation goes; the mark itself stays where
+            ;; it was, as any other jump leaves it.
+            (deactivate-mark))))
       window)))
 
 (defun agent-shell-markdown--open-file (path)
@@ -4312,47 +4383,77 @@ meaningless for binary)."
       (agent-shell-markdown-visit-file
        :file (map-elt parsed :file)
        :line-start (map-elt parsed :line-start)
-       :line-end (map-elt parsed :line-end)))
+       :line-end (map-elt parsed :line-end)
+       :column (map-elt parsed :column)))
     t))
 
-(defconst agent-shell-markdown--lines-regexp
+(defconst agent-shell-markdown--location-regexp
   (rx (one-or-more digit)
-      (optional "-" (optional "L") (one-or-more digit)))
-  "Regexp for the line part of a local link, a number or a range.
-Matches \"10\", \"10-24\" and GitHub's \"10-L24\".")
+      (optional (or (seq "-" (optional "L") (one-or-more digit))
+                    (seq ":" (one-or-more digit)))))
+  "Regexp for the location part of a local link, what follows the file.
+Matches a line (\"10\"), a range (\"10-24\", GitHub's \"10-L24\") and a
+line with a column (\"10:5\").")
 
-(defun agent-shell-markdown--parse-lines (lines)
-  "Parse LINES, the line part of a local link, into a (START . END) cons.
+(defconst agent-shell-markdown--file-reference-regexp
+  (rx (any alnum "._~/@_")
+      (zero-or-more (any alnum "._~/@+_-"))
+      (or "#L" ":")
+      (regexp agent-shell-markdown--location-regexp))
+  "Regexp matching a bare `path:line' reference as agents cite sources.
 
-END is nil unless LINES names a range.
+Matches the whole reference, path included, in the forms
+`agent-shell-markdown--parse-local-link' reads: `docs/audit.md:500',
+`src/main.rs:120-140', `foo.el:12:5' and `foo.el#L12'.  A line is
+required, so a bare path in prose is not a reference.
+
+Whether the path names an existing file is not asked here -- see
+`agent-shell-markdown--linkify-file-references', which is what filters
+the candidates this finds.")
+
+(defun agent-shell-markdown--parse-location (location)
+  "Parse LOCATION, the location part of a local link, into an alist.
+
+The alist carries :line-start, plus :line-end when LOCATION names a
+range and :column when it names a line and a column.  A key it does not
+name is left out rather than held nil, reading the same through
+`map-elt'.  Returns nil when LOCATION is none of those forms.
 
 For example:
 
-  \"10\"     => (10)
-  \"10-24\"  => (10 . 24)
-  \"10-L24\" => (10 . 24)"
+  \"10\"     => ((:line-start . 10))
+  \"10-24\"  => ((:line-start . 10) (:line-end . 24))
+  \"10-L24\" => ((:line-start . 10) (:line-end . 24))
+  \"10:5\"   => ((:line-start . 10) (:column . 5))"
   (when (string-match (rx bos (group (one-or-more digit))
-                          (optional "-" (optional "L")
-                                    (group (one-or-more digit)))
+                          (optional (or (seq "-" (optional "L")
+                                             (group (one-or-more digit)))
+                                        (seq ":" (group (one-or-more digit)))))
                           eos)
-                      lines)
-    (cons (string-to-number (match-string 1 lines))
-          (when (match-string 2 lines)
-            (string-to-number (match-string 2 lines))))))
+                      location)
+    (delq nil
+          (list (cons :line-start (string-to-number (match-string 1 location)))
+                (when (match-string 2 location)
+                  (cons :line-end (string-to-number (match-string 2 location))))
+                (when (match-string 3 location)
+                  (cons :column (string-to-number (match-string 3 location))))))))
 
 (defun agent-shell-markdown--parse-local-link (url)
   "Parse URL as a local file link.
 
-Return an alist with :file, :line-start and :line-end when URL points to
-an existing local file, or nil otherwise.  Both line keys are nil when
-URL names no line, and :line-end is nil unless it names a range.
+Return an alist with :file, :line-start, :line-end and :column when URL
+points to an existing local file, or nil otherwise.  Only :file is
+there when URL names no location, :line-end only for a range and
+:column only for a column -- absent keys reading nil through `map-elt'
+as a caller wants anyway.
 
 For example, with the file part abbreviated to F:
 
-  \"foo.el#L10\"          => ((:file . F) (:line-start . 10) (:line-end))
+  \"foo.el#L10\"          => ((:file . F) (:line-start . 10))
   \"foo.el#L10-L24\"      => ((:file . F) (:line-start . 10) (:line-end . 24))
   \"foo.el#L10-24\"       => ((:file . F) (:line-start . 10) (:line-end . 24))
-  \"foo.el\"              => ((:file . F) (:line-start) (:line-end))
+  \"foo.el:10:5\"         => ((:file . F) (:line-start . 10) (:column . 5))
+  \"foo.el\"              => ((:file . F))
   \"file:bar.el:5-8\"     => ((:file . F) (:line-start . 5) (:line-end . 8))
   \"https://example.com\" => nil"
   (when-let* ((match
@@ -4360,8 +4461,8 @@ For example, with the file part abbreviated to F:
                 ((string-match
                   (rx bos "file://"
                       (group (+? anything))
-                      (optional (or (seq "#L" (group (regexp agent-shell-markdown--lines-regexp)))
-                                    (seq ":" (group (regexp agent-shell-markdown--lines-regexp)))))
+                      (optional (or (seq "#L" (group (regexp agent-shell-markdown--location-regexp)))
+                                    (seq ":" (group (regexp agent-shell-markdown--location-regexp)))))
                       eos)
                   url)
                  (cons (match-string 1 url)
@@ -4369,8 +4470,8 @@ For example, with the file part abbreviated to F:
                 ((string-match
                   (rx bos "file:"
                       (group (not (any "/")) (+? anything))
-                      (optional (or (seq "#L" (group (regexp agent-shell-markdown--lines-regexp)))
-                                    (seq ":" (group (regexp agent-shell-markdown--lines-regexp)))))
+                      (optional (or (seq "#L" (group (regexp agent-shell-markdown--location-regexp)))
+                                    (seq ":" (group (regexp agent-shell-markdown--location-regexp)))))
                       eos)
                   url)
                  (cons (match-string 1 url)
@@ -4379,7 +4480,7 @@ For example, with the file part abbreviated to F:
                   (rx bos
                       (group (? (optional "/") alpha ":/")
                              (one-or-more (not (any ":#"))))
-                      "#L" (group (regexp agent-shell-markdown--lines-regexp))
+                      "#L" (group (regexp agent-shell-markdown--location-regexp))
                       eos)
                   url)
                  (cons (match-string 1 url) (match-string 2 url)))
@@ -4387,7 +4488,7 @@ For example, with the file part abbreviated to F:
                   (rx bos
                       (group (? (optional "/") alpha ":/")
                              (one-or-more (not (any ":#"))))
-                      ":" (group (regexp agent-shell-markdown--lines-regexp))
+                      ":" (group (regexp agent-shell-markdown--location-regexp))
                       eos)
                   url)
                  (cons (match-string 1 url) (match-string 2 url)))
@@ -4395,11 +4496,58 @@ For example, with the file part abbreviated to F:
                  (cons url nil))))
               (filepath (expand-file-name (car match))))
     (when (file-exists-p filepath)
-      (let ((lines (when (cdr match)
-                     (agent-shell-markdown--parse-lines (cdr match)))))
-        (list (cons :file filepath)
-              (cons :line-start (car lines))
-              (cons :line-end (cdr lines)))))))
+      (cons (cons :file filepath)
+            (when (cdr match)
+              (agent-shell-markdown--parse-location (cdr match)))))))
+
+(cl-defun agent-shell-markdown--linkify-file-references (&key avoid-ranges)
+  "Face bare `path:line' references in prose as links opening the file.
+
+Agents cite their sources constantly (`docs/audit.md:500',
+`src/main.rs:120-140', `foo.el:12:5'), and those citations are
+otherwise plain text.  Each one naming a file that exists gains what
+any rendered link carries (see
+`agent-shell-markdown--apply-link-properties'), so RET opens the file
+at the cited line and item navigation stops there.
+
+What counts as a reference is `agent-shell-markdown--file-reference-regexp',
+read through `agent-shell-markdown--parse-local-link' as any other
+local link is.  There is no markup to strip, so the reference text
+stays as it stands.
+
+Two things keep prose from turning into links: a reference has to name
+a line, so a bare path is left alone, and its path -- resolved against
+`default-directory' -- has to name an existing file, so a lone `12:30'
+stays text.  A word char right after the number rules a match out too,
+since the number is then part of a longer word rather than a line.
+
+References inside any of AVOID-RANGES (fenced blocks, inline code) are
+left alone, as is text an earlier pass already rendered (see
+`agent-shell-markdown--linkify-url').
+
+A reference still streaming in links as far as it has got and is
+redone as it grows, so `foo.el:1' does not stay pointing at line 1
+once the `2' of `foo.el:12' arrives (see
+`agent-shell-markdown--outgrown-link-p').
+
+For example, the buffer \"see docs/audit.md:500 now\" keeps its text,
+with \"docs/audit.md:500\" faced and opening that file at line 500."
+  (let ((case-fold-search nil))
+    (goto-char (point-min))
+    (while (re-search-forward agent-shell-markdown--file-reference-regexp nil t)
+      ;; Read before parsing below, which runs a `string-match' of its own
+      ;; and leaves no match data of this one behind to take positions from.
+      (let ((start (match-beginning 0))
+            (end (match-end 0)))
+        (if-let* ((avoid (agent-shell-markdown-in-avoid-range-p
+                          start end avoid-ranges)))
+            (goto-char (cdr avoid))
+          ;; Point sits right after the match, so this reads the char the
+          ;; number runs into: `foo.el#L2xy' is a word, not a reference.
+          (when (and (not (looking-at-p (rx (any alnum "_"))))
+                     (agent-shell-markdown--parse-local-link
+                      (buffer-substring-no-properties start end)))
+            (agent-shell-markdown--linkify-url start end)))))))
 
 (cl-defun agent-shell-markdown--url-copy-file (&key url file (timeout 5.0) content-type-prefix)
   "Download URL to FILE, returning FILE on success or nil on failure.
