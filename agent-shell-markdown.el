@@ -4315,7 +4315,9 @@ owns where it is displayed.  Without LINE-START, that is all.  With
 one, point lands on that line in the window that function returns, and
 LINE-END selects through the end of its line.  Without one, any region
 left active in FILE by an earlier jump is deactivated, point having
-moved out from under it.  COLUMN, counted from 1 as the agents citing
+moved out from under it -- whatever `transient-mark-mode' is, matching
+the range above, which activates the mark either way.  COLUMN, counted
+from 1 as the agents citing
 one do, moves point that far into the line, stopping at its end when
 the line is shorter.  Messages instead when FILE no longer exists.
 
@@ -4351,9 +4353,11 @@ LINE-START 2 and LINE-END 3 leave \"two\\nthree\" as the region."
             ;; Point just moved, so a region still active from an earlier
             ;; jump into this same file now runs from that jump's mark to
             ;; wherever this one landed, highlighting a span nothing asked
-            ;; for.  Only the activation goes; the mark itself stays where
-            ;; it was, as any other jump leaves it.
-            (deactivate-mark))))
+            ;; for.  Forced, since the range above activates the mark
+            ;; whatever `transient-mark-mode' says and this has to match it.
+            ;; Only the activation goes; the mark itself stays where it was,
+            ;; as any other jump leaves it.
+            (deactivate-mark t))))
       window)))
 
 (defun agent-shell-markdown--open-file (path)

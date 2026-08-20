@@ -4112,9 +4112,13 @@ it, what it now spans is neither jump's."
           (should (equal 2 (line-number-at-pos (point))))
           (should (equal "two\nthree\nfour"
                          (buffer-substring-no-properties (point) (mark))))
+          ;; `mark-active' rather than `region-active-p': the latter is nil
+          ;; whenever `transient-mark-mode' is off (as under batch), passing
+          ;; whether or not the mark was ever cleared.
+          (should mark-active)
           (should (agent-shell-markdown--open-local-link (concat file "#L3")))
           (should (equal 3 (line-number-at-pos (point))))
-          (should-not (region-active-p)))
+          (should-not mark-active))
       (when (get-file-buffer file)
         (kill-buffer (get-file-buffer file)))
       (delete-file file))))

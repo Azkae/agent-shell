@@ -204,7 +204,10 @@ change."
                 (with-current-buffer (find-file-noselect file)
                   (goto-char (point-min))
                   (push-mark (line-end-position 2) t t)
-                  (should (region-active-p)))
+                  ;; `mark-active' rather than `region-active-p': the latter
+                  ;; is nil whenever `transient-mark-mode' is off (as under
+                  ;; batch), passing whether or not the mark was cleared.
+                  (should mark-active))
                 (with-current-buffer buf
                   (goto-char (point-min))
                   (search-forward "-gamma")
@@ -212,7 +215,7 @@ change."
                   (agent-shell-diff-open-file))
                 (with-current-buffer (find-buffer-visiting file)
                   (should (equal (line-number-at-pos) 3))
-                  (should-not (region-active-p))))
+                  (should-not mark-active)))
             (when (buffer-live-p buf) (kill-buffer buf))
             (when (find-buffer-visiting file) (kill-buffer (find-buffer-visiting file)))))
       (delete-file file))))

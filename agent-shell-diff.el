@@ -272,14 +272,18 @@ neither block is found or both are empty.
 
 A region left active in the buffer is dropped either way: point has
 moved out from under it, so what it spans is no longer what anything
-selected."
+selected.  Dropped whatever `transient-mark-mode' is, since what
+activated it did not consult the mode either."
   (if-let* ((position (or (agent-shell-diff--search-block old-block hint-line)
                           (agent-shell-diff--search-block new-block hint-line))))
       (progn
         (goto-char position)
         (forward-line offset))
     (goto-char (point-min)))
-  (deactivate-mark)
+  ;; Forced: a range reference activates the mark whatever
+  ;; `transient-mark-mode' says, so clearing it cannot depend on the mode
+  ;; either, or the activation outlives what it was selecting.
+  (deactivate-mark t)
   (recenter))
 
 (defun agent-shell-diff--search-block (block hint-line)
