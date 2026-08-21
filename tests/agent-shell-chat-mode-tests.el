@@ -299,6 +299,30 @@ the input reachable."
       (should (string-match-p "Me" (agent-shell-chat-mode-tests--label-string me)))
       (should (eq ?\n (char-before (overlay-start me)))))))
 
+(ert-deftest agent-shell-chat-decorates-prompt-region-test ()
+  "A prompt read outside the shell is hidden behind the `Me' label.
+Laid out as the shell lays out its own live prompt: the label, one blank
+line, then the marker the input follows."
+  (with-temp-buffer
+    (insert "Claude> ")
+    (let ((before (overlay-get (agent-shell-chat--decorate-prompt-region
+                                (point-min) (point-max))
+                               'before-string)))
+      (should (string-match-p "Me" before))
+      (should (string-match-p "❯" before))
+      (should (string-match-p "Me.*\n\n.*❯" before)))))
+
+(ert-deftest agent-shell-chat-queued-prompt-skips-plain-shell-test ()
+  "A queued prompt for a shell without chat mode is left undecorated."
+  (with-temp-buffer
+    (let ((shell (current-buffer)))
+      (setq-local agent-shell-chat-mode nil)
+      (with-temp-buffer
+        (insert "Claude> ")
+        (should-not (agent-shell-chat--decorate-queued-prompt
+                     `((:shell-buffer . ,shell))))
+        (should-not (overlays-in (point-min) (point-max)))))))
+
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
   (agent-shell-chat-mode-tests--with-shell

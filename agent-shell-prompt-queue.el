@@ -39,7 +39,6 @@
 (declare-function agent-shell--shell-buffer "agent-shell")
 (declare-function agent-shell--state "agent-shell")
 (declare-function agent-shell--echo "agent-shell")
-(declare-function agent-shell-completion--setup-minibuffer "agent-shell-completion")
 (declare-function shell-maker-busy "shell-maker")
 
 (defvar agent-shell--state)
@@ -176,6 +175,18 @@ as \"active\" and the queued prompts, PROMPT included, as \"queued\"."
                     (ring-ref comint-input-ring 0))
    :pending-prompts (map-elt agent-shell--state :pending-prompts)))
 
+(defvar agent-shell-prompt-queue-setup-minibuffer-functions nil
+  "Abnormal hook run while reading a queued prompt from the minibuffer.
+
+Each function is called with a single alist containing:
+
+  :shell-buffer - the shell the prompt is bound for
+
+and runs with the minibuffer current, so it can decorate or extend the
+prompt the way that shell renders its own.  The shell is carried rather
+than looked up: it is resolved for the project, so it need not be the
+buffer the minibuffer was entered from.")
+
 (cl-defun agent-shell--prompt-queue-read (&key initial)
   "Read a queue prompt from the minibuffer.
 
@@ -187,7 +198,8 @@ agent commands when the agent has reported them."
   (let ((shell-buffer (current-buffer)))
     (minibuffer-with-setup-hook
         (lambda ()
-          (agent-shell-completion--setup-minibuffer shell-buffer)
+          (run-hook-with-args 'agent-shell-prompt-queue-setup-minibuffer-functions
+                              `((:shell-buffer . ,shell-buffer)))
           (when initial
             (insert initial)))
       (read-string (or (map-nested-elt (agent-shell--state) '(:agent-config :shell-prompt))

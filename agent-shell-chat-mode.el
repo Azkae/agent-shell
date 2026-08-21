@@ -43,6 +43,8 @@
 (require 'seq)
 (eval-when-compile (require 'subr-x))
 
+(defvar agent-shell-prompt-queue-setup-minibuffer-functions)
+
 (declare-function agent-shell-subscribe-to "agent-shell")
 (declare-function agent-shell-unsubscribe "agent-shell")
 
@@ -550,6 +552,44 @@ and from `shell-maker-finish-output-hook' (which covers `clear')."
     (setq agent-shell-chat--relabel-timer
           (run-at-time 0 nil #'agent-shell-chat--relabel-buffer (current-buffer)))))
 
+(defun agent-shell-chat--decorate-prompt-region (beg end)
+  "Hide the shell prompt between BEG and END behind the `Me\=' label.
+
+Used where the prompt is read outside the shell, so it reads the way the
+shell renders its own.  Returns the overlay.
+
+For example, over a minibuffer reading \"Claude> \", the prompt is
+replaced by the label, a blank line, and the marker the input follows:
+
+   Me
+
+    \N{U+276F} "
+  (let ((overlay (make-overlay beg end)))
+    (overlay-put overlay 'category 'agent-shell-chat-me)
+    (overlay-put overlay 'display "")
+    ;; Laid out as the shell lays out its own live prompt, without its
+    ;; leading pad: nothing sits above this one to separate it from.
+    (overlay-put overlay 'before-string
+                 (concat (agent-shell-chat--label "Me" 'agent-shell-chat-me-label)
+                         (propertize "\n\n" 'face 'default)
+                         (propertize (concat agent-shell-chat--body-indent
+                                             agent-shell-chat--prompt)
+                                     'face 'default)))
+    overlay))
+
+(defun agent-shell-chat--decorate-queued-prompt (event)
+  "Label the queued prompt being read for EVENT\='s shell.
+
+Runs from `agent-shell-prompt-queue-setup-minibuffer-functions\=' with the
+minibuffer current, and leaves shells with chat mode off alone.
+
+EVENT is an alist as that hook documents, for example:
+
+  \='((:shell-buffer . #<buffer Claude Agent @ agent-shell>))"
+  (when-let* ((shell-buffer (map-elt event :shell-buffer))
+              ((buffer-local-value 'agent-shell-chat-mode shell-buffer)))
+    (agent-shell-chat--decorate-prompt-region (point-min) (minibuffer-prompt-end))))
+
 (defun agent-shell-chat--enable ()
   "Turn on chat labels in the current buffer and keep them in sync.
 
@@ -567,7 +607,9 @@ too."
                  :shell-buffer (current-buffer)
                  :on-event #'agent-shell-chat--schedule-relabel))
     (add-hook 'shell-maker-finish-output-hook
-              #'agent-shell-chat--schedule-relabel nil t)))
+              #'agent-shell-chat--schedule-relabel nil t)
+    (add-hook 'agent-shell-prompt-queue-setup-minibuffer-functions
+              #'agent-shell-chat--decorate-queued-prompt)))
 
 (defun agent-shell-chat--disable ()
   "Remove chat labels, subscription, timer and hook from the current buffer."
@@ -578,8 +620,16 @@ too."
   (when (timerp agent-shell-chat--relabel-timer)
     (cancel-timer agent-shell-chat--relabel-timer))
   (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-me)
+  (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-me-label)
+  (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-me-surplus)
   (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-me-input)
   (remove-overlays (point-min) (point-max) 'category 'agent-shell-chat-agent)
+  ;; The minibuffer hook is global, so it goes once the last shell drops it.
+  (unless (seq-find (lambda (buffer)
+                      (buffer-local-value 'agent-shell-chat-mode buffer))
+                    (buffer-list))
+    (remove-hook 'agent-shell-prompt-queue-setup-minibuffer-functions
+                 #'agent-shell-chat--decorate-queued-prompt))
   (kill-local-variable 'agent-shell-chat--subscription)
   (kill-local-variable 'agent-shell-chat--relabel-timer)
   (kill-local-variable 'agent-shell-chat--labeled))
