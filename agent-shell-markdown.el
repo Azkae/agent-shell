@@ -41,9 +41,10 @@
 ;;   image       `![alt](url)'            `display' property carries image
 ;;                 (`(<url>)' also OK — angle brackets allow spaces in the url)
 ;;   image path  bare image path on a line  same as `![alt](url)' (no markup)
-;;   file ref    `path:12' in prose       face `agent-shell-markdown-link',
+;;   file ref    `path:12' cited in text  face `agent-shell-markdown-link',
 ;;                                         RET opens the file at that line
-;;                 (`path:12-24', `path:12:5' and `path#L12' also OK)
+;;                 (bare or in `code' backticks; `path:12-24',
+;;                  `path:12:5' and `path#L12' also OK)
 ;;   divider     `---' / `***' / `___'    rendered as an underlined rule line
 ;;   fenced code ```LANG\nX\n```          body syntax-highlighted via LANG mode
 ;;   tables      `| A | B |' grid rows    rendered with aligned columns,
@@ -430,7 +431,13 @@ body un-fontified."
         (agent-shell-markdown--linkify-urls :avoid-ranges avoid-ranges)
         ;; After the URL pass, so a port already claimed as part of
         ;; `https://host:8080/x' is not read as a line number too.
-        (agent-shell-markdown--linkify-file-references :avoid-ranges avoid-ranges)
+        (agent-shell-markdown--linkify-file-references
+         ;; Everything `avoid-ranges' holds but the inline spans, so a
+         ;; citation in backticks is reached while fenced blocks and
+         ;; earlier renders' work stay untouched.
+         :avoid-ranges (agent-shell-markdown-sort-ranges
+                        source-ranges rendered-ranges)
+         :inline-ranges inline-ranges)
         (agent-shell-markdown--style-dividers :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-blockquotes :avoid-ranges avoid-ranges)
         (agent-shell-markdown--style-lists :avoid-ranges avoid-ranges)
@@ -836,11 +843,16 @@ with face `agent-shell-markdown-header-2' on \"My title\"."
 
 The body of each well-formed `` `X` `` is left in place with
 face `agent-shell-markdown-inline-code' and tagged with the text
-property `agent-shell-markdown-frozen t' so it is never re-processed
+property `agent-shell-markdown-frozen t' so it is not re-processed
 on subsequent calls (the body can legitimately contain
 markdown-looking chars like `**' once the surrounding backticks
 are gone).  Spans inside any of AVOID-RANGES (typically fenced
 code blocks) are left untouched.
+
+The tag stops passes that would read the body as markup, which is all
+of them but one: `agent-shell-markdown--linkify-file-references' links
+a `path:line' citation in here, adding properties without reading the
+body as markup, so what the tag is for survives.
 
 For example, the buffer \"a `code` b\" becomes \"a code b\" with
 face `agent-shell-markdown-inline-code' on \"code\"."
@@ -1077,7 +1089,7 @@ text, with \"https://example.com\" faced and openable."
             (goto-char (cdr avoid))
           (agent-shell-markdown--linkify-url start end))))))
 
-(defun agent-shell-markdown--linkify-url (start end)
+(cl-defun agent-shell-markdown--linkify-url (start end &key in-code)
   "Give the URL on [START, END) the properties a rendered link carries.
 
 A no-op when an earlier pass already spoke for that text: a link's or
@@ -1085,13 +1097,22 @@ fallback image's target, a `file://' image path rendered in place
 \(which tags itself frozen, and whose RET opens the file rather than
 the URL), or an image displayed over text that reads as a URL.
 
+IN-CODE non-nil says [START, END) is an inline `code' span body, which
+`agent-shell-markdown--style-inline-code' tags frozen to mark its own
+work rather than to fend off later passes.  There the tag says nothing
+about the text being spoken for, so it does not disqualify it.  Pass
+this only for a span positively identified as inline code -- see
+`agent-shell-markdown--linkify-file-references', which reads it off the
+inline ranges it was handed rather than off the tag.
+
 The exception is a link of this pass's own making that has since
 outgrown itself, which is redone at its new length (see
 `agent-shell-markdown--outgrown-link-p').
 
 For example, over the URL in \"see https://example.com now\", RET
 there opens it in the browser."
-  (when-let* (((not (get-text-property start 'agent-shell-markdown-frozen)))
+  (when-let* (((or in-code
+                   (not (get-text-property start 'agent-shell-markdown-frozen))))
               ((not (eq (car-safe (get-text-property start 'display)) 'image)))
               ((or (not (get-text-property start 'agent-shell-markdown-url))
                    (agent-shell-markdown--outgrown-link-p start end))))
@@ -4504,7 +4525,7 @@ For example, with the file part abbreviated to F:
             (when (cdr match)
               (agent-shell-markdown--parse-location (cdr match)))))))
 
-(cl-defun agent-shell-markdown--linkify-file-references (&key avoid-ranges)
+(cl-defun agent-shell-markdown--linkify-file-references (&key avoid-ranges inline-ranges)
   "Face bare `path:line' references in prose as links opening the file.
 
 Agents cite their sources constantly (`docs/audit.md:500',
@@ -4525,9 +4546,17 @@ a line, so a bare path is left alone, and its path -- resolved against
 stays text.  A word char right after the number rules a match out too,
 since the number is then part of a longer word rather than a line.
 
-References inside any of AVOID-RANGES (fenced blocks, inline code) are
-left alone, as is text an earlier pass already rendered (see
-`agent-shell-markdown--linkify-url').
+References inside any of AVOID-RANGES are left alone: fenced blocks,
+where a path is sample content or command output rather than a
+citation, and whatever earlier renders already froze, which is what
+keeps this off ground already covered.
+
+INLINE-RANGES are the inline `code' span bodies, and they are scanned
+rather than avoided -- agents wrap nearly every citation in backticks,
+that being how a path reads, so skipping them would skip most of what
+this is for.  A span in there is handed to
+`agent-shell-markdown--linkify-url' as code, which is what lets its
+frozen tag stand without being mistaken for another pass's claim.
 
 A reference still streaming in links as far as it has got and is
 redone as it grows, so `foo.el:1' does not stay pointing at line 1
@@ -4551,7 +4580,13 @@ with \"docs/audit.md:500\" faced and opening that file at line 500."
           (when (and (not (looking-at-p (rx (any alnum "_"))))
                      (agent-shell-markdown--parse-local-link
                       (buffer-substring-no-properties start end)))
-            (agent-shell-markdown--linkify-url start end)))))))
+            ;; Inline code is the one place a frozen tag is expected here,
+            ;; and it is read off the ranges rather than the tag, so no
+            ;; other frozen text can slip through as code.
+            (agent-shell-markdown--linkify-url
+             start end
+             :in-code (agent-shell-markdown-in-avoid-range-p
+                       start end inline-ranges))))))))
 
 (cl-defun agent-shell-markdown--url-copy-file (&key url file (timeout 5.0) content-type-prefix)
   "Download URL to FILE, returning FILE on success or nil on failure.
@@ -4997,7 +5032,13 @@ otherwise look like markdown (e.g. inline code body or source
 block body).  Treating tagged ranges as avoid-ranges keeps
 subsequent calls from re-processing them — important for
 streaming, where the convert/replace-markup function may be
-invoked many times as content grows."
+invoked many times as content grows.
+
+One pass reads past the tag.  `agent-shell-markdown--linkify-file-references\='
+links a `path:line\=' citation sitting in an inline `code\=' span, which
+agents write nearly all of them in.  It tells those spans apart by the
+inline ranges it is handed, never by the tag, so every other tagged
+range is still left alone (see `agent-shell-markdown--linkify-url\=')."
   (let ((ranges '())
         (pos (point-min))
         (limit (point-max)))

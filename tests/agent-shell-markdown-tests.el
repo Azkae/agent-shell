@@ -952,6 +952,31 @@ it is still picked up by the bare-URL linkifier."
           (should (= 5 (agent-shell-markdown--next-visible-link))))
       (delete-file file))))
 
+(ert-deftest agent-shell-markdown-linkify-file-reference-resolves-relative-path ()
+  "Test a citation naming a path relative to `default-directory' links.
+
+Agents cite relative paths (`src/main.rs:120'), which reach a file only
+through the shell's own directory, so the absolute paths the other
+reference tests use would not catch a resolution gone wrong."
+  (let* ((directory (make-temp-file "agent-shell-refs" t))
+         (default-directory (file-name-as-directory directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "foo.el") (insert "one\ntwo\nthree\n"))
+          (with-temp-buffer
+            (insert "see `foo.el:2` and foo.el:3 here")
+            (agent-shell-markdown-replace-markup :complete t)
+            (goto-char (point-min))
+            (search-forward "foo.el:2")
+            (should (equal "foo.el:2"
+                           (agent-shell-markdown-link-url-at-point
+                            (match-beginning 0))))
+            (search-forward "foo.el:3")
+            (should (equal "foo.el:3"
+                           (agent-shell-markdown-link-url-at-point
+                            (match-beginning 0))))))
+      (delete-directory directory t))))
+
 (ert-deftest agent-shell-markdown-linkify-file-reference-forms ()
   ;; The forms agents write: a line, a range, a line and column, and
   ;; GitHub's anchor.
@@ -965,23 +990,86 @@ it is still picked up by the bare-URL linkifier."
                            (agent-shell-markdown-link-url-at-point 5)))))
       (delete-file file))))
 
-(ert-deftest agent-shell-markdown-linkify-file-reference-skips-code ()
-  ;; Code is verbatim: a reference inside inline code or a fenced block
-  ;; is text, not a link.
+(ert-deftest agent-shell-markdown-linkify-file-reference-in-inline-code ()
+  ;; Agents wrap nearly every citation in backticks, that being how a path
+  ;; reads, so one in a code span is still a citation.  The span keeps its
+  ;; own face and the link composes on top.
   (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
     (unwind-protect
-        (progn
+        (with-temp-buffer
+          (insert (format "code `%s:2` here" file))
+          (agent-shell-markdown-replace-markup)
+          (should (equal (format "code %s:2 here" file)
+                         (buffer-substring-no-properties (point-min) (point-max))))
+          (should (equal (format "%s:2" file)
+                         (agent-shell-markdown-link-url-at-point 6)))
+          (should (equal '(agent-shell-markdown-link agent-shell-markdown-inline-code)
+                         (get-text-property 6 'face))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-skips-fenced-block ()
+  ;; A path inside a fenced block is sample content or command output
+  ;; rather than a citation.
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (format "```\n%s:2\n```\n" file))
+          (agent-shell-markdown-replace-markup)
+          (goto-char (point-min))
+          (should (null (text-property-search-forward 'agent-shell-markdown-url))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-skips-frozen ()
+  ;; Inline code is the only place the frozen tag is excused, and that is
+  ;; read off the inline ranges rather than the tag: a region an external
+  ;; renderer froze is still left alone.
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (let ((agent-shell-markdown-render-functions
+               (list (lambda (_context)
+                       (goto-char (point-min))
+                       (when (search-forward (format "%s:2" file) nil t)
+                         (add-text-properties (match-beginning 0) (match-end 0)
+                                              '(agent-shell-markdown-frozen t)))
+                       nil))))
           (with-temp-buffer
-            (insert (format "code `%s:2` here" file))
-            (agent-shell-markdown-replace-markup)
-            (should (equal (format "code %s:2 here" file)
-                           (buffer-substring-no-properties (point-min) (point-max))))
-            (should (null (agent-shell-markdown-link-url-at-point 6))))
-          (with-temp-buffer
-            (insert (format "```\n%s:2\n```\n" file))
+            (insert (format "see %s:2 here" file))
             (agent-shell-markdown-replace-markup)
             (goto-char (point-min))
             (should (null (text-property-search-forward 'agent-shell-markdown-url)))))
+      (delete-file file))))
+
+(ert-deftest agent-shell-markdown-linkify-file-reference-frozen-excused-only-in-code ()
+  "Test that the frozen tag is excused for inline code and nothing else.
+
+The pass drives `agent-shell-markdown--linkify-url' directly here, with
+the ranges it would be handed mid-render, since by the time frozen text
+reaches it through a whole render it has usually been screened out as an
+avoid-range first -- which would pass whether or not the tag still spoke
+for anything."
+  (let ((file (make-temp-file "agent-shell-ref" nil ".el" "one\ntwo\nthree\n")))
+    (unwind-protect
+        (let ((reference (format "%s:2" file)))
+          ;; Frozen, and not named as inline code: the tag still speaks.
+          (with-temp-buffer
+            (insert (format "see %s here" reference))
+            (put-text-property 5 (+ 5 (length reference))
+                               'agent-shell-markdown-frozen t)
+            (agent-shell-markdown--linkify-file-references
+             :avoid-ranges (agent-shell-markdown-sort-ranges nil)
+             :inline-ranges (agent-shell-markdown-sort-ranges nil))
+            (should (null (agent-shell-markdown-link-url-at-point 5))))
+          ;; Same tag on the same text, named as an inline span: linked.
+          (with-temp-buffer
+            (insert (format "see %s here" reference))
+            (put-text-property 5 (+ 5 (length reference))
+                               'agent-shell-markdown-frozen t)
+            (agent-shell-markdown--linkify-file-references
+             :avoid-ranges (agent-shell-markdown-sort-ranges nil)
+             :inline-ranges (agent-shell-markdown-sort-ranges
+                             (list (cons 5 (+ 5 (length reference))))))
+            (should (equal reference
+                           (agent-shell-markdown-link-url-at-point 5)))))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-linkify-file-reference-needs-a-file-and-a-line ()
