@@ -231,8 +231,12 @@ Input is bounded by the next prompt, not just the
 starts): `Me' shows the instant a prompt is submitted, and an empty
 prompt does not claim the fresh prompt below as its input.
 
-The overlay swallows the blank lines around the prompt so the label is
-padded by exactly one blank line on each side.  Updates in place."
+Blank lines around the prompt collapse to exactly one on each side.  The
+label rides the one above rather than covering it, so that nothing is
+shown at the prompt itself, and the marker travels as a `line-prefix':
+a string standing at the prompt holds point and the cursor on the row
+above, putting the first line of a multi-line input out of reach of
+`previous-line'.  Updates in place."
   (save-excursion
     (let ((runs (agent-shell-chat--prompt-runs))
           (prev-end nil)
@@ -335,41 +339,70 @@ padded by exactly one blank line on each side.  Updates in place."
                       ;; one newline adds the single blank line.
                       (keep-term (propertize "\n" 'face 'default))
                       (t pad)))
-               (before (cond
-                        ;; Bar on hides the live prompt (input via the bar).
-                        ((and live (bound-and-true-p agent-shell-prompt-bar-mode))
-                         "")
-                        ;; Live prompt (the active input line): `Me' and the
-                        ;; prompt marker, whether or not text has been typed
-                        ;; yet.  Keying this off `blank' would drop the marker
-                        ;; the instant the user starts typing.
-                        (live
-                         (concat lead me-label pad
-                                 (propertize
-                                  (concat agent-shell-chat--body-indent
-                                          agent-shell-chat--prompt)
-                                  'face 'default)))
-                        ;; An empty submission (blank but not the live prompt)
-                        ;; is not labeled: only the live prompt shows an empty
-                        ;; `Me'.
-                        (blank "")
-                        ;; A submitted turn: `Me', its input following as
-                        ;; buffer text.
-                        (t (concat lead me-label pad)))))
+               ;; Whether this run is labeled at all: an empty submission
+               ;; carries no `Me', and the prompt bar takes the live prompt
+               ;; over entirely.
+               (labeled (cond ((and live (bound-and-true-p
+                                          agent-shell-prompt-bar-mode))
+                               nil)
+                              (live t)
+                              (blank nil)
+                              (t t)))
+               ;; The newline closing the line above the prompt, when the run
+               ;; covers one.  The label rides it, so nothing is left standing
+               ;; at the prompt itself: a `before-string' there holds point and
+               ;; cursor on the row above, putting a multi-line input's first
+               ;; line out of reach of `previous-line'.
+               (label-nl (and labeled (< start pos) (eq (char-before pos) ?\n)
+                              (1- pos)))
+               ;; The live prompt's marker, shown before the input whether or
+               ;; not text has been typed yet.  Keying this off `blank' would
+               ;; drop it the instant the user starts typing.  Carried as a
+               ;; `line-prefix', which occupies no buffer position.
+               (marker (when (and live labeled)
+                         (propertize (concat agent-shell-chat--body-indent
+                                             agent-shell-chat--prompt)
+                                     'face 'default)))
+               ;; The label, closed by the newline it rides rather than by the
+               ;; second half of `pad'.
+               (before (cond ((not labeled) "")
+                             (label-nl (concat lead me-label
+                                               (propertize "\n" 'face
+                                                           'default)))
+                             (t (concat lead me-label pad)))))
+          ;; Collapse whatever blank lines precede the one the label rides.
+          (when (and label-nl (> label-nl start))
+            (push
+             (agent-shell-chat--upsert-overlay
+              'agent-shell-chat-me-surplus start label-nl start label-nl
+              (list (cons 'display "")
+                    (cons 'line-prefix "")
+                    (cons 'wrap-prefix "")))
+             kept))
+          ;; Carry the label on the newline above, left visible so it keeps
+          ;; closing its line.
+          (when label-nl
+            (push
+             (agent-shell-chat--upsert-overlay
+              'agent-shell-chat-me-label label-nl pos label-nl pos
+              (list (cons 'before-string before)
+                    (cons 'line-prefix "")
+                    (cons 'wrap-prefix "")))
+             kept))
           (push
            (agent-shell-chat--upsert-overlay
-            'agent-shell-chat-me pos run-end start end
-            ;; Render the label as a `before-string' (like the agent label) and
-            ;; hide the covered prompt with a `display' of \"\".  A `display'
-            ;; string is backed by the covered buffer positions, so vertical
-            ;; motion (`next-line'/`previous-line') lands the cursor on the
-            ;; label; a `before-string' is not, so the cursor skips it.  Empty
-            ;; `line-prefix'/`wrap-prefix' drop any tinted gutter inherited from
-            ;; the covered text.
-            (list (cons 'before-string before)
+            'agent-shell-chat-me pos run-end (if label-nl pos start) end
+            ;; Hide the covered prompt with a `display' of \"\".  Any string
+            ;; shown at this position (a `before-string', or the label when
+            ;; there is no newline above to carry it) keeps `previous-line'
+            ;; from settling on the input's first line, so the marker travels
+            ;; as a `line-prefix' instead, which occupies no position of its
+            ;; own.  Empty `line-prefix'/`wrap-prefix' otherwise drop any
+            ;; tinted gutter inherited from the covered text.
+            (list (cons 'before-string (if label-nl "" before))
                   (cons 'display "")
-                  (cons 'line-prefix "")
-                  (cons 'wrap-prefix "")))
+                  (cons 'line-prefix (or marker ""))
+                  (cons 'wrap-prefix (or marker ""))))
            kept)
           ;; Indent a submitted turn's input so it aligns with the response
           ;; body.  The live prompt (input flows after the marker) and empty
@@ -389,13 +422,16 @@ padded by exactly one blank line on each side.  Updates in place."
                kept)))
           ;; A hidden label emits no pad of its own, so hand its lead to
           ;; whichever label renders next.
-          (setq pending-lead (and (string-empty-p before) lead))
+          (setq pending-lead (and (not labeled) lead))
           (setq prev-end run-end)
           (setq runs (cdr runs))))
       ;; Drop stale labels whose prompt run was deleted (e.g. a live prompt a
       ;; `session/push' removed) and which no upsert above reached.
-      (agent-shell-chat--gc-overlays
-       '(agent-shell-chat-me agent-shell-chat-me-input) kept))))
+      (agent-shell-chat--gc-overlays '(agent-shell-chat-me
+                                       agent-shell-chat-me-label
+                                       agent-shell-chat-me-surplus
+                                       agent-shell-chat-me-input)
+                                     kept))))
 
 (defun agent-shell-chat--label-responses ()
   "Overlay the agent label before every response in the current buffer.

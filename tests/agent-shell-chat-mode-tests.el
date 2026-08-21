@@ -22,6 +22,24 @@
   "A face that does not extend, for tests."
   :group 'agent-shell)
 
+(defun agent-shell-chat-mode-tests--label-string (me)
+  "Return the label rendered for ME, a `Me' overlay.
+The label rides the newline above the prompt, on its own overlay, so that
+nothing is shown at the prompt itself.  Falls back to ME when the run has
+no newline above to carry it."
+  (or (seq-some (lambda (overlay)
+                  (and (eq (overlay-get overlay 'category) 'agent-shell-chat-me-label)
+                       (= (overlay-end overlay) (overlay-start me))
+                       (overlay-get overlay 'before-string)))
+                (overlays-in (max (point-min) (1- (overlay-start me)))
+                             (1+ (overlay-start me))))
+      (overlay-get me 'before-string)))
+
+(defun agent-shell-chat-mode-tests--marker-string (me)
+  "Return the prompt marker shown before ME\='s input.
+Carried as a `line-prefix', which occupies no buffer position."
+  (or (overlay-get me 'line-prefix) ""))
+
 (defun agent-shell-chat-mode-tests--me-overlays ()
   "Return the `Me' label overlays in the current buffer, ordered by position."
   (sort (seq-filter (lambda (overlay)
@@ -91,11 +109,13 @@ Carries `shell-maker--marker', as shell-maker's real marker does."
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel)
       (should (string-match-p
-               "Me" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'before-string))))
+               "Me" (agent-shell-chat-mode-tests--label-string
+                     (car (agent-shell-chat-mode-tests--me-overlays))))))
     (let ((agent-shell-prompt-bar-mode t))
       (agent-shell-chat--relabel)
       (should (equal
-               "" (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'before-string))))))
+               "" (agent-shell-chat-mode-tests--label-string
+                   (car (agent-shell-chat-mode-tests--me-overlays))))))))
 
 (ert-deftest agent-shell-chat-agent-keeps-input-terminator-test ()
   "The agent overlay leaves the input's line terminator visible.
@@ -162,7 +182,7 @@ vertical motion (a `display' string is backed by buffer positions)."
     (agent-shell-chat--relabel)
     (dolist (me (agent-shell-chat-mode-tests--me-overlays))
       (should (equal "" (overlay-get me 'display)))
-      (should (string-match-p "Me" (overlay-get me 'before-string))))))
+      (should (string-match-p "Me" (agent-shell-chat-mode-tests--label-string me))))))
 
 (ert-deftest agent-shell-chat-errors-outside-agent-shell-test ()
   "Enabling the mode outside an `agent-shell' buffer signals a `user-error'.
@@ -233,8 +253,8 @@ own rather than assume the hidden one separates it."
     (agent-shell-chat-mode-tests--marker)
     (insert "reply\n")
     (agent-shell-chat--relabel)
-    (let ((before (overlay-get (car (agent-shell-chat-mode-tests--me-overlays))
-                               'before-string)))
+    (let ((before (agent-shell-chat-mode-tests--label-string
+                   (car (agent-shell-chat-mode-tests--me-overlays)))))
       ;; Two newlines: one ends the content line the hidden one could not,
       ;; the second is the blank line separating the label.
       (should (string-prefix-p "\n\n" before)))))
@@ -254,6 +274,30 @@ would render two blank lines instead of one."
                                'before-string)))
       (should (string-prefix-p "\n" before))
       (should-not (string-prefix-p "\n\n" before)))))
+
+(ert-deftest agent-shell-chat-nothing-shown-at-prompt-test ()
+  "Nothing is shown at the prompt position itself.
+
+A string there holds point and the cursor on the row above, so moving up
+into an input spanning several lines lands above the input rather than on
+its first line.  The label rides the newline above instead, and the marker
+travels as a `line-prefix\\='; neither occupies a buffer position, leaving
+the input reachable."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "reply\n\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "first line\n\nsecond line")
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel))
+    (let ((me (car (last (agent-shell-chat-mode-tests--me-overlays)))))
+      (should (equal "" (overlay-get me 'before-string)))
+      (should (string-match-p "❯" (agent-shell-chat-mode-tests--marker-string me)))
+      ;; The label rides the newline that closes the line above the prompt.
+      (should (string-match-p "Me" (agent-shell-chat-mode-tests--label-string me)))
+      (should (eq ?\n (char-before (overlay-start me)))))))
 
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
@@ -288,7 +332,8 @@ would render two blank lines instead of one."
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel)
-      (let ((display (overlay-get (car (agent-shell-chat-mode-tests--me-overlays)) 'before-string)))
+      (let ((display (agent-shell-chat-mode-tests--marker-string
+                      (car (agent-shell-chat-mode-tests--me-overlays)))))
         (should (string-match-p "❯" display))
         ;; The marker must not inherit the covered prompt face.
         (should (eq 'default
@@ -304,7 +349,7 @@ so it does not vanish mid-type when a relabel runs."
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel))
     (let ((me (car (agent-shell-chat-mode-tests--me-overlays))))
-      (should (string-match-p "❯" (overlay-get me 'before-string)))
+      (should (string-match-p "❯" (agent-shell-chat-mode-tests--marker-string me)))
       ;; No indent overlay claims the live prompt's in-progress input.
       (should-not (seq-filter (lambda (overlay)
                                 (eq (overlay-get overlay 'category)
@@ -343,7 +388,7 @@ Only the live prompt shows an empty `Me', and neither claims input."
       ;; Empty submission: hidden.
       (should (equal "" (overlay-get (nth 0 me) 'before-string)))
       ;; Live prompt: `Me' and `❯'.
-      (should (string-match-p "❯" (overlay-get (nth 1 me) 'before-string)))
+      (should (string-match-p "❯" (agent-shell-chat-mode-tests--marker-string (nth 1 me))))
       ;; Neither empty prompt claims input.
       (should-not (seq-filter (lambda (overlay)
                                 (eq (overlay-get overlay 'category)
@@ -364,7 +409,7 @@ Only the live prompt shows an empty `Me', and neither claims input."
       (should (equal "" (overlay-get (nth 0 me) 'before-string)))
       (should (equal "" (overlay-get (nth 1 me) 'before-string)))
       ;; Only the live prompt is labeled.
-      (should (string-match-p "❯" (overlay-get (nth 2 me) 'before-string))))))
+      (should (string-match-p "❯" (agent-shell-chat-mode-tests--marker-string (nth 2 me)))))))
 
 (ert-deftest agent-shell-chat-empty-response-not-labeled-test ()
   "A completed turn with no response text is not given an agent label."
@@ -405,8 +450,12 @@ The overlay starts past the `:extend' background and drops its `line-prefix'."
         (should (>= (overlay-start me) panel-end))
         (should-not (agent-shell-chat--extends-bg-p
                      (get-text-property (overlay-start me) 'face)))
-        ;; It drops any inherited tinted gutter.
-        (should (equal "" (overlay-get me 'line-prefix)))))))
+        ;; It drops any inherited tinted gutter: the prefix is the marker
+        ;; (faced `default') or nothing at all.
+        (let ((prefix (overlay-get me 'line-prefix)))
+          (should (or (equal "" prefix) (string-match-p "❯" prefix)))
+          (unless (equal "" prefix)
+            (should (eq 'default (get-text-property 0 'face prefix)))))))))
 
 (ert-deftest agent-shell-chat-extends-bg-p-test ()
   "`agent-shell-chat--extends-bg-p' recognizes an `:extend' background face."
@@ -440,8 +489,8 @@ agent label whose pad would separate the next label."
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel))
-    (let ((before (overlay-get (car (last (agent-shell-chat-mode-tests--me-overlays)))
-                               'before-string)))
+    (let ((before (agent-shell-chat-mode-tests--label-string
+                   (car (last (agent-shell-chat-mode-tests--me-overlays))))))
       ;; Ends the interrupted line, then leaves one blank line.
       (should (string-prefix-p "\n\n Me " (substring-no-properties before)))
       (should-not (string-prefix-p "\n\n\n" (substring-no-properties before))))))
@@ -459,8 +508,8 @@ leaves exactly one blank line (a full pad would leave two)."
     (let ((agent-shell-prompt-bar-mode nil))
       (agent-shell-chat--relabel))
     (let ((before (substring-no-properties
-                   (overlay-get (car (last (agent-shell-chat-mode-tests--me-overlays)))
-                                'before-string))))
+                   (agent-shell-chat-mode-tests--label-string
+                    (car (last (agent-shell-chat-mode-tests--me-overlays)))))))
       (should (string-prefix-p "\n Me " before))
       (should-not (string-prefix-p "\n\n" before)))))
 
@@ -495,7 +544,7 @@ used, which holds however many empty submissions stack up."
     (let* ((overlays (agent-shell-chat-mode-tests--me-overlays))
            (before (lambda (overlay)
                      (substring-no-properties
-                      (or (overlay-get overlay 'before-string) "")))))
+                      (agent-shell-chat-mode-tests--label-string overlay)))))
       (should (= 4 (length overlays)))
       ;; Both empty submissions stay hidden.
       (should (equal "" (funcall before (nth 1 overlays))))
