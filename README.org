@@ -258,7 +258,7 @@ See https://github.com/can1357/oh-my-pi for details.
 
 For Antigravity, download the =agy_acp_server= binary for your platform from the [[https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp][ACP registry entry]] and make sure it's on your =PATH= (or set =agent-shell-antigravity-acp-command= to an absolute path).
 
-Alternatively, you can bootstrap and keep the server binary updated directly in your =use-package= configuration:
+Alternatively, you can bootstrap the antigravity tool with the following function:
 
 #+begin_src emacs-lisp
   (defun agent-shell-antigravity-bootstrap (&optional force)
