@@ -36,9 +36,14 @@ no newline above to carry it."
       (overlay-get me 'before-string)))
 
 (defun agent-shell-chat-mode-tests--marker-string (me)
-  "Return the prompt marker shown before ME\='s input.
-Carried as a `line-prefix', which occupies no buffer position."
-  (or (overlay-get me 'line-prefix) ""))
+  "Return the string carrying ME\='s prompt marker.
+It travels as a `line-prefix' (occupying no buffer position) where the
+label rides the newline above; with no newline to ride, the label renders
+on ME itself and the marker rejoins it there."
+  (or (seq-find (lambda (string) (string-match-p "❯" string))
+                (list (or (overlay-get me 'line-prefix) "")
+                      (or (overlay-get me 'before-string) "")))
+      ""))
 
 (defun agent-shell-chat-mode-tests--me-overlays ()
   "Return the `Me' label overlays in the current buffer, ordered by position."
@@ -323,6 +328,45 @@ line, then the marker the input follows."
                      `((:shell-buffer . ,shell))))
         (should-not (overlays-in (point-min) (point-max)))))))
 
+(ert-deftest agent-shell-chat-marker-renders-once-test ()
+  "The prompt marker is shown once, however many rows the label spans.
+
+With no newline above to carry it, the label renders on the prompt\='s own
+overlay and each of its blank lines becomes a row of that line.  A marker
+travelling as a prefix would then repeat down every one of those rows,
+which is what a cleared shell renders."
+  (agent-shell-chat-mode-tests--with-shell
+    ;; A prompt starting the buffer has no newline above it, which is what
+    ;; clearing the shell leaves behind.
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel))
+    (let ((me (car (agent-shell-chat-mode-tests--me-overlays))))
+      (should (= 1 (seq-count (lambda (string) (string-match-p "❯" string))
+                              (list (or (overlay-get me 'before-string) "")
+                                    (or (overlay-get me 'line-prefix) "")))))
+      ;; Never from `wrap-prefix', which repeats on every row.
+      (should-not (string-match-p "❯" (or (overlay-get me 'wrap-prefix) ""))))))
+
+(ert-deftest agent-shell-chat-label-not-indented-on-own-line-test ()
+  "A label rendering on the prompt\='s line is not indented with the input.
+
+With no newline above to carry it the label renders there, so an indent
+meant for the input would shift the label too, leaving it out of line
+with every other label in the buffer.  This is what a cleared shell
+renders."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "typed\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "reply\n")
+    (agent-shell-chat--relabel)
+    (let ((me (car (agent-shell-chat-mode-tests--me-overlays))))
+      ;; The label renders here, so nothing indents this line.
+      (should (string-match-p "Me" (or (overlay-get me 'before-string) "")))
+      (should (equal "" (overlay-get me 'line-prefix)))
+      (should (equal "" (overlay-get me 'wrap-prefix))))))
+
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
   (agent-shell-chat-mode-tests--with-shell
@@ -379,6 +423,37 @@ so it does not vanish mid-type when a relabel runs."
                                 (eq (overlay-get overlay 'category)
                                     'agent-shell-chat-me-input))
                               (overlays-in (point-min) (point-max)))))))
+
+(ert-deftest agent-shell-chat-submitted-input-first-line-indented-test ()
+  "A submitted turn's first input line lines up with the rest of it.
+
+That line is shared with the prompt, which is covered, so its indent has
+to come from the prompt's own overlay: `line-prefix' is read at the start
+of a line, and that is where the covered prompt sits."
+  (agent-shell-chat-mode-tests--with-shell
+    ;; A turn above, so the label rides the newline it leaves and this line
+    ;; carries the input alone.
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "earlier\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "earlier reply\n\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (let ((input (point)))
+      (insert "first line\nsecond line\n")
+      (agent-shell-chat-mode-tests--marker)
+      (insert "reply\n")
+      (agent-shell-chat--relabel)
+      (let ((first-line (get-char-property
+                         (save-excursion (goto-char input)
+                                         (line-beginning-position))
+                         'line-prefix))
+            (second-line (get-char-property
+                          (save-excursion (goto-char input)
+                                          (forward-line 1)
+                                          (line-beginning-position))
+                          'line-prefix)))
+        (should (equal agent-shell-chat--body-indent first-line))
+        (should (equal first-line second-line))))))
 
 (ert-deftest agent-shell-chat-submitted-input-indented-test ()
   "A submitted turn's input carries the response body indent, the live one none."

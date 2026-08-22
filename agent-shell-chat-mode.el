@@ -365,6 +365,11 @@ above, putting the first line of a multi-line input out of reach of
                          (propertize (concat agent-shell-chat--body-indent
                                              agent-shell-chat--prompt)
                                      'face 'default)))
+               ;; Indents the prompt's own line, which the input's first line
+               ;; shares.  An unlabeled run has no input to line up.
+               (input-indent (if (and labeled (not blank))
+                                 agent-shell-chat--body-indent
+                               ""))
                ;; The label, closed by the newline it rides rather than by the
                ;; second half of `pad'.
                (before (cond ((not labeled) "")
@@ -394,17 +399,26 @@ above, putting the first line of a multi-line input out of reach of
           (push
            (agent-shell-chat--upsert-overlay
             'agent-shell-chat-me pos run-end (if label-nl pos start) end
-            ;; Hide the covered prompt with a `display' of \"\".  Any string
-            ;; shown at this position (a `before-string', or the label when
-            ;; there is no newline above to carry it) keeps `previous-line'
-            ;; from settling on the input's first line, so the marker travels
-            ;; as a `line-prefix' instead, which occupies no position of its
-            ;; own.  Empty `line-prefix'/`wrap-prefix' otherwise drop any
-            ;; tinted gutter inherited from the covered text.
-            (list (cons 'before-string (if label-nl "" before))
+            ;; Hide the covered prompt with a `display' of \"\".
+            ;;
+            ;; Where a newline above carries the label, nothing is shown at
+            ;; this position: a string here would keep `previous-line' from
+            ;; settling on the input's first line.  The prefixes do the rest,
+            ;; occupying no buffer position of their own.  They indent this
+            ;; line, which the input's first line shares with the covered
+            ;; prompt, and carry the live prompt's marker (indent included).
+            ;; They also drop any tinted gutter inherited from that text.
+            ;;
+            ;; With no newline above, the label renders here instead and each
+            ;; of its blank lines becomes a row of this line.  The marker
+            ;; rejoins the label, and no prefix is set at all: either would
+            ;; repeat down every row, marking or indenting the label along
+            ;; with the input.
+            (list (cons 'before-string
+                        (if label-nl "" (concat before (or marker ""))))
                   (cons 'display "")
-                  (cons 'line-prefix (or marker ""))
-                  (cons 'wrap-prefix (or marker ""))))
+                  (cons 'line-prefix (if label-nl (or marker input-indent) ""))
+                  (cons 'wrap-prefix (if label-nl input-indent ""))))
            kept)
           ;; Indent a submitted turn's input so it aligns with the response
           ;; body.  The live prompt (input flows after the marker) and empty
