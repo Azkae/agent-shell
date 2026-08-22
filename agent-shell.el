@@ -3008,7 +3008,7 @@ Clears STATE's `:expanded-activity-group'."
                           (concat (propertize
                                    (map-nested-elt
                                     state '(:agent-config :shell-prompt))
-                                   'font-lock-face 'agent-shell-prompt
+                                   'font-lock-face '(agent-shell-prompt comint-highlight-prompt)
                                    'field 'output)
                                   (propertize content-text
                                               'font-lock-face 'agent-shell-input))
