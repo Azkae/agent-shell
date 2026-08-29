@@ -4289,7 +4289,8 @@ Emacs 31+, falling back to `browse-url-of-file' on earlier versions."
 (defun agent-shell-markdown--binary-file-p (file)
   "Return non-nil when FILE looks binary (a NUL byte in its first 4KB).
 This is the heuristic git uses to tell binary from text."
-  (and (file-readable-p file)
+  (and (file-regular-p file)
+       (file-readable-p file)
        (with-temp-buffer
          (set-buffer-multibyte nil)
          (insert-file-contents-literally file nil 0 4096)
