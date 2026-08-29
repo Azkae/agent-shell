@@ -28,7 +28,7 @@ The label rides the newline above the prompt, on its own overlay, so that
 nothing is shown at the prompt itself.  Falls back to ME when the run has
 no newline above to carry it."
   (or (seq-some (lambda (overlay)
-                  (and (eq (overlay-get overlay 'category) 'agent-shell-chat-me-label)
+                  (and (eq (overlay-get overlay 'agent-shell-chat--tag) 'me-label)
                        (= (overlay-end overlay) (overlay-start me))
                        (overlay-get overlay 'before-string)))
                 (overlays-in (max (point-min) (1- (overlay-start me)))
@@ -48,14 +48,14 @@ on ME itself and the marker rejoins it there."
 (defun agent-shell-chat-mode-tests--me-overlays ()
   "Return the `Me' label overlays in the current buffer, ordered by position."
   (sort (seq-filter (lambda (overlay)
-                      (eq (overlay-get overlay 'category) 'agent-shell-chat-me))
+                      (eq (overlay-get overlay 'agent-shell-chat--tag) 'me))
                     (overlays-in (point-min) (point-max)))
         (lambda (a b) (< (overlay-start a) (overlay-start b)))))
 
 (defun agent-shell-chat-mode-tests--agent-overlays ()
   "Return the agent label overlays in the current buffer."
   (seq-filter (lambda (overlay)
-                (eq (overlay-get overlay 'category) 'agent-shell-chat-agent))
+                (eq (overlay-get overlay 'agent-shell-chat--tag) 'agent))
               (overlays-in (point-min) (point-max))))
 
 (defun agent-shell-chat-mode-tests--prompt (text)
@@ -243,6 +243,26 @@ covers blank lines outside the deleted text), so the sweep must drop it."
     (agent-shell-chat--relabel)
     (should (= 0 (length (agent-shell-chat-mode-tests--me-overlays))))))
 
+(ert-deftest agent-shell-chat-gc-stale-agent-label-test ()
+  "Relabeling sweeps an agent label no marker accounts for.
+The agent side sweeps like the `Me' side does, so a label the relabel
+does not reach is dropped rather than left rendering."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "typed\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "reply\n")
+    (agent-shell-chat--relabel)
+    (should (= 1 (length (agent-shell-chat-mode-tests--agent-overlays))))
+    ;; Strand one away from any marker, so relabeling neither reuses nor
+    ;; reaches it and only the sweep can remove it.
+    (let ((stale (make-overlay (point-min) (+ (point-min) 3))))
+      (overlay-put stale 'agent-shell-chat--tag 'agent)
+      (overlay-put stale 'before-string " Claude "))
+    (should (= 2 (length (agent-shell-chat-mode-tests--agent-overlays))))
+    (agent-shell-chat--relabel)
+    (should (= 1 (length (agent-shell-chat-mode-tests--agent-overlays))))))
+
 (ert-deftest agent-shell-chat-invisible-terminator-pads-label-test ()
   "A `Me' label keeps its blank line when the content's newline is invisible.
 A collapsed fragment hides its own trailing newline, so that newline cannot
@@ -367,6 +387,51 @@ renders."
       (should (equal "" (overlay-get me 'line-prefix)))
       (should (equal "" (overlay-get me 'wrap-prefix))))))
 
+(ert-deftest agent-shell-chat-overlays-carry-no-category-test ()
+  "Chat overlays name themselves with their own property, never `category'.
+
+A `category' hands redisplay every property its symbol carries, so a
+value that is also a face name lends its internal face id and floods
+`*Messages*' with \"Invalid face reference\".  Keeping the tag off
+`category' removes the mechanism rather than avoiding the collision."
+  (agent-shell-chat-mode-tests--with-shell
+    ;; A buffer holding a label overlay of every tag.
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "typed\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "reply\n\n\n\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "draft\n")
+    (agent-shell-chat--relabel)
+    (dolist (overlay (overlays-in (point-min) (point-max)))
+      (should (overlay-get overlay 'agent-shell-chat--tag))
+      (should-not (overlay-get overlay 'category))
+      ;; Keywords cannot name a face, so the id cannot leak either way.
+      (should-not (facep (overlay-get overlay 'agent-shell-chat--tag))))))
+
+(ert-deftest agent-shell-chat-sweeps-pre-property-overlays-test ()
+  "Labels left by a version that used `category' are swept, not doubled up.
+
+An upgrade reloads this file into a running session, where shells labeled
+by the older version keep overlays relabeling no longer recognises: left
+alone they render their label a second time."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "typed\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "reply\n\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (agent-shell-chat--relabel)
+    ;; Stand in for what the older version left behind.
+    (dolist (category '(agent-shell-chat-me agent-shell-chat-me-label
+                                            agent-shell-chat-me-input))
+      (let ((stale (make-overlay (point-min) (1+ (point-min)))))
+        (overlay-put stale 'category category)
+        (overlay-put stale 'before-string " Me ")))
+    (agent-shell-chat--relabel)
+    (should-not (seq-find (lambda (overlay) (overlay-get overlay 'category))
+                          (overlays-in (point-min) (point-max))))))
+
 (ert-deftest agent-shell-chat-relabel-idempotent-test ()
   "Relabeling twice does not duplicate overlays."
   (agent-shell-chat-mode-tests--with-shell
@@ -420,8 +485,8 @@ so it does not vanish mid-type when a relabel runs."
       (should (string-match-p "❯" (agent-shell-chat-mode-tests--marker-string me)))
       ;; No indent overlay claims the live prompt's in-progress input.
       (should-not (seq-filter (lambda (overlay)
-                                (eq (overlay-get overlay 'category)
-                                    'agent-shell-chat-me-input))
+                                (eq (overlay-get overlay 'agent-shell-chat--tag)
+                                    'me-input))
                               (overlays-in (point-min) (point-max)))))))
 
 (ert-deftest agent-shell-chat-submitted-input-first-line-indented-test ()
@@ -465,8 +530,8 @@ of a line, and that is where the covered prompt sits."
     (agent-shell-chat-mode-tests--prompt "Claude> ")
     (agent-shell-chat--relabel)
     (let ((input (seq-filter (lambda (overlay)
-                               (eq (overlay-get overlay 'category)
-                                   'agent-shell-chat-me-input))
+                               (eq (overlay-get overlay 'agent-shell-chat--tag)
+                                   'me-input))
                              (overlays-in (point-min) (point-max)))))
       ;; Only the submitted turn gets an indent overlay; the live prompt does not.
       (should (= 1 (length input)))
@@ -490,8 +555,8 @@ Only the live prompt shows an empty `Me', and neither claims input."
       (should (string-match-p "❯" (agent-shell-chat-mode-tests--marker-string (nth 1 me))))
       ;; Neither empty prompt claims input.
       (should-not (seq-filter (lambda (overlay)
-                                (eq (overlay-get overlay 'category)
-                                    'agent-shell-chat-me-input))
+                                (eq (overlay-get overlay 'agent-shell-chat--tag)
+                                    'me-input))
                               (overlays-in (point-min) (point-max)))))))
 
 (ert-deftest agent-shell-chat-stacked-empty-submissions-hidden-test ()
