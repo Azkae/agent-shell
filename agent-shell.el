@@ -3944,8 +3944,17 @@ DIFFS is a list of diff infos as returned by
       (agent-shell--emit-event :event 'error
                                :data (list (cons :code (map-elt acp-error 'code))
                                            (cons :message (map-elt acp-error 'message))))
-      (shell-maker-finish-output :config shell-maker--config
-                                 :success t))))
+      ;; The shell shows a prompt from creation onward, so an error
+      ;; arriving with no turn in flight (bootstrapping failed, or an
+      ;; out of turn error) already has a live prompt to type into.
+      ;; Printing another would stack a second prompt below any
+      ;; unsubmitted input, and comint would strip the highlight off
+      ;; the first one.
+      (unless (and (not (shell-maker-busy))
+                   comint-last-prompt
+                   (agent-shell--live-input-prompt-p comint-last-prompt))
+        (shell-maker-finish-output :config shell-maker--config
+                                   :success t)))))
 
 (defun agent-shell--save-tool-call (state tool-call-id tool-call)
   "Store TOOL-CALL with TOOL-CALL-ID in STATE's :tool-calls alist."

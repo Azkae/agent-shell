@@ -5281,6 +5281,56 @@ prompt and the prompt end sits past the accessible `point-max'."
           ;; Must not raise `Args out of range' and must report not-live.
           (should-not (agent-shell--live-input-prompt-p prompt)))))))
 
+(ert-deftest agent-shell--make-error-handler-keeps-live-prompt-test ()
+  "An error arriving out of turn must not print a second prompt.
+
+The shell shows a prompt from creation onward, so an error while the
+shell is idle (bootstrapping failed, or an out of turn error) already
+has a prompt to type into.  Printing another stacks two prompts and
+comint strips the highlight off the first one."
+  (let ((shell-buf (generate-new-buffer " *test-shell*"))
+        (finished 0))
+    (unwind-protect
+        (with-current-buffer shell-buf
+          (comint-mode)
+          (setq major-mode 'agent-shell-mode)
+          (setq-local agent-shell--state
+                      (agent-shell--make-state :buffer shell-buf))
+          (insert "output\n")
+          (let ((prompt-start (copy-marker (point) nil)))
+            (insert "> ")
+            (setq-local comint-last-prompt
+                        (cons prompt-start (copy-marker (point) nil))))
+          (cl-letf (((symbol-function 'agent-shell--update-fragment)
+                     (lambda (&rest _)))
+                    ((symbol-function 'agent-shell-heartbeat-stop)
+                     (lambda (&rest _)))
+                    ((symbol-function 'shell-maker-finish-output)
+                     (lambda (&rest _) (setq finished (1+ finished)))))
+            ;; Idle shell with a live prompt: no new prompt printed.
+            (cl-letf (((symbol-function 'shell-maker-busy) (lambda (&rest _) nil)))
+              (funcall (agent-shell--make-error-handler
+                        :state (agent-shell--state) :shell-buffer shell-buf)
+                       '((code . -32603) (message . "Internal error")) "raw")
+              (should (equal finished 0)))
+            ;; A turn was in flight: its prompt must be reprinted.
+            (cl-letf (((symbol-function 'shell-maker-busy) (lambda (&rest _) t)))
+              (funcall (agent-shell--make-error-handler
+                        :state (agent-shell--state) :shell-buffer shell-buf)
+                       '((code . -32603) (message . "Internal error")) "raw")
+              (should (equal finished 1)))
+            ;; Idle, but output streamed below the prompt left it stale.
+            (cl-letf (((symbol-function 'shell-maker-busy) (lambda (&rest _) nil)))
+              (let ((out-start (point-max)))
+                (goto-char out-start)
+                (insert "streamed")
+                (put-text-property out-start (point) 'field 'output))
+              (funcall (agent-shell--make-error-handler
+                        :state (agent-shell--state) :shell-buffer shell-buf)
+                       '((code . -32603) (message . "Internal error")) "raw")
+              (should (equal finished 2)))))
+      (kill-buffer shell-buf))))
+
 (ert-deftest agent-shell--realign-on-change-schedules-regardless-of-width ()
   "Schedule a re-align on every window change, not just width changes.
 Regression: content rendered while the buffer was off-screen (a table
