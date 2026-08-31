@@ -50,8 +50,6 @@
 (require 'json)
 (require 'mailcap)
 (require 'map)
-(unless (require 'markdown-overlays nil 'noerror)
-  (error "Please update 'shell-maker' to v0.91.2 or newer"))
 (require 'agent-shell-artist)
 (require 'agent-shell-faces)
 (require 'agent-shell-markdown)
@@ -91,7 +89,6 @@
 (require 'agent-shell-viewport)
 (require 'agent-shell-xai)
 (require 'image)
-(require 'markdown-overlays)
 (require 'shell-maker)
 (require 'svg nil :noerror)
 (require 'transient)
@@ -301,25 +298,6 @@ are applied.  Each function is called with a range alist containing:
   :type 'boolean
   :group 'agent-shell)
 
-(cl-defun agent-shell--markdown-overlays-put (&key render-images highlight-blocks
-                                                   &allow-other-keys)
-  "Deprecated overlay-based markdown renderer.
-
-Wraps `markdown-overlays-put' from the `markdown-overlays' package
-and translates agent-shell's renderer-agnostic config to the
-`markdown-overlays-*' variables it expects, so call sites don't
-need to know about the overlay package's variable names.
-RENDER-IMAGES toggles image rendering; HIGHLIGHT-BLOCKS toggles
-source-block highlighting.
-
-Deprecated in favour of `agent-shell-markdown-replace-markup' (the
-in-place renderer, now the default).  Kept for backwards
-compatibility; will be removed once the in-place renderer has
-settled and `markdown-overlays' is no longer a dependency."
-  (let ((markdown-overlays-render-images render-images)
-        (markdown-overlays-highlight-blocks highlight-blocks))
-    (markdown-overlays-put)))
-
 (defcustom agent-shell-markdown-render-function
   #'agent-shell-markdown-replace-markup
   "Function called to render markdown in the current narrowed buffer.
@@ -336,18 +314,12 @@ Callers narrow the buffer to the target span
 \(for example, a fragment body or label) before calling, so the function can
 scan the whole accessible portion.
 
-Two implementations ship with agent-shell:
+One implementation ships with agent-shell:
 
   - `agent-shell-markdown-replace-markup' (default): in-place
     renderer that rewrites markup characters into propertized text
     (no overlays).  Faster on streaming workloads by rewriting
     buffer.
-
-  - `agent-shell--markdown-overlays-put' (deprecated):
-    overlay-based renderer wrapping `markdown-overlays-put'.
-    Honors both keyword arguments via the corresponding
-    `markdown-overlays-*' variables.  Will be removed once the
-    in-place renderer has settled.
 
 Set to a custom function to plug in a different renderer; the
 function should accept `&key render-images highlight-blocks

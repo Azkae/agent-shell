@@ -4195,11 +4195,20 @@ and it must handle that cleanly."
           (remove-hook 'kill-buffer-hook #'agent-shell--clean-up t))
         (kill-buffer shell-buf)))))
 
+(defun agent-shell-tests--tag-markup (start end type)
+  "Overlay START to END as markup TYPE, as an overlay renderer would.
+Tagged directly rather than by rendering, so these tests don't pull in
+`markdown-overlays'.  Ranges and types mirror what `markdown-overlays-put'
+produced for the same input."
+  (overlay-put (make-overlay start end) 'markdown-overlays-markup-type type))
+
 (ert-deftest agent-shell-filter-buffer-substring-strips-hidden-markup ()
   "Copying text should exclude markdown syntax hidden by overlays."
   (with-temp-buffer
     (insert "```emacs-lisp\n(defun foo (x)\n  x)\n```\n")
-    (markdown-overlays-put)
+    (agent-shell-tests--tag-markup 1 4 'fence)
+    (agent-shell-tests--tag-markup 4 15 'language)
+    (agent-shell-tests--tag-markup 35 38 'fence)
     (let ((result (agent-shell--filter-buffer-substring (point-min) (point-max))))
       (should (equal result "(defun foo (x)\n  x)\n\n")))))
 
@@ -4207,7 +4216,8 @@ and it must handle that cleanly."
   "Copying inline code should exclude the surrounding backticks."
   (with-temp-buffer
     (insert "Use `foo-bar` for that.")
-    (markdown-overlays-put)
+    (agent-shell-tests--tag-markup 5 6 'inline-code)
+    (agent-shell-tests--tag-markup 13 14 'inline-code)
     (let ((result (agent-shell--filter-buffer-substring (point-min) (point-max))))
       (should (equal result "Use foo-bar for that.")))))
 
@@ -4589,8 +4599,6 @@ interaction (e.g. \"1/2\" after switching to the latest interaction)."
                      (lambda (&rest _) shell-buffer))
                     ((symbol-function 'shell-maker-history-position)
                      (lambda () '((:current . 2) (:total . 2))))
-                    ((symbol-function 'markdown-overlays-put)
-                     (lambda (&rest _) nil))
                     ((symbol-function 'agent-shell-viewport--update-header)
                      (lambda ()
                        (setq rendered-position (agent-shell-viewport--position)))))
