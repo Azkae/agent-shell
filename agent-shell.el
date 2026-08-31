@@ -2066,34 +2066,36 @@ See also `agent-shell-confirm-interrupt'."
       :shell-buffer (map-elt shell :buffer)))))
 
 (defun agent-shell--filter-buffer-substring (start end &optional delete)
-  "Return visible text between START and END, stripping hidden markup.
+  "Return the text between START and END, adjusted for copying.
 If DELETE is non-nil, delete the text between START and END.
 
-START and END may be given in either order: like the stock
-`buffer-substring', a reversed range (START > END, e.g. a
-right-to-left mouse selection or a kill where mark > point) is
-normalized.  Without this, the loop below would never run and the
-function would return the empty string, silently breaking mouse
-copy depending on selection direction."
+A paste elsewhere should give plain characters rather than agent-shell's
+implementation, so every text property is dropped: our faces, keymaps,
+cursor sensors, display overrides and internal markers all go.  The one
+kept is `yank-handler', which rewrites content on insertion rather than
+decorating it (see `agent-shell--block-quote').
+
+`agent-shell-markdown-replace-markup' renders by rewriting markup in
+place, so the buffer already holds rendered text and there is nothing
+here to strip beyond those properties.
+
+START and END may be given in either order, like the stock
+`buffer-substring': a reversed range (START > END, e.g. a right-to-left
+mouse selection or a kill where mark > point) is normalized."
   (let* ((beg (min start end))
          (fin (max start end))
-         (text "")
-         (pos beg))
-    (while (< pos fin)
-      (let ((next (next-overlay-change pos))
-            (exclude (seq-find (lambda (ov)
-                                 (memq (overlay-get ov 'markdown-overlays-markup-type)
-                                       '(fence language inline-code
-                                               bold italic strikethrough header)))
-                               (overlays-at pos))))
-        (unless exclude
-          (setq text (concat text (buffer-substring pos (min next fin)))))
-        (setq pos (max next (1+ pos)))))
+         (text (buffer-substring beg fin)))
     (when delete
       (delete-region beg fin))
-    (remove-text-properties 0 (length text)
-                            '(line-prefix nil wrap-prefix nil)
-                            text)
+    (let ((pos 0))
+      (while (< pos (length text))
+        (let ((next (or (next-single-property-change pos 'yank-handler text)
+                        (length text)))
+              (handler (get-text-property pos 'yank-handler text)))
+          (set-text-properties pos next
+                               (when handler (list 'yank-handler handler))
+                               text)
+          (setq pos next))))
     text))
 
 (defvar-keymap agent-shell-mode-map

@@ -4195,31 +4195,48 @@ and it must handle that cleanly."
           (remove-hook 'kill-buffer-hook #'agent-shell--clean-up t))
         (kill-buffer shell-buf)))))
 
-(defun agent-shell-tests--tag-markup (start end type)
-  "Overlay START to END as markup TYPE, as an overlay renderer would.
-Tagged directly rather than by rendering, so these tests don't pull in
-`markdown-overlays'.  Ranges and types mirror what `markdown-overlays-put'
-produced for the same input."
-  (overlay-put (make-overlay start end) 'markdown-overlays-markup-type type))
-
-(ert-deftest agent-shell-filter-buffer-substring-strips-hidden-markup ()
-  "Copying text should exclude markdown syntax hidden by overlays."
+(ert-deftest agent-shell-filter-buffer-substring-copies-rendered-text ()
+  "Copying yields the rendered text the in-place renderer left behind.
+`agent-shell-markdown-replace-markup' removes markup as it renders, so
+the copy path has nothing left to strip."
   (with-temp-buffer
-    (insert "```emacs-lisp\n(defun foo (x)\n  x)\n```\n")
-    (agent-shell-tests--tag-markup 1 4 'fence)
-    (agent-shell-tests--tag-markup 4 15 'language)
-    (agent-shell-tests--tag-markup 35 38 'fence)
-    (let ((result (agent-shell--filter-buffer-substring (point-min) (point-max))))
-      (should (equal result "(defun foo (x)\n  x)\n\n")))))
+    (insert "Use `foo-bar` and **bold** here.")
+    (agent-shell-markdown-replace-markup :complete t)
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "Use foo-bar and bold here."))))
 
-(ert-deftest agent-shell-filter-buffer-substring-strips-inline-code-backticks ()
-  "Copying inline code should exclude the surrounding backticks."
+(ert-deftest agent-shell-filter-buffer-substring-drops-properties ()
+  "Copying drops every property, so a paste gives plain characters.
+Covers the chrome a shell buffer layers on: faces, indent prefixes that
+would re-indent the text, mouse pointers, and the UI's own markers."
   (with-temp-buffer
-    (insert "Use `foo-bar` for that.")
-    (agent-shell-tests--tag-markup 5 6 'inline-code)
-    (agent-shell-tests--tag-markup 13 14 'inline-code)
-    (let ((result (agent-shell--filter-buffer-substring (point-min) (point-max))))
-      (should (equal result "Use foo-bar for that.")))))
+    (insert (propertize "rendered output"
+                        'face 'font-lock-keyword-face
+                        'line-prefix "    "
+                        'wrap-prefix "    "
+                        'pointer 'hand
+                        'agent-shell-ui-section 'label-left))
+    (let ((copied (agent-shell--filter-buffer-substring (point-min) (point-max)))
+          (pos 0))
+      (should (equal copied "rendered output"))
+      (while (< pos (length copied))
+        (should-not (text-properties-at pos copied))
+        (setq pos (1+ pos))))))
+
+(ert-deftest agent-shell-filter-buffer-substring-keeps-yank-handler ()
+  "Copying keeps `yank-handler', which rewrites content rather than styling it.
+`agent-shell--block-quote' leans on it to drop the leading \"> \" on
+paste, so stripping it would silently paste the markdown prefix."
+  (with-temp-buffer
+    (insert (agent-shell--block-quote "hello\nworld"))
+    (let ((copied (agent-shell--filter-buffer-substring (point-min) (point-max))))
+      (should (equal copied "> hello\n> world"))
+      (should-not (get-text-property 0 'face copied))
+      (should (get-text-property 0 'yank-handler copied))
+      (should (equal (with-temp-buffer
+                       (insert-for-yank copied)
+                       (buffer-substring-no-properties (point-min) (point-max)))
+                     "hello\nworld")))))
 
 (ert-deftest agent-shell-filter-buffer-substring-handles-reversed-range ()
   "A reversed range yields the same text as the forward one.
