@@ -1939,6 +1939,31 @@ associated viewport buffer exists, switch to that instead."
         (message "Copied session ID: %s" session-id))
     (user-error "No active session")))
 
+(defun agent-shell-copy-last-output ()
+  "Copy the last agent output to the kill ring.
+
+Copies the most recent output wherever point is, so the latest response
+can be grabbed without leaving an earlier one being read.
+
+Copies the rendered text, exactly what `kill-ring-save' over the same
+region yields, including the body of any collapsed section.  Use
+`agent-shell-copy-as-markdown' to recover the agent's original markdown
+instead."
+  (declare (modes agent-shell-mode))
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in a shell"))
+  (if-let* ((process (get-buffer-process (current-buffer))))
+      (save-mark-and-excursion
+        ;; `shell-maker-mark-output' marks the output at point, and only
+        ;; falls back to the last one when point is at the latest prompt.
+        ;; Go there first so scrolled-back point never picks an older one.
+        (goto-char (process-mark process))
+        (shell-maker-mark-output)
+        (copy-region-as-kill (region-beginning) (region-end)))
+    (user-error "No agent running"))
+  (message "Copied last output"))
+
 (defun agent-shell-copy-as-markdown (beg end)
   "Copy the region between BEG and END to the kill ring as markdown.
 
@@ -2079,6 +2104,14 @@ decorating it (see `agent-shell--block-quote').
 place, so the buffer already holds rendered text and there is nothing
 here to strip beyond those properties.
 
+A collapsed fold indicator is also pointed down, since the body it hides
+is copied along with it.
+
+For example, copying a collapsed thought:
+
+  \"▶ Thought\\nSo the user wants...\"
+  => \"▼ Thought\\nSo the user wants...\"
+
 START and END may be given in either order, like the stock
 `buffer-substring': a reversed range (START > END, e.g. a right-to-left
 mouse selection or a kill where mark > point) is normalized."
@@ -2087,6 +2120,24 @@ mouse selection or a kill where mark > point) is normalized."
          (text (buffer-substring beg fin)))
     (when delete
       (delete-region beg fin))
+    ;; Point collapsed indicators down before the properties go, since this
+    ;; keys on the UI's own property, leaving a `▶' the agent wrote in its
+    ;; response alone.  Skipped when the text holds none, as every kill in the
+    ;; buffer lands here, prompt edits included.  Indicators carry `read-only',
+    ;; which travels with the text into the temp buffer and would otherwise
+    ;; block `replace-match'.
+    (when (string-search "▶" text)
+      (setq text
+            (with-temp-buffer
+              (let ((inhibit-read-only t))
+                (insert text)
+                (goto-char (point-min))
+                (while (search-forward "▶" nil t)
+                  (when (eq (get-text-property (match-beginning 0)
+                                               'agent-shell-ui-section)
+                            'indicator)
+                    (replace-match "▼" t t)))
+                (buffer-string)))))
     (let ((pos 0))
       (while (< pos (length text))
         (let ((next (or (next-single-property-change pos 'yank-handler text)

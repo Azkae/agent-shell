@@ -4207,8 +4207,9 @@ the copy path has nothing left to strip."
 
 (ert-deftest agent-shell-filter-buffer-substring-drops-properties ()
   "Copying drops every property, so a paste gives plain characters.
-Covers the chrome a shell buffer layers on: faces, indent prefixes that
-would re-indent the text, mouse pointers, and the UI's own markers."
+Covers the chrome a shell buffer layers on: faces, indent
+prefixes that would re-indent the text, mouse pointers, and the UI's own
+markers."
   (with-temp-buffer
     (insert (propertize "rendered output"
                         'face 'font-lock-keyword-face
@@ -4251,6 +4252,128 @@ direction."
           (reversed (agent-shell--filter-buffer-substring (point-max) (point-min))))
       (should (equal forward "hello world"))
       (should (equal reversed forward)))))
+
+(ert-deftest agent-shell-filter-buffer-substring-expands-fold-indicators ()
+  "Copying a collapsed section points its fold indicator down.
+The hidden body is copied too, so a `▶' would claim the copy hides
+content it actually carries."
+  (with-temp-buffer
+    (insert "▶ Thought\n")
+    (put-text-property (point-min) (+ (point-min) 2)
+                       'agent-shell-ui-section 'indicator)
+    (let ((body-start (point)))
+      (insert "So the user wants...")
+      (put-text-property body-start (point) 'invisible t))
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "▼ Thought\nSo the user wants..."))))
+
+(ert-deftest agent-shell-filter-buffer-substring-expands-rendered-fragment ()
+  "A really rendered collapsed fragment copies the same as an expanded one.
+Guards the render path rather than hand-placed properties: a rendered
+indicator also carries `read-only', which travels with the copied text
+and blocks a naive substitution."
+  (let ((collapsed (with-temp-buffer
+                     (agent-shell-ui-mode 1)
+                     (agent-shell-ui-update-fragment
+                      (agent-shell-ui-make-fragment-model
+                       :namespace-id "ns" :block-id "1"
+                       :label-left "Thought" :body "So the user wants...")
+                      :expanded nil :navigation 'always)
+                     (agent-shell--filter-buffer-substring (point-min) (point-max))))
+        (expanded (with-temp-buffer
+                    (agent-shell-ui-mode 1)
+                    (agent-shell-ui-update-fragment
+                     (agent-shell-ui-make-fragment-model
+                      :namespace-id "ns" :block-id "1"
+                      :label-left "Thought" :body "So the user wants...")
+                     :expanded t :navigation 'always)
+                    (agent-shell--filter-buffer-substring (point-min) (point-max)))))
+    (should (string-match-p "▼ Thought" collapsed))
+    (should (string-match-p "So the user wants\\.\\.\\." collapsed))
+    (should (equal collapsed expanded))))
+
+(ert-deftest agent-shell-filter-buffer-substring-keeps-agent-authored-triangles ()
+  "Copying leaves a `▶' the agent wrote in its response alone.
+Only glyphs the UI tagged as fold indicators are rewritten."
+  (with-temp-buffer
+    (insert "Press ▶ to play.")
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "Press ▶ to play."))))
+
+(defvar agent-shell-tests--marked-from nil
+  "Point at which the stubbed `shell-maker-mark-output' last ran.")
+
+(defmacro agent-shell-tests--with-fake-output (prompt-pos &rest body)
+  "Run BODY in a fake shell buffer whose process mark sits at PROMPT-POS.
+
+Stubs the shell's process so `agent-shell-copy-last-output' can locate
+the latest prompt, and stubs `shell-maker-mark-output' to mark from
+point to `point-max', recording where point was when it ran in
+`agent-shell-tests--marked-from'."
+  (declare (indent 1) (debug t))
+  `(cl-letf (((symbol-function 'get-buffer-process)
+              (lambda (_buffer) 'fake-process))
+             ((symbol-function 'process-mark)
+              (lambda (_process) (copy-marker ,prompt-pos)))
+             ((symbol-function 'shell-maker-mark-output)
+              (lambda ()
+                (setq agent-shell-tests--marked-from (point))
+                (set-mark (point-max)))))
+     ,@body))
+
+(ert-deftest agent-shell-copy-last-output-copies-through-filter ()
+  "Copying the last output routes through agent-shell's copy filter.
+Asserted via a fold indicator, which the filter rewrites, so this holds
+whichever markdown renderer is in use."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (setq-local filter-buffer-substring-function #'agent-shell--filter-buffer-substring)
+    (insert "▶ Thought\n")
+    (put-text-property (point-min) (+ (point-min) 2)
+                       'agent-shell-ui-section 'indicator)
+    (insert "So the user wants...")
+    (agent-shell-tests--with-fake-output (point-min)
+      (agent-shell-copy-last-output))
+    (should (equal (current-kill 0) "▼ Thought\nSo the user wants..."))))
+
+(ert-deftest agent-shell-copy-last-output-ignores-point ()
+  "Copying the last output starts from the latest prompt, not from point.
+Scrolling back to read an earlier response must not change which output
+this command copies."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (insert "old output\nlatest output")
+    (goto-char 3)
+    (agent-shell-tests--with-fake-output 12
+      (agent-shell-copy-last-output))
+    (should (equal agent-shell-tests--marked-from 12))
+    (should (equal (current-kill 0) "latest output"))))
+
+(ert-deftest agent-shell-copy-last-output-restores-point-and-mark ()
+  "Copying the last output leaves point put and the mark inactive.
+Marking the output is an implementation detail of the copy, so it must
+not disturb the region the user had (or did not have) selected."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (insert "hello world")
+    (goto-char 3)
+    (agent-shell-tests--with-fake-output (point-min)
+      (agent-shell-copy-last-output))
+    (should (equal (point) 3))
+    (should-not mark-active)))
+
+(ert-deftest agent-shell-copy-last-output-outside-shell-errors ()
+  "Copying the last output outside a shell reports a `user-error'."
+  (with-temp-buffer
+    (text-mode)
+    (should-error (agent-shell-copy-last-output) :type 'user-error)))
+
+(ert-deftest agent-shell-copy-last-output-without-process-errors ()
+  "Copying the last output in a shell with no process reports a `user-error'."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (insert "output")
+    (should-error (agent-shell-copy-last-output) :type 'user-error)))
 
 (ert-deftest agent-shell-trim-strips-untagged-whitespace ()
   ;; Plain `string-trim'-style behavior when nothing is tagged: outer
