@@ -365,8 +365,8 @@ above, putting the first line of a multi-line input out of reach of
                               (1- pos)))
                ;; The live prompt's marker, shown before the input whether or
                ;; not text has been typed yet.  Keying this off `blank' would
-               ;; drop it the instant the user starts typing.  Carried as a
-               ;; `line-prefix', which occupies no buffer position.
+               ;; drop it the instant the user starts typing.  Carried as the
+               ;; covered prompt's `display', standing on its buffer positions.
                (marker (when (and live labeled)
                          (propertize (concat agent-shell-chat--body-indent
                                              agent-shell-chat--prompt)
@@ -409,15 +409,23 @@ above, putting the first line of a multi-line input out of reach of
             ;; span's start flips with `label-nl', and reuse has to survive
             ;; that flip rather than strand the overlay it should have moved.
             :anchor-beg pos :anchor-end run-end
-            ;; Hide the covered prompt with a `display' of \"\".
+            ;; Replace the covered prompt: with the live prompt's marker when
+            ;; there is one, otherwise with \"\" to hide it.
             ;;
-            ;; Where a newline above carries the label, nothing is shown at
-            ;; this position: a string here would keep `previous-line' from
-            ;; settling on the input's first line.  The prefixes do the rest,
-            ;; occupying no buffer position of their own.  They indent this
-            ;; line, which the input's first line shares with the covered
-            ;; prompt, and carry the live prompt's marker (indent included).
-            ;; They also drop any tinted gutter inherited from that text.
+            ;; Where a newline above carries the label, no *inserted* string
+            ;; stands at this position: a `before-string' here would keep
+            ;; `previous-line' from settling on the input's first line.  The
+            ;; marker is safe as a `display' because it stands on the covered
+            ;; prompt's own positions rather than adding any, so vertical
+            ;; motion behaves as it did with the prompt text visible.
+            ;;
+            ;; It must not be a `line-prefix': that belongs to the whole line,
+            ;; and the input's first line shares this one, so redisplay cannot
+            ;; take its cheap single-line path -- every edit re-lays the line
+            ;; out and the input visibly paints unindented before jumping
+            ;; right.  `line-prefix' is left to `input-indent' alone, which
+            ;; only ever applies to a submitted turn, and still drops any
+            ;; tinted gutter inherited from the covered text.
             ;;
             ;; With no newline above, the label renders here instead and each
             ;; of its blank lines becomes a row of this line.  The marker
@@ -426,8 +434,9 @@ above, putting the first line of a multi-line input out of reach of
             ;; with the input.
             :props (list (cons 'before-string
                                (if label-nl "" (concat before (or marker ""))))
-                         (cons 'display "")
-                         (cons 'line-prefix (if label-nl (or marker input-indent) ""))
+                         (cons 'display (if label-nl (or marker "") ""))
+                         (cons 'line-prefix
+                               (if (and label-nl (not marker)) input-indent ""))
                          (cons 'wrap-prefix (if label-nl input-indent ""))))
            kept)
           ;; Indent a submitted turn's input so it aligns with the response

@@ -37,11 +37,12 @@ no newline above to carry it."
 
 (defun agent-shell-chat-mode-tests--marker-string (me)
   "Return the string carrying ME\='s prompt marker.
-It travels as a `line-prefix' (occupying no buffer position) where the
-label rides the newline above; with no newline to ride, the label renders
-on ME itself and the marker rejoins it there."
+It travels as the covered prompt's `display' (standing on its buffer
+positions, adding none) where the label rides the newline above; with no
+newline to ride, the label renders on ME itself and the marker rejoins it
+there."
   (or (seq-find (lambda (string) (string-match-p "❯" string))
-                (list (or (overlay-get me 'line-prefix) "")
+                (list (or (overlay-get me 'display) "")
                       (or (overlay-get me 'before-string) "")))
       ""))
 
@@ -323,6 +324,31 @@ the input reachable."
       ;; The label rides the newline that closes the line above the prompt.
       (should (string-match-p "Me" (agent-shell-chat-mode-tests--label-string me)))
       (should (eq ?\n (char-before (overlay-start me)))))))
+
+(ert-deftest agent-shell-chat-live-prompt-marker-not-line-prefix-test ()
+  "The live prompt's marker is a `display\=', never a `line-prefix\='.
+
+A `line-prefix\=' belongs to the whole line, and the input's first line
+shares its line with the covered prompt.  Redisplay then cannot take its
+cheap single-line path: every edit re-lays the line out, and the input
+visibly paints unindented before jumping right.
+
+Drawing the marker as the covered prompt's `display\=' costs nothing per
+edit, and still leaves the input's first line reachable by `previous-line\='
+because it stands on the prompt's own buffer positions rather than adding
+any (contrast a `before-string\=', which would not -- see #786)."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "reply\n\n")
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "typing here")
+    (let ((agent-shell-prompt-bar-mode nil))
+      (agent-shell-chat--relabel))
+    (let ((me (car (last (agent-shell-chat-mode-tests--me-overlays)))))
+      (should (string-match-p "❯" (or (overlay-get me 'display) "")))
+      (should-not (string-match-p "❯" (or (overlay-get me 'line-prefix) ""))))))
 
 (ert-deftest agent-shell-chat-decorates-prompt-region-test ()
   "A prompt read outside the shell is hidden behind the `Me' label.
