@@ -2096,9 +2096,13 @@ If DELETE is non-nil, delete the text between START and END.
 
 A paste elsewhere should give plain characters rather than agent-shell's
 implementation, so every text property is dropped: our faces, keymaps,
-cursor sensors, display overrides and internal markers all go.  The one
-kept is `yank-handler', which rewrites content on insertion rather than
-decorating it (see `agent-shell--block-quote').
+cursor sensors, display overrides and internal markers all go.  One
+\"> \" per line goes too, from text `agent-shell--block-quote' marked,
+so a quoted reply copies as the plain text it shows.
+
+Deciding this at copy time rather than on insertion keeps one copy
+meaning one thing: a `yank-handler' would rewrite for `yank' while the
+system clipboard and isearch kept the raw \"> \".
 
 `agent-shell-markdown-replace-markup' renders by rewriting markup in
 place, so the buffer already holds rendered text and there is nothing
@@ -2138,16 +2142,14 @@ mouse selection or a kill where mark > point) is normalized."
                             'indicator)
                     (replace-match "▼" t t)))
                 (buffer-string)))))
-    (let ((pos 0))
-      (while (< pos (length text))
-        (let ((next (or (next-single-property-change pos 'yank-handler text)
-                        (length text)))
-              (handler (get-text-property pos 'yank-handler text)))
-          (set-text-properties pos next
-                               (when handler (list 'yank-handler handler))
-                               text)
-          (setq pos next))))
-    text))
+    ;; One "> " per line, matching what the block quote inserted, so
+    ;; quoting already-quoted text keeps the inner level.
+    (substring-no-properties
+     (replace-regexp-in-string
+      (rx line-start "> ")
+      (lambda (match)
+        (if (get-text-property 0 'agent-shell-block-quote match) "" match))
+      text nil t))))
 
 (defvar-keymap agent-shell-mode-map
   :parent shell-maker-mode-map
@@ -9714,8 +9716,9 @@ When DEACTIVATE is non-nil, deactivate region/selection."
   "Return TEXT with each line prefixed by \"> \", displayed as a bar.
 
 Underlying text keeps the \"> \" so it remains valid markdown;
-the bar is a display-only override.  Yanks strip both the bar
-styling and the leading \"> \" so paste gives plain text."
+the bar is a display-only override.  The `agent-shell-block-quote'
+property tells `agent-shell--filter-buffer-substring' to drop the
+\"> \" from copies so paste gives plain text."
   (let* ((bar      (propertize "▌" 'face 'agent-shell-markdown-blockquote))
          (wrap     (propertize "▌ " 'face 'agent-shell-markdown-blockquote))
          (quoted   (concat "> " (replace-regexp-in-string
@@ -9726,12 +9729,7 @@ styling and the leading \"> \" so paste gives plain text."
      0 (length rendered)
      (list 'wrap-prefix wrap
            'face 'agent-shell-markdown-blockquote
-           'yank-handler
-           (list (lambda (s)
-                   (insert
-                    (replace-regexp-in-string
-                     (rx line-start "> ") ""
-                     (substring-no-properties s))))))
+           'agent-shell-block-quote t)
      rendered)
     (while (string-match (rx line-start ">") rendered pos)
       (put-text-property (match-beginning 0) (match-end 0)

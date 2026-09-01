@@ -4224,20 +4224,40 @@ markers."
         (should-not (text-properties-at pos copied))
         (setq pos (1+ pos))))))
 
-(ert-deftest agent-shell-filter-buffer-substring-keeps-yank-handler ()
-  "Copying keeps `yank-handler', which rewrites content rather than styling it.
-`agent-shell--block-quote' leans on it to drop the leading \"> \" on
-paste, so stripping it would silently paste the markdown prefix."
+(ert-deftest agent-shell-filter-buffer-substring-strips-block-quote-prefix ()
+  "Copying quoted text drops the \"> \" `agent-shell--block-quote' added."
   (with-temp-buffer
     (insert (agent-shell--block-quote "hello\nworld"))
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "hello\nworld"))))
+
+(ert-deftest agent-shell-filter-buffer-substring-strips-one-quote-level ()
+  "Quoting already-quoted text keeps the inner \"> \" on copy."
+  (with-temp-buffer
+    (insert (agent-shell--block-quote "> hello"))
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "> hello"))))
+
+(ert-deftest agent-shell-filter-buffer-substring-keeps-rendered-block-quote ()
+  "Markdown blockquotes copy with their \"> \" so the source round-trips."
+  (with-temp-buffer
+    (insert "> hello\n")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "> hello\n"))))
+
+(ert-deftest agent-shell-filter-buffer-substring-block-quote-copies-alike ()
+  "A quoted reply copies the same whatever consumes it.
+The `yank-handler' this replaced rewrote text for `yank' only, so the
+system clipboard and isearch kept a \"> \" that `C-y' dropped."
+  (with-temp-buffer
+    (insert (agent-shell--block-quote "hello"))
     (let ((copied (agent-shell--filter-buffer-substring (point-min) (point-max))))
-      (should (equal copied "> hello\n> world"))
-      (should-not (get-text-property 0 'face copied))
-      (should (get-text-property 0 'yank-handler copied))
+      (should (equal copied "hello"))
       (should (equal (with-temp-buffer
                        (insert-for-yank copied)
                        (buffer-substring-no-properties (point-min) (point-max)))
-                     "hello\nworld")))))
+                     copied)))))
 
 (ert-deftest agent-shell-filter-buffer-substring-handles-reversed-range ()
   "A reversed range yields the same text as the forward one.
