@@ -2633,7 +2633,7 @@ after" nil)))))
 | **Alice** | Engineer |"))
          (alice-pos (string-match "Alice" s)))
     (should alice-pos)
-    (should (equal '(agent-shell-markdown-bold agent-shell-markdown-table-row)
+    (should (equal '(agent-shell-markdown-bold agent-shell-markdown-table)
                    (get-text-property alice-pos 'face s)))))
 
 (ert-deftest agent-shell-markdown-table-leaves-cell-link-keys-alone ()
@@ -2925,7 +2925,7 @@ after" nil)))))
   ;; smear the first char's `font-lock-face' (a border) across every
   ;; cell.  A fresh render mirrors each cell's `face' to `font-lock-face'
   ;; on its own, so header cells stay `table-header' and plain data
-  ;; cells stay `table-row' rather than all going border-grey.
+  ;; cells stay `table' rather than all going border-grey.
   (with-temp-buffer
     (insert "| A | B |\n|---|---|\n| 1 | 2 |\n")
     (agent-shell-markdown-replace-markup)
@@ -2945,7 +2945,7 @@ after" nil)))))
              (cons :start (prop-match-beginning region))
              (cons :end (prop-match-end region)))))
     ;; Header cell recovers its header face; a plain data cell gets its
-    ;; row face back rather than the smeared border face.
+    ;; table face back rather than the smeared border face.
     (should (eq (get-text-property
                  (save-excursion (goto-char (point-min))
                                  (1- (search-forward "A")))
@@ -2955,33 +2955,50 @@ after" nil)))))
                  (save-excursion (goto-char (point-min))
                                  (1- (search-forward "1")))
                  'font-lock-face)
-                'agent-shell-markdown-table-row))))
+                'agent-shell-markdown-table))))
+
+(defun agent-shell-markdown-tests--table-cell-faces (markdown cells)
+  "Return the `face' property each of CELLS carries once MARKDOWN renders.
+CELLS holds the text to search for, one entry per row.  For example,
+rendering \"| A |\\n|---|\\n| 1 |\\n| 2 |\\n\" with CELLS (\"1\" \"2\")
+returns (agent-shell-markdown-table agent-shell-markdown-table-zebra)."
+  (with-temp-buffer
+    (insert markdown)
+    (agent-shell-markdown-replace-markup)
+    (seq-map (lambda (cell)
+               (goto-char (point-min))
+               (search-forward cell)
+               (get-text-property (1- (point)) 'face))
+             cells)))
 
 (ert-deftest agent-shell-markdown-table-every-data-row-carries-a-face ()
-  ;; Plain data rows carry the row face and alternating rows the zebra
+  ;; Plain data rows carry the table face and alternating rows the zebra
   ;; face, so no data row is left unfaced.  `mixed-pitch-mode' and
   ;; similar remap fonts per face, so an unfaced row can't be kept in
   ;; the table's font and misaligns.
-  (let ((cell-faces
-         (lambda (markdown)
-           (with-temp-buffer
-             (insert markdown)
-             (agent-shell-markdown-replace-markup)
-             (seq-map (lambda (cell)
-                        (goto-char (point-min))
-                        (search-forward cell)
-                        (get-text-property (1- (point)) 'face))
-                      '("1" "2" "3"))))))
-    (should (equal (funcall cell-faces "| A |\n|---|\n| 1 |\n| 2 |\n| 3 |\n")
-                   '(agent-shell-markdown-table-row
-                     agent-shell-markdown-table-zebra
-                     agent-shell-markdown-table-row)))
-    ;; With striping off, every data row is a plain row.
-    (let ((agent-shell-markdown-table-zebra-stripe nil))
-      (should (equal (funcall cell-faces "| A |\n|---|\n| 1 |\n| 2 |\n| 3 |\n")
-                     '(agent-shell-markdown-table-row
-                       agent-shell-markdown-table-row
-                       agent-shell-markdown-table-row))))))
+  (should (equal (agent-shell-markdown-tests--table-cell-faces
+                  "| A |\n|---|\n| 1 |\n| 2 |\n| 3 |\n" '("1" "2" "3"))
+                 '(agent-shell-markdown-table
+                   agent-shell-markdown-table-zebra
+                   agent-shell-markdown-table)))
+  ;; With striping off, every data row is a plain row.
+  (let ((agent-shell-markdown-table-zebra-stripe nil))
+    (should (equal (agent-shell-markdown-tests--table-cell-faces
+                    "| A |\n|---|\n| 1 |\n| 2 |\n| 3 |\n" '("1" "2" "3"))
+                   '(agent-shell-markdown-table
+                     agent-shell-markdown-table
+                     agent-shell-markdown-table)))))
+
+(ert-deftest agent-shell-markdown-table-faces-inherit-the-table-face ()
+  ;; The header, border and zebra faces all resolve through
+  ;; `agent-shell-markdown-table', which is what lets a face-remapping
+  ;; setup pin a whole table by naming that one face.  It comes last in
+  ;; each inherit list, so a face's own styling still wins.
+  (dolist (face '(agent-shell-markdown-table-header
+                  agent-shell-markdown-table-border
+                  agent-shell-markdown-table-zebra))
+    (should (equal (seq-drop (face-attribute face :inherit) 1)
+                   '(agent-shell-markdown-table)))))
 
 (ert-deftest agent-shell-markdown-table-sizes-against-destination-window ()
   ;; Regression: column allocation must size against the table's
@@ -3597,9 +3614,9 @@ A " nil)
              ("
 " nil)
              ("│" (agent-shell-markdown-table-border))
-             (" 1 " (agent-shell-markdown-table-row))
+             (" 1 " (agent-shell-markdown-table))
              ("│" (agent-shell-markdown-table-border))
-             (" 2 " (agent-shell-markdown-table-row))
+             (" 2 " (agent-shell-markdown-table))
              ("│" (agent-shell-markdown-table-border))))))
 
 (ert-deftest agent-shell-markdown-watermark-skips-prefix-on-streamed-append ()

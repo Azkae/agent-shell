@@ -138,27 +138,32 @@
   "Face for level-6 headers rendered by `agent-shell-markdown-convert'."
   :group 'agent-shell-markdown)
 
+(defface agent-shell-markdown-table
+  '((t nil))
+  "Base face for every character of a rendered table.
+Carries no attributes of its own, so default rendering is unchanged.
+Plain data rows carry it directly, while
+`agent-shell-markdown-table-header',
+`agent-shell-markdown-table-border' and
+`agent-shell-markdown-table-zebra' inherit it, listing it last so
+their own attributes still win.  One face therefore covers a whole
+table, which is what face-remapping setups such as
+`mixed-pitch-mode' need to pin every column to the same font."
+  :group 'agent-shell-markdown)
+
 (defface agent-shell-markdown-table-header
-  '((t :inherit bold))
+  '((t :inherit (bold agent-shell-markdown-table)))
   "Face for table header row content."
   :group 'agent-shell-markdown)
 
 (defface agent-shell-markdown-table-border
-  '((t :inherit font-lock-comment-face))
+  '((t :inherit (font-lock-comment-face agent-shell-markdown-table)))
   "Face for table borders (pipes and dashes)."
   :group 'agent-shell-markdown)
 
 (defface agent-shell-markdown-table-zebra
-  '((t :inherit lazy-highlight))
+  '((t :inherit (lazy-highlight agent-shell-markdown-table)))
   "Face for alternating (zebra) data rows in tables."
-  :group 'agent-shell-markdown)
-
-(defface agent-shell-markdown-table-row
-  '((t nil))
-  "Face for plain (non-zebra) table data rows.
-Carries no attributes of its own, so default rendering is unchanged.
-Allows face-remapping setups such as `mixed-pitch-mode' to pin every
-table row to the same font, keeping columns aligned."
   :group 'agent-shell-markdown)
 
 (defface agent-shell-markdown-source-block
@@ -3949,7 +3954,7 @@ prone to a few-pixel drift on emoji-heavy tables."
                (row-face (cond
                           (is-header 'agent-shell-markdown-table-header)
                           (is-zebra 'agent-shell-markdown-table-zebra)
-                          (t 'agent-shell-markdown-table-row))))
+                          ((not is-separator) 'agent-shell-markdown-table))))
           (unless (or is-header is-separator)
             (setq data-row-num (1+ data-row-num)))
           (push (if is-separator
