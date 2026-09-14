@@ -7052,5 +7052,27 @@ package declares unsupported."
     (should (equal (cadr (assq 'acp declared))
                    agent-shell--acp-minimum-version))))
 
+(ert-deftest agent-shell--get-files-context-quotes-paths-with-spaces-test ()
+  "A path with whitespace is written as a quoted mention the parser reads whole."
+  (let* ((dir (make-temp-file "agent-shell-files" t))
+         (spaced (expand-file-name "my file.txt" dir))
+         (plain (expand-file-name "file.txt" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file spaced (insert "a"))
+          (with-temp-file plain (insert "b"))
+          (let ((text (agent-shell--get-files-context :files (list spaced))))
+            (should (string-prefix-p (format "@\"%s\"" spaced) text))
+            (should (equal (map-elt (seq-first (agent-shell--parse-file-mentions text)) :path)
+                           spaced)))
+          ;; Relative to the agent's directory, the same rule applies.
+          (should (string-prefix-p "@\"my file.txt\""
+                                   (agent-shell--get-files-context :files (list spaced)
+                                                                   :agent-cwd dir)))
+          ;; No whitespace, no quotes.
+          (should (string-prefix-p (concat "@" plain)
+                                   (agent-shell--get-files-context :files (list plain)))))
+      (delete-directory dir t))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

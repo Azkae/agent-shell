@@ -8872,6 +8872,20 @@ inserted into the shell buffer prompt."
 
 ;;; Completion
 
+(defun agent-shell--file-mention (path)
+  "Return PATH as an @ mention `agent-shell--parse-file-mentions' reads whole.
+
+The parser stops a bare mention at the first space, so a path holding
+whitespace is quoted.
+
+For example:
+
+  \"src/main.el\"   => \"@src/main.el\"
+  \"My Design.png\" => \"@\\\"My Design.png\\\"\""
+  (if (string-match-p "[[:space:]]" path)
+      (format "@\"%s\"" path)
+    (concat "@" path)))
+
 (cl-defun agent-shell--get-files-context (&key files agent-cwd)
   "Process FILES into sendable text with image preview if applicable.
 
@@ -8885,7 +8899,7 @@ Uses AGENT-CWD to shorten file paths where necessary."
                                            :max-width 200)))
                      ;; Propertize text to display the image
                      (agent-shell--make-file-link
-                      :label (propertize (concat "@" file)
+                      :label (propertize (agent-shell--file-mention file)
                                          'display image-display
                                          'pointer 'hand
                                          'agent-shell-context-image t
@@ -8912,9 +8926,9 @@ Uses AGENT-CWD to shorten file paths where necessary."
                    (agent-shell--make-file-link
                     :label (if (and agent-cwd (file-in-directory-p file agent-cwd))
                                ;; File within project, shorten path.
-                               (propertize (concat "@" (file-relative-name file agent-cwd))
+                               (propertize (agent-shell--file-mention (file-relative-name file agent-cwd))
                                            'pointer 'hand)
-                             (propertize (concat "@" file)
+                             (propertize (agent-shell--file-mention file)
                                          'pointer 'hand))
                     :file file
                     :hint "open file")))
