@@ -898,7 +898,7 @@ You can send a screenshot from your clipboard to your shell with =agent-shell-se
 
 *** Dragging files in
 
-Drag a file from your file manager (or =dired=) onto a shell or viewport buffer to attach it to the prompt, the same way a pasted image is. Images get a preview; any other file is attached as an =@path= link. Set =agent-shell-dnd-enabled= to nil to keep Emacs's default drop handling, which opens the file.
+Drag a file from your file manager (or =dired=) onto a shell or viewport buffer to attach it to the prompt, the same way a pasted image is. Images get a preview; any other file is attached as an =@path= link.
 
 *** Inhibiting minor modes during file writes
 
