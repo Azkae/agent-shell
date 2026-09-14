@@ -46,6 +46,7 @@
 (declare-function acp-make-error "acp")
 (declare-function agent-shell--active-requests-p "agent-shell")
 (declare-function agent-shell--cancel-idle-timer "agent-shell")
+(declare-function agent-shell--emit-event "agent-shell")
 (declare-function agent-shell--expand-truncated-regions "agent-shell")
 (declare-function agent-shell--prompt-content-blocks "agent-shell")
 (declare-function agent-shell--insert-to-shell-buffer "agent-shell")
@@ -390,7 +391,11 @@ send it as input."
       (when late-prompt-start
         ;; Rendering above the prompt pushed any unsubmitted input down, so
         ;; undo entries recorded for it point at the shifted text.
-        (agent-shell--reset-undo-history))))
+        (agent-shell--reset-undo-history)))
+    ;; An accepted steer is a user submission. Announce it.
+    (agent-shell--emit-event
+     :event 'input-submitted
+     :data (list (cons :prompt (substring-no-properties prompt)))))
   ;; Deliberately not "user_message_chunk": that value asks the replay path
   ;; to insert the end-of-prompt marker on the next notification, and one
   ;; has already gone in above.

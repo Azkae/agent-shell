@@ -6343,7 +6343,7 @@ Session events:
   `session-restored'      - Reloaded session fully replayed and settled
   `input-submitted'       - User submitted input to the agent
     :data contains :prompt (the text sent to the agent, with any
-    truncated regions expanded)
+    truncated regions expanded).  Emitted for a prompt steered input also.
   `idle'                  - Agent idle for variable `agent-shell-idle-timeout'
     seconds :data contains :idle-event and :buffer
 

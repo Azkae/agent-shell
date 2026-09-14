@@ -6759,8 +6759,8 @@ fragment) and `interrupted' (the running turn cancelled)."
 IDLE renders as though the turn ended while the steer was in flight, so
 a live input prompt already sits at the buffer end.
 
-Returns an alist of the resulting buffer text and the `:last-entry-type'
-left behind."
+Returns an alist of the resulting buffer text, the `:last-entry-type'
+left behind, and the `:events' the render emitted."
   (let* ((buffer (generate-new-buffer " *agent-shell-steer-render-test*"))
          (fake-process (start-process "fake-agent" buffer "cat")))
     (set-process-query-on-exit-flag fake-process nil)
@@ -6771,7 +6771,13 @@ left behind."
           (let ((state (list (cons :buffer (current-buffer))
                              (cons :chunked-group-count 0)
                              (cons :last-entry-type "agent_message_chunk")
+                             (cons :event-subscriptions nil)
                              (cons :agent-config '((:shell-prompt . "Claude> "))))))
+            ;; Rendering a steered prompt emits `input-submitted', which is
+            ;; dispatched through the shell buffer's own state, so stand
+            ;; this buffer up as the shell it stands in for.
+            (setq-local agent-shell--state state)
+            (setq major-mode 'agent-shell-mode)
             (cl-letf (((symbol-function 'shell-maker--process) (lambda () fake-process))
                       ((symbol-function 'shell-maker-busy) (lambda (&rest _) (not idle))))
               ;; The turn so far: a prompt the user submitted and the
@@ -6784,9 +6790,14 @@ left behind."
               ;; already printed the next prompt and is waiting on input.
               (when idle
                 (shell-maker--output-filter fake-process "\nClaude> "))
-              (agent-shell-experimental--render-steered-prompt :state state :prompt prompt)
-              (list (cons :text (buffer-substring-no-properties (point-min) (point-max)))
-                    (cons :last-entry-type (map-elt state :last-entry-type))))))
+              (let ((events nil))
+                (agent-shell-subscribe-to
+                 :shell-buffer (current-buffer)
+                 :on-event (lambda (event) (push event events)))
+                (agent-shell-experimental--render-steered-prompt :state state :prompt prompt)
+                (list (cons :text (buffer-substring-no-properties (point-min) (point-max)))
+                      (cons :last-entry-type (map-elt state :last-entry-type))
+                      (cons :events (nreverse events)))))))
       (when (process-live-p fake-process)
         (delete-process fake-process))
       (kill-buffer buffer))))
@@ -6816,6 +6827,24 @@ hides that."
                            "Claude> [steer] just the filenames"
                            "<shell-maker-end-of-prompt>\n"
                            "Claude> ")))))
+
+(ert-deftest agent-shell-experimental--steered-prompt-emits-input-submitted-test ()
+  "A steered prompt announces itself as input the user submitted.
+
+Nothing else says it arrived: a live submission announces itself from
+`agent-shell--send-command', and a replayed one is drawn from a
+notification, whose stream emits events of its own.  A steer has
+neither, so subscribers following what the buffer holds (chat mode
+labels each prompt from there) would otherwise hear nothing until the
+agent's next notification, which is as far off as the turn the prompt
+was steered into is long."
+  (let ((rendered (agent-shell-tests--render-steered-prompt "just the filenames")))
+    (should (equal '(input-submitted)
+                   (mapcar (lambda (event) (map-elt event :event))
+                           (map-elt rendered :events))))
+    (should (equal "just the filenames"
+                   (map-nested-elt (car (map-elt rendered :events))
+                                   '(:data :prompt))))))
 
 (defmacro agent-shell-tests--with-rendered-shell (markdown &rest body)
   "Render MARKDOWN in a temporary shell buffer and run BODY with point at start.
