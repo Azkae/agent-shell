@@ -56,6 +56,7 @@
 (require 'agent-shell-work-buffer)
 (require 'dired)
 (require 'diff)
+(require 'dnd)
 (require 'json)
 (require 'mailcap)
 (require 'map)
@@ -4780,6 +4781,7 @@ variable (see makunbound)"))
                 #'agent-shell--render-markdown nil t)
       (when agent-shell-file-completion-enabled
         (agent-shell-completion-mode +1))
+      (agent-shell--enable-dnd)
       (agent-shell--setup-modeline)
       (setq-local agent-shell--transcript-file (agent-shell--transcript-file-path))
       ;; We disabled aliasing comint/shell-maker commands
@@ -9067,6 +9069,112 @@ for details."
        :text (agent-shell--get-files-context :files (list image-path))
        :shell-buffer (agent-shell--shell-buffer))
     (yank arg)))
+
+;;; Drag and drop
+
+(defcustom agent-shell-dnd-enabled t
+  "Non-nil attaches files dropped on shell and viewport buffers to the prompt.
+When nil, a drop gets Emacs's default handling and opens the file."
+  :type 'boolean
+  :group 'agent-shell)
+
+(defun agent-shell--dnd-handle-file-url (urls _action)
+  "Attach the local files behind dropped URLS as file context.
+
+A `dnd-protocol-alist' handler: files dropped on the buffer attach to
+the prompt the way `agent-shell-yank-dwim' attaches a clipboard image,
+instead of opening in the window.  URLS is the list of file: URLs in
+the drop, or a single URL on Emacs 29, which calls handlers once per
+file.  ACTION is ignored.  Returns `private', the action Emacs expects
+a handler to report.
+
+Every file is checked before any is copied, so a drop that includes an
+unreadable file or a directory attaches nothing rather than part of the
+selection.  A drop on a shell that is mid-turn is queued, the way
+`agent-shell-send-region' queues its region.
+
+For example, dropping \"file:///tmp/diagram.png\" and
+\"file:///tmp/notes.txt\" together inserts \"@/tmp/diagram.png\" with
+an image preview and \"@/tmp/notes.txt\"."
+  (let* ((files (mapcar #'agent-shell--dnd-local-file (ensure-list urls)))
+         (shell-buffer (agent-shell--shell-buffer))
+         (agent-cwd (with-current-buffer shell-buffer
+                      (agent-shell-cwd)))
+         (text (agent-shell--get-files-context
+                :files (mapcar (lambda (file)
+                                 (agent-shell--dnd-keep-file file agent-cwd))
+                               files)
+                :agent-cwd agent-cwd)))
+    (if (and (derived-mode-p 'agent-shell-mode)
+             (shell-maker-busy))
+        (agent-shell-prompt-queue
+         (agent-shell--prompt-queue-read :initial (concat text "\n\n")))
+      (agent-shell-insert :text text :shell-buffer shell-buffer))
+    'private))
+
+;; Emacs 30+ reads the dnd-multiple-handler property off the handler's
+;; symbol before each drop.  When it is non-nil,
+;; `dnd-handle-multiple-urls' calls the handler just once, passing every
+;; URL in the drop together, so several files become one insertion and
+;; one busy check.  Emacs 29 never reads this property, so setting it
+;; has no effect there: the handler is called per URL with a single
+;; string, which the ensure-list above absorbs.
+(put 'agent-shell--dnd-handle-file-url 'dnd-multiple-handler t)
+
+(defun agent-shell--dnd-local-file (url)
+  "Return the readable regular file behind file URL, or signal a `user-error'.
+
+For example, \"file:///tmp/my%20notes.txt\" => \"/tmp/my notes.txt\"."
+  (let ((file (dnd-get-local-file-name url t)))
+    (unless file
+      (user-error "Cannot read %s" url))
+    (unless (file-regular-p file)
+      (user-error "Cannot attach %s: not a regular file" file))
+    file))
+
+(defun agent-shell--dnd-keep-file (file &optional project-dir)
+  "Return FILE, or a copy of it that outlives the drop when FILE is transient.
+
+A file promised by the drag source rather than dragged from disk (a
+screenshot thumbnail, an image dragged out of a browser) is written
+under the variable `temporary-file-directory' for the duration of the
+drag and deleted once it ends, so it is copied into the screenshots
+directory first.  Any other file is returned as is, and so is a file
+under PROJECT-DIR: a project that itself lives in the temporary
+directory (see `agent-shell-new-temp-shell') drags its own files,
+which are not going anywhere.
+
+For example:
+
+  \"/var/folders/.../T/TemporaryItems/NSIRD_screencaptureui_x/Shot.png\"
+  => \"<project>/.agent-shell/screenshots/dropped-20260913-081512-Ab3xK9.png\"
+
+  \"/home/user/design.png\"
+  => \"/home/user/design.png\""
+  (if (and (file-in-directory-p file temporary-file-directory)
+           (not (and project-dir (file-in-directory-p file project-dir))))
+      (let ((copy (make-temp-file
+                   (expand-file-name (format-time-string "dropped-%Y%m%d-%H%M%S-")
+                                     (agent-shell--dot-subdir "screenshots"))
+                   nil
+                   (file-name-extension file t))))
+        (copy-file file copy t)
+        copy)
+    file))
+
+(defun agent-shell--enable-dnd ()
+  "Route files dropped on the current buffer to `agent-shell--dnd-handle-file-url'.
+
+Buffer-local, so drops on any other buffer keep Emacs's default handling.
+Only the local file: forms Emacs itself routes to `dnd-open-local-file'
+are taken; a \"file://HOST/...\" URL still reaches `dnd-open-file'.
+Does nothing when `agent-shell-dnd-enabled' is nil."
+  (when agent-shell-dnd-enabled
+    (setq-local dnd-protocol-alist
+                (append (mapcar (lambda (pattern)
+                                  (cons pattern #'agent-shell--dnd-handle-file-url))
+                                '("^file:///" "^file:/[^/]" "^file:[^/]"))
+                        dnd-protocol-alist))))
 
 ;;; Permissions
 

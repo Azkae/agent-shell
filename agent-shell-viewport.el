@@ -45,6 +45,7 @@
 (declare-function agent-shell--block-quote "agent-shell")
 (declare-function agent-shell--current-shell "agent-shell")
 (declare-function agent-shell--display-buffer "agent-shell")
+(declare-function agent-shell--enable-dnd "agent-shell")
 (declare-function agent-shell--get-region "agent-shell")
 (declare-function agent-shell--insert-to-shell-buffer "agent-shell")
 (declare-function agent-shell--make-header "agent-shell")
@@ -1568,6 +1569,7 @@ For example, offer to kill associated shell session."
   (when agent-shell-file-completion-enabled
     (agent-shell-completion-mode +1))
   (agent-shell-list-edit-mode +1)
+  (agent-shell--enable-dnd)
   (agent-shell-viewport--update-header)
   (let ((inhibit-read-only t))
     (erase-buffer))
@@ -1581,6 +1583,7 @@ For example, offer to kill associated shell session."
   (agent-shell-ui-mode +1)
   (add-hook 'agent-shell-ui-post-expand-fragment-at-point-hook
             #'agent-shell--render-markdown nil t)
+  (agent-shell--enable-dnd)
   (agent-shell-viewport--update-header)
   (setq-local filter-buffer-substring-function #'agent-shell--filter-buffer-substring)
   (setq buffer-read-only t)
