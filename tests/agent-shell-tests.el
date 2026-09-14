@@ -7074,5 +7074,23 @@ package declares unsupported."
                                    (agent-shell--get-files-context :files (list plain)))))
       (delete-directory dir t))))
 
+(ert-deftest agent-shell--get-files-context-quotes-image-mentions-test ()
+  "The mention behind an image preview is quoted like any other path.
+`agent-shell--load-image' is stubbed because it needs a graphical
+display, which tests don't have."
+  (let* ((dir (make-temp-file "agent-shell-files" t))
+         (image (expand-file-name "my image.png" dir)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--load-image)
+                   (lambda (&rest _) '(image :type png))))
+          (with-temp-file image (insert "pixels"))
+          (let ((text (agent-shell--get-files-context :files (list image))))
+            (should (string-prefix-p (format "@\"%s\"" image) text))
+            (should (equal (map-elt (seq-first (agent-shell--parse-file-mentions text)) :path)
+                           image))
+            ;; The preview still covers the whole mention.
+            (should (equal (get-text-property 0 'display text) '(image :type png)))))
+      (delete-directory dir t))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
