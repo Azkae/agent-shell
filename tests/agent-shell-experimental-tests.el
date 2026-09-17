@@ -20,9 +20,11 @@ arrives after.  The shell is faked the way `agent-shell-tests' does it:
 a `cat' process the stubbed `shell-maker--process' hands back, so
 `shell-maker-insert-end-of-prompt-marker' has a process mark to advance.
 
-A prompt is printed last, since a shell always has one waiting for input
-\(see `agent-shell--persistent-prompt'), and the push renders above it."
-  (let* ((buffer (generate-new-buffer " *agent-shell-push-test*"))
+A prompt is printed last, and `agent-shell--persistent-prompt' is bound
+on: this covers the shell keeping a prompt at the buffer end, so it says
+so rather than inheriting whichever way the default currently points."
+  (let* ((agent-shell--persistent-prompt t)
+         (buffer (generate-new-buffer " *agent-shell-push-test*"))
          (fake-process (start-process "fake-agent" buffer "cat")))
     (set-process-query-on-exit-flag fake-process nil)
     (unwind-protect

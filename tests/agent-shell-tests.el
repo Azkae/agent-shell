@@ -6102,7 +6102,8 @@ markers shell-maker's writers set, a `cat' process for the process mark,
 and a prompt printed through the output filter so `comint-last-prompt'
 brackets it the way a real one does.  BODY is called with no arguments
 and its value returned."
-  (let* ((buffer (generate-new-buffer " *agent-shell-persistent-prompt-test*"))
+  (let* ((agent-shell--persistent-prompt t)
+         (buffer (generate-new-buffer " *agent-shell-persistent-prompt-test*"))
          (fake-process (start-process "fake-agent" buffer "cat")))
     (set-process-query-on-exit-flag fake-process nil)
     (unwind-protect
@@ -6111,7 +6112,6 @@ and its value returned."
           (setq-local comint-prompt-regexp "^Claude> ")
           (setq major-mode 'agent-shell-mode)
           (setq-local agent-shell--state (agent-shell--make-state :buffer buffer))
-          (setq-local agent-shell--persistent-prompt t)
           (cl-letf (((symbol-function 'shell-maker--process) (lambda () fake-process))
                     ((symbol-function 'shell-maker-busy) (lambda (&rest _) busy)))
             ;; A turn already submitted, with the prompt the shell prints
@@ -6983,9 +6983,11 @@ fragment) and `interrupted' (the running turn cancelled)."
   "Render PROMPT into a bare shell buffer mid-turn.
 
 IDLE renders as though the turn ended while the steer was in flight.  A
-live input prompt sits at the buffer end either way: the shell keeps one
-there for the whole turn (see `agent-shell--persistent-prompt'), so the
-steer renders above it whether or not the turn has ended.
+live input prompt sits at the buffer end either way, because
+`agent-shell--persistent-prompt' is bound on here: the shell keeps one
+there for the whole turn, so the steer renders above it whether or not
+the turn has ended.  Bound rather than inherited, so this covers the
+persistent prompt regardless of which way the default points.
 
 DRAFT is typed at that prompt first, standing for a prompt the user is
 part way through composing when the steer lands.
@@ -6993,7 +6995,8 @@ part way through composing when the steer lands.
 Returns an alist of the resulting buffer text, the `:last-entry-type'
 left behind, the `:events' the render emitted, and `:point-at-end',
 non-nil when point came back to where the draft was being typed."
-  (let* ((buffer (generate-new-buffer " *agent-shell-steer-render-test*"))
+  (let* ((agent-shell--persistent-prompt t)
+         (buffer (generate-new-buffer " *agent-shell-steer-render-test*"))
          (fake-process (start-process "fake-agent" buffer "cat")))
     (set-process-query-on-exit-flag fake-process nil)
     (unwind-protect
