@@ -42,7 +42,7 @@
 (require 'shell-maker)
 (eval-when-compile (require 'cl-lib))
 
-(defvar agent-shell--persistent-prompt t
+(defvar agent-shell--persistent-prompt nil
   "When non-nil, keep a writable prompt at the end of the shell at all times.
 
 The prompt returns as soon as a submission is dispatched and stays for the
