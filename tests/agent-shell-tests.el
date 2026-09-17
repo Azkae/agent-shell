@@ -2994,9 +2994,7 @@ remaining subscribers nor propagate out of `agent-shell--emit-event'."
               (with-current-buffer shell-buffer
                 (setq-local agent-shell-session-strategy 'prompt)
                 (setq-local agent-shell--state
-                            `((:buffer . ,shell-buffer)
-                              (:session . ((:id . nil)))
-                              (:event-subscriptions . nil))))
+                            (agent-shell--make-state :buffer shell-buffer)))
               (cl-letf (((symbol-function 'derived-mode-p)
                          (lambda (&rest modes)
                            (and (eq (current-buffer) shell-buffer)
@@ -3039,8 +3037,8 @@ so the command must not append a second time."
               (with-current-buffer shell-buffer
                 (setq-local agent-shell-session-strategy 'reuse)
                 (setq-local agent-shell--state
-                            `((:buffer . ,shell-buffer)
-                              (:session . ((:id . "session-1"))))))
+                            (agent-shell--make-state :buffer shell-buffer))
+                (map-put! (map-elt agent-shell--state :session) :id "session-1"))
               (cl-letf (((symbol-function 'agent-shell--shell-buffer)
                          (lambda (&rest _) shell-buffer))
                         ((symbol-function 'agent-shell--read-shell-buffer)
