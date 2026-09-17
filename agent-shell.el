@@ -6149,9 +6149,9 @@ GitHub avatar), so `image-supported-file-p' can recognize it later."
         ((or "image/x-icon" "image/vnd.microsoft.icon") "ico")))))
 
 (defun agent-shell--fetch-agent-icon (icon-name)
-  "Download icon with ICON-NAME from GitHub, only if it exists, and save as binary.
+  "Download icon with ICON-NAME from LobeHub's static PNG package, if available.
 
-Names can be found at https://github.com/lobehub/lobe-icons/tree/master/packages/static-png
+Names can be found at https://www.npmjs.com/package/@lobehub/icons-static-png.
 
 Icon names starting with https:// are downloaded directly from that location."
   (when icon-name
@@ -6159,7 +6159,7 @@ Icon names starting with https:// are downloaded directly from that location."
            (is-url (string-prefix-p "https://" (downcase icon-name)))
            (url (if is-url
                     icon-name
-                  (concat "https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/"
+                  (concat "https://unpkg.com/@lobehub/icons-static-png@latest/"
                           mode "/" icon-name)))
            (filename (if is-url
                          ;; For URLs, sanitize to create readable filename
