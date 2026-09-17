@@ -6066,6 +6066,22 @@ prompt and the prompt end sits past the accessible `point-max'."
           ;; Must not raise `Args out of range' and must report not-live.
           (should-not (agent-shell--live-input-prompt-p prompt)))))))
 
+(ert-deftest agent-shell-interrupt-refuses-before-the-session-is-up-test ()
+  "Interrupting a bootstrapping shell waits rather than tearing it down.
+
+There is no turn to cancel before a session exists, and shutting the
+client down left the shell with neither a client nor a session.  Nothing
+re-bootstraps one, so the buffer could only be killed -- wedging the
+prompt the user was typing into while the agent started."
+  (let ((shut-down nil))
+    (cl-letf (((symbol-function 'agent-shell--shutdown)
+               (lambda (&rest _) (setq shut-down t))))
+      (with-temp-buffer
+        (setq major-mode 'agent-shell-mode)
+        (setq-local agent-shell--state (agent-shell--make-state :buffer (current-buffer)))
+        (should-error (agent-shell-interrupt t) :type 'user-error)
+        (should-not shut-down)))))
+
 (ert-deftest agent-shell--live-input-prompt-p-zero-length-test ()
   "A collapsed prompt span is not a prompt.
 

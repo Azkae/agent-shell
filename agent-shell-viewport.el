@@ -212,7 +212,7 @@ queued right away, regardless of `agent-shell-viewport-dismiss-on-send'."
   (when (and (not (eq agent-shell-session-strategy 'new-deferred))
              (not (with-current-buffer (agent-shell-viewport--shell-buffer)
                     (map-nested-elt agent-shell--state '(:session :id)))))
-    (user-error "Session not ready... please wait"))
+    (user-error "Starting agent, please wait"))
   (setq agent-shell-viewport--compose-snapshot nil)
   (setq agent-shell-viewport--ring-index nil)
   (setq agent-shell-viewport--peek-location nil)

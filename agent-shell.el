@@ -1311,7 +1311,7 @@ With \\[universal-argument] \\[universal-argument] prefix ARG, prompt to pick an
 
 The prompt is shown early (before the ACP session is ready) so users
 can type while the agent initializes.  Gate the actual send on the
-session being ready: when it is not, error with `Busy, please wait'
+session being ready: when it is not, error with `Starting agent, please wait'
 before the input is committed, so the typed text stays editable
 instead of being echoed into the transcript and rejected later.
 
@@ -1328,7 +1328,7 @@ per-start aliasing is disabled (see the `:alias-commands nil' call in
     (user-error "Not in an agent shell"))
   (unless (or (map-nested-elt agent-shell--state '(:session :id))
               (eq agent-shell-session-strategy 'new-deferred))
-    (user-error "Busy, please wait"))
+    (user-error "Starting agent, please wait"))
   (if (and agent-shell--persistent-prompt (shell-maker-busy))
       (when-let* ((prompt (agent-shell--take-prompt-input)))
         (agent-shell--prompt-queue-enqueue :prompt prompt))
@@ -2242,19 +2242,18 @@ See also `agent-shell-confirm-interrupt'."
                            :session-id (map-nested-elt (agent-shell--state) '(:session :id))
                            :reason "User cancelled"))))
         (t
-         (agent-shell--shutdown)
-         ;; Not `shell-maker-interrupt': it runs `comint-send-input', which
-         ;; would send whatever is typed at the persistent prompt as the
-         ;; interrupt's input and leave `comint-last-prompt' nil, and would
-         ;; then print a second prompt.  What it does beyond that is inert
-         ;; here: agent-shell drives acp rather than shell-maker's own
-         ;; request process, and reads the request id only to name a
-         ;; fragment namespace.
-         (when (shell-maker-busy)
-           (message "%s: interrupted!"
-                    (or (map-nested-elt (agent-shell--state) '(:agent-config :mode-line-name))
-                        "Agent")))
-         (setq shell-maker--busy nil))))
+         ;; No session id means the agent is still bootstrapping, so there
+         ;; is no turn to cancel.  Refuse exactly as `agent-shell-submit'
+         ;; does while the session is coming up: the shell is not ready,
+         ;; and waiting is the answer to both.
+         ;;
+         ;; Shutting the client down here instead left the shell with
+         ;; neither a client nor a session, and nothing re-bootstraps one,
+         ;; so the buffer could only be killed.  That was worse than doing
+         ;; nothing: it wedged the very prompt the user was typing into.
+         ;; `agent-shell-restart' (or killing the buffer) is how to abandon
+         ;; a bootstrap that never finishes.
+         (user-error "Starting agent, please wait"))))
 
 (cl-defun agent-shell--make-shell-maker-config (&key prompt prompt-regexp)
   "Create `shell-maker' configuration with PROMPT and PROMPT-REGEXP."
@@ -2410,7 +2409,7 @@ Flow:
     (when (and command
                (not (eq agent-shell-session-strategy 'new-deferred))
                (not (map-nested-elt (agent-shell--state) '(:session :id))))
-      (user-error "Session not ready... please wait"))
+      (user-error "Starting agent, please wait"))
     (map-put! (agent-shell--state) :request-count
               ;; TODO: Make public in shell-maker.
               (shell-maker--current-request-id))
