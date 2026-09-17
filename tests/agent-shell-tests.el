@@ -854,8 +854,8 @@ highlighting."
               (should (text-property-any 0 (length ctx)
                                          'font-lock-face
                                          'font-lock-string-face ctx)))))
-      (when (get-file-buffer temp-file)
-        (with-current-buffer (get-file-buffer temp-file)
+      (when (find-buffer-visiting temp-file)
+        (with-current-buffer (find-buffer-visiting temp-file)
           (set-buffer-modified-p nil)))
       (ignore-errors (delete-file temp-file)))))
 
@@ -6655,8 +6655,8 @@ file landed in."
                              (file-truename (buffer-file-name))))
               (should (equal "two\nthree"
                              (buffer-substring-no-properties (point) (mark)))))
-            (when (get-file-buffer file)
-              (kill-buffer (get-file-buffer file)))
+            (when (find-buffer-visiting file)
+              (kill-buffer (find-buffer-visiting file)))
             (delete-other-windows)
             (switch-to-buffer "*scratch*")
             (let ((agent-shell-file-display-action '(display-buffer-pop-up-window))
@@ -6670,8 +6670,8 @@ file landed in."
                              (file-truename (buffer-file-name))))
               (should (equal "two\nthree"
                              (buffer-substring-no-properties (point) (mark)))))))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-file-display-action-showing-nothing-test ()
@@ -6686,8 +6686,8 @@ file landed in."
             (let ((agent-shell-file-display-action
                    '(display-buffer-no-window . ((allow-no-window . t)))))
               (should-not (agent-shell-markdown-visit-file :file file :line-start 2)))))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 ;;; Tests for scheduled directory cleanup

@@ -1169,8 +1169,8 @@ not just linkify, so this walks the whole way in."
           (should (agent-shell-markdown--open-local-link (concat file ":3:4")))
           (should (equal 3 (line-number-at-pos (point))))
           (should (equal 3 (current-column))))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-visit-file-with-column-test ()
@@ -1188,8 +1188,8 @@ for its end."
           (agent-shell-markdown-visit-file :file file :line-start 1 :column 99)
           (should (equal 1 (line-number-at-pos (point))))
           (should (equal 3 (current-column))))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-remote-image-fallback-is-a-link ()
@@ -4062,8 +4062,8 @@ unaffected."
           ;; (/var vs /private/var on macOS) depending on config.
           (should (equal (file-truename file)
                          (file-truename (buffer-file-name)))))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-visit-file-with-line-range-selects-region-test ()
@@ -4076,8 +4076,8 @@ unaffected."
                          (file-truename (buffer-file-name))))
           (should (equal "two\nthree"
                          (buffer-substring-no-properties (point) (mark)))))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-visit-file-pushes-xref-marker-test ()
@@ -4101,8 +4101,8 @@ for where they were in the conversation."
             (should (eq origin (current-buffer)))
             (should (= 5 (point)))))
       (kill-buffer origin)
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-visit-file-no-window-pushes-nothing-test ()
@@ -4118,8 +4118,8 @@ left."
           (let ((agent-shell-markdown-open-file-function (lambda (_path) nil)))
             (agent-shell-markdown-visit-file :file file :line-start 2))
           (should-not pushed))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-open-file-returns-window-test ()
@@ -4128,8 +4128,8 @@ left."
     (unwind-protect
         (save-window-excursion
           (should (windowp (agent-shell-markdown-open-file file))))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-visit-file-rejects-non-window-test ()
@@ -4143,8 +4143,8 @@ leave point somewhere the user can't see rather than fail."
                (lambda (path) (find-file-noselect path))))
           (should-error (agent-shell-markdown-visit-file :file file :line-start 2)
                         :type 'user-error))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown-visit-file-tolerates-no-window-test ()
@@ -4153,8 +4153,8 @@ leave point somewhere the user can't see rather than fail."
     (unwind-protect
         (let ((agent-shell-markdown-open-file-function (lambda (_path) nil)))
           (should-not (agent-shell-markdown-visit-file :file file :line-start 2)))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (ert-deftest agent-shell-markdown--open-local-link-binary-vs-text-test ()
@@ -4245,8 +4245,8 @@ it, what it now spans is neither jump's."
           (should (agent-shell-markdown--open-local-link (concat file "#L3")))
           (should (equal 3 (line-number-at-pos (point))))
           (should-not mark-active))
-      (when (get-file-buffer file)
-        (kill-buffer (get-file-buffer file)))
+      (when (find-buffer-visiting file)
+        (kill-buffer (find-buffer-visiting file)))
       (delete-file file))))
 
 (defun agent-shell-markdown-tests--source-blocks (markdown)
