@@ -63,6 +63,9 @@
 (declare-function agent-shell-interrupt-confirmed-p "agent-shell")
 (declare-function agent-shell-open-transcript "agent-shell")
 (declare-function agent-shell-prompt-queue "agent-shell-prompt-queue")
+(declare-function agent-shell--busy-submit "agent-shell-prompt-queue")
+(defvar agent-shell-busy-submit-default-function)
+(defvar agent-shell-busy-submit-override-function)
 (declare-function agent-shell-prompt-queue-remove "agent-shell-prompt-queue")
 (declare-function agent-shell-prompt-queue-resume "agent-shell-prompt-queue")
 (declare-function agent-shell-view-acp-logs "agent-shell")
@@ -226,6 +229,27 @@ queued right away, regardless of `agent-shell-viewport-dismiss-on-send'."
    (t
     (agent-shell-viewport-compose-send-and-kill))))
 
+(defun agent-shell-viewport-compose-send-override (&optional keep-composing)
+  "Send the viewport composed prompt through the override route.
+
+Mid-turn the prompt goes to `agent-shell-busy-submit-override-function'
+rather than `agent-shell-busy-submit-default-function', so whichever of
+queueing and steering is not the default is one keystroke away.  With no
+turn running both simply submit, as \[agent-shell-viewport-compose-send]
+does.
+
+KEEP-COMPOSING behaves as it does there, so \[universal-argument]
+\[agent-shell-viewport-compose-send-override] overrides the route and
+keeps the compose buffer open for the next prompt.
+
+Rebinds the default for this one call rather than threading a flag
+through each way of sending, so every route stays a single code path."
+  (declare (modes agent-shell-viewport-edit-mode))
+  (interactive "P")
+  (let ((agent-shell-busy-submit-default-function
+         agent-shell-busy-submit-override-function))
+    (agent-shell-viewport-compose-send keep-composing)))
+
 (defun agent-shell-viewport-compose-send-and-kill ()
   "Send the viewport composed prompt to the agent shell and kill compose buffer."
   (declare (modes agent-shell-viewport-edit-mode))
@@ -237,7 +261,7 @@ queued right away, regardless of `agent-shell-viewport-dismiss-on-send'."
         (prompt (string-trim (buffer-string))))
     (with-current-buffer shell-buffer
       (if (agent-shell-viewport--busy-p)
-          (agent-shell-prompt-queue prompt)
+          (agent-shell--busy-submit :prompt prompt)
         (agent-shell--insert-to-shell-buffer
          :text prompt
          :submit t)))
@@ -251,26 +275,29 @@ queued right away, regardless of `agent-shell-viewport-dismiss-on-send'."
     (pop-to-buffer shell-buffer)))
 
 (defun agent-shell-viewport--compose-queue ()
-  "Queue or submit the composed prompt, then clear the compose buffer.
+  "Send the composed prompt, then clear the compose buffer.
 
-The prompt is queued when the shell is busy and submitted otherwise, so
-prompts can be fired in a row.  Signals a `user-error' when the draft is
-empty.  Leaves the compose buffer open in edit mode, cleared.
+Mid-turn the prompt goes through `agent-shell-busy-submit-default-function',
+which queues by default, so prompts can be fired in a row; otherwise it is
+submitted.  Signals a `user-error' when the draft is empty.  Leaves the
+compose buffer open in edit mode, cleared.
 
-When the prompt is submitted immediately (not queued), it is echoed to
-the minibuffer as the active prompt, since the cleared compose buffer
-does not itself show the submitted prompt.  When it is queued instead,
-`agent-shell-prompt-queue' already echoes the resulting queue."
+A submitted prompt is echoed to the minibuffer as the active one, since
+the cleared compose buffer does not itself show it.  Mid-turn the chosen
+function does its own reporting: queueing echoes the queue, steering
+renders the prompt into the shell."
   (let ((shell-buffer (agent-shell-viewport--shell-buffer))
         (prompt (string-trim (buffer-string)))
-        ;; Sample busy state before `agent-shell-prompt-queue' below submits or queues.
-        (queued (agent-shell-viewport--busy-p)))
+        ;; Sampled before submitting, which clears it.
+        (busy (agent-shell-viewport--busy-p)))
     (when (string-empty-p prompt)
       (user-error "Nothing to send"))
     (with-current-buffer shell-buffer
-      (agent-shell-prompt-queue prompt))
+      (if busy
+          (agent-shell--busy-submit :prompt prompt)
+        (agent-shell--insert-to-shell-buffer :text prompt :submit t :no-focus t)))
     (agent-shell-viewport--initialize)
-    (unless queued
+    (unless busy
       (agent-shell--prompt-queue-echo :active-prompt prompt))))
 
 (defun agent-shell-viewport-compose-send-and-dismiss ()
@@ -310,7 +337,7 @@ resolving to its shell on the next invocation."
         (user-error "Nothing to send"))
       (when (agent-shell-viewport--busy-p)
         (with-current-buffer shell-buffer
-          (agent-shell-prompt-queue prompt))
+          (agent-shell--busy-submit :prompt prompt))
         (with-current-buffer viewport-buffer
           (agent-shell-viewport-view-last))
         (throw 'exit nil))
@@ -1197,6 +1224,9 @@ VIEWPORT-BUFFER is the viewport buffer to check."
 (defvar agent-shell-viewport-edit-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'agent-shell-viewport-compose-send)
+    ;; Both spellings: a GUI frame and a terminal disagree on which arrives.
+    (define-key map (kbd "M-RET") #'agent-shell-viewport-compose-send-override)
+    (define-key map (kbd "M-<return>") #'agent-shell-viewport-compose-send-override)
     (define-key map (kbd "C-c C-p") #'agent-shell-viewport-compose-peek-last)
     (define-key map (kbd "C-c C-k") #'agent-shell-viewport-compose-cancel)
     (define-key map (kbd "C-c C-h") #'agent-shell-viewport-compose-help-menu)

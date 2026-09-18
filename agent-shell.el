@@ -4,10 +4,10 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/agent-shell
-;; Version: 0.77.2
+;; Version: 0.77.3
 ;; Package-Requires: ((emacs "29.1") (shell-maker "0.97.3") (acp "0.15.1"))
 
-(defconst agent-shell--version "0.77.2")
+(defconst agent-shell--version "0.77.3")
 
 ;; Minimum dependency versions, as declared in the `Package-Requires'
 ;; header above.  Package managers that resolve versions enforce the
@@ -1306,7 +1306,7 @@ With \\[universal-argument] \\[universal-argument] prefix ARG, prompt to pick an
    (t
     (agent-shell--dwim))))
 
-(defun agent-shell-submit ()
+(defun agent-shell-submit (&optional arg)
   "Submit the current input to the agent, or queue it while the agent is busy.
 
 The prompt is shown early (before the ACP session is ready) so users
@@ -1315,24 +1315,45 @@ session being ready: when it is not, error with `Starting agent, please wait'
 before the input is committed, so the typed text stays editable
 instead of being echoed into the transcript and rejected later.
 
-Once the session is up, `agent-shell--persistent-prompt' keeps a prompt
-at the buffer end for the whole turn, so submitting mid-turn queues the
-text (see `agent-shell-prompt-queue') and clears the input.  The queue
-drains when the turn ends.
+Submitting mid-turn hands the text to
+`agent-shell-busy-submit-default-function' and clears the input, which
+queues by default and drains when the turn ends.  Whether there is a
+prompt to submit from mid-turn is up to
+`agent-shell--persistent-prompt', but the routing does not depend on it:
+the same setting governs the viewport's compose buffer, which is there
+either way.
+
+With \[universal-argument] prefix ARG, submit through
+`agent-shell-busy-submit-override-function' instead, which steers by
+default.  \[agent-shell-submit-override] is bound to the same thing.
 
 This owns the `agent-shell-submit' name because shell-maker's
 per-start aliasing is disabled (see the `:alias-commands nil' call in
 `agent-shell--start')."
-  (interactive)
+  (interactive "P")
   (unless (derived-mode-p 'agent-shell-mode)
     (user-error "Not in an agent shell"))
   (unless (or (map-nested-elt agent-shell--state '(:session :id))
               (eq agent-shell-session-strategy 'new-deferred))
     (user-error "Starting agent, please wait"))
-  (if (and agent-shell--persistent-prompt (shell-maker-busy))
-      (when-let* ((prompt (agent-shell--take-prompt-input)))
-        (agent-shell--prompt-queue-enqueue :prompt prompt))
+  (if (shell-maker-busy)
+      (when-let* ((prompt (agent-shell--prompt-input)))
+        (agent-shell--busy-submit :prompt prompt :override arg)
+        (agent-shell--clear-prompt-input))
     (shell-maker-submit)))
+
+(defun agent-shell-submit-override ()
+  "Submit the current input through the override route.
+
+Submits through `agent-shell-busy-submit-override-function' rather than
+`agent-shell-busy-submit-default-function', so whichever of queueing and
+steering is not the default is one keystroke away.
+
+Only differs from \[agent-shell-submit] while the agent is working:
+with no turn to queue behind or steer into, both simply submit."
+  (declare (modes agent-shell-mode))
+  (interactive)
+  (agent-shell-submit '(4)))
 
 (defun agent-shell--display-and-insert-context (shell-buffer text)
   "Display SHELL-BUFFER and insert TEXT into it."
@@ -2381,7 +2402,10 @@ mouse selection or a kill where mark > point) is normalized."
   "C-c C-o" #'agent-shell-other-buffer
   "C-c C-s" #'agent-shell-set-session-config-option
   "<remap> <yank>" #'agent-shell-yank-dwim
-  "<remap> <comint-send-input>" #'agent-shell-submit)
+  "<remap> <comint-send-input>" #'agent-shell-submit
+  ;; No equivalent in comint, bind explicitly.
+  "M-RET" #'agent-shell-submit-override
+  "M-<return>" #'agent-shell-submit-override)
 
 (shell-maker-define-major-mode (agent-shell--make-shell-maker-config) agent-shell-mode-map)
 

@@ -1126,18 +1126,23 @@ compose buffer keeps its draft in place and stays in edit mode."
           (should-not agent-shell-viewport--compose-snapshot))))))
 
 (ert-deftest agent-shell-viewport-compose-send-and-dismiss-test ()
-  "Composed prompts are queued, cleared, and dismissed or kept.
+  "Composed prompts are sent, cleared, and dismissed or kept.
 
-`agent-shell-viewport--compose-queue' hands the draft to
-`agent-shell-prompt-queue' and clears the compose buffer;
-`agent-shell-viewport-compose-send-and-dismiss' additionally dismisses
-the window.  An empty draft signals an error."
+`agent-shell-viewport--compose-queue' hands the draft onward and clears
+the compose buffer; `agent-shell-viewport-compose-send-and-dismiss'
+additionally dismisses the window.  An empty draft signals an error.
+
+Both seams are stubbed, since where the draft goes depends on whether a
+turn is running: mid-turn through `agent-shell--busy-submit', otherwise
+straight to the shell."
   (let ((agent-shell-header-style 'graphical)
         queued dismissed)
     (cl-letf (((symbol-function 'agent-shell-viewport--shell-buffer)
                (lambda (&rest _) (current-buffer)))
-              ((symbol-function 'agent-shell-prompt-queue)
-               (lambda (prompt) (setq queued prompt)))
+              ((symbol-function 'agent-shell--busy-submit)
+               (lambda (&rest args) (setq queued (plist-get args :prompt))))
+              ((symbol-function 'agent-shell--insert-to-shell-buffer)
+               (lambda (&rest args) (setq queued (plist-get args :text))))
               ((symbol-function 'agent-shell-viewport--dismiss)
                (lambda (&rest _) (setq dismissed t)))
               ((symbol-function 'agent-shell-viewport--position)
@@ -6080,6 +6085,44 @@ prompt the user was typing into while the agent started."
         (should-error (agent-shell-interrupt t) :type 'user-error)
         (should-not shut-down)))))
 
+(ert-deftest agent-shell-submit-leaves-refused-input-untouched-test ()
+  "A refused prompt leaves what was typed exactly as it was.
+
+The input is read without disturbing the buffer and only cleared once
+the prompt is on its way, so nothing has to be reconstructed: point
+stays mid-word, surrounding whitespace survives, and undo still sees the
+user's own typing rather than a delete and re-insert."
+  (should (equal
+           (agent-shell-tests--with-persistent-prompt-shell
+            (lambda ()
+              (insert "  hello wor")
+              (save-excursion (insert "ld  "))
+              (let ((point-before (point))
+                    (text-before (buffer-string))
+                    (agent-shell-busy-submit-default-function
+                     (lambda (_prompt) (user-error "Refused"))))
+                (list :signalled (condition-case _ (progn (agent-shell-submit) nil)
+                                   (user-error t))
+                      :buffer-untouched (equal text-before (buffer-string))
+                      :point-kept (= point-before (point)))))
+            :busy t)
+           '(:signalled t :buffer-untouched t :point-kept t))))
+
+(ert-deftest agent-shell-submit-clears-accepted-input-test ()
+  "An accepted prompt is trimmed, handed on, and cleared from the prompt."
+  (should (equal
+           (agent-shell-tests--with-persistent-prompt-shell
+            (lambda ()
+              (insert "  send me  ")
+              (let (seen)
+                (let ((agent-shell-busy-submit-default-function
+                       (lambda (prompt) (setq seen prompt))))
+                  (agent-shell-submit))
+                (list :handed-on seen
+                      :cleared (string-suffix-p "Claude> " (buffer-string)))))
+            :busy t)
+           '(:handed-on "send me" :cleared t))))
+
 (ert-deftest agent-shell--live-input-prompt-p-zero-length-test ()
   "A collapsed prompt span is not a prompt.
 
@@ -6112,6 +6155,11 @@ and its value returned."
           (setq-local comint-prompt-regexp "^Claude> ")
           (setq major-mode 'agent-shell-mode)
           (setq-local agent-shell--state (agent-shell--make-state :buffer buffer))
+          ;; A shell cannot be mid-turn without a session, and
+          ;; `agent-shell-submit' refuses without one.  Set on the alist
+          ;; `agent-shell--make-state' just built, so nothing is shared
+          ;; between runs.
+          (map-put! (map-elt agent-shell--state :session) :id "session-1")
           (cl-letf (((symbol-function 'shell-maker--process) (lambda () fake-process))
                     ((symbol-function 'shell-maker-busy) (lambda (&rest _) busy)))
             ;; A turn already submitted, with the prompt the shell prints
@@ -6154,7 +6202,6 @@ into a busy shell is type-ahead, not an error to refuse."
   (should (equal
            (agent-shell-tests--with-persistent-prompt-shell
             (lambda ()
-              (map-put! agent-shell--state :session '((:id . "session-1")))
               (insert "just the filenames")
               (agent-shell-submit)
               (list (map-elt agent-shell--state :pending-prompts)

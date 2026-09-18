@@ -153,32 +153,56 @@ PROMPT-START at the `C', a BODY inserting `more' leaves
            (goto-char ,saved-point)
            (set-marker ,saved-point nil))))))
 
-(defun agent-shell--take-prompt-input ()
-  "Delete and return the text typed at the live prompt, or nil when empty.
+(defun agent-shell--prompt-input-start ()
+  "Return where the live prompt's input area begins, or nil when there is none.
 
-The live prompt's input area runs from the prompt's end to `point-max':
-a live prompt has nothing but typed text after it (see
-`agent-shell--live-input-prompt-p').  Returns the text trimmed, and
-leaves the prompt itself in place, so the shell keeps somewhere to type.
+The area runs from there to `point-max': a live prompt has nothing but
+typed text after it (see `agent-shell--live-input-prompt-p')."
+  (when-let* ((prompt comint-last-prompt)
+              ((agent-shell--live-input-prompt-p prompt)))
+    (marker-position (cdr prompt))))
+
+(defun agent-shell--prompt-input ()
+  "Return the text typed at the live prompt, trimmed, or nil when empty.
+
+Reads without disturbing the buffer, so a caller can decide whether the
+prompt is going anywhere before clearing it with
+`agent-shell--clear-prompt-input'.
 
 For example, in a buffer ending with
 
   Claude> list the files
 
-leaves it ending with
-
-  Claude>
-
-and returns \"list the files\".  Returns nil for an empty or
-whitespace-only input area, having cleared it all the same."
-  (when-let* ((prompt comint-last-prompt)
-              ((agent-shell--live-input-prompt-p prompt))
-              (start (marker-position (cdr prompt)))
+returns \"list the files\"."
+  (when-let* ((start (agent-shell--prompt-input-start))
               ((< start (point-max)))
-              (input (string-trim (buffer-substring-no-properties start (point-max)))))
-    (delete-region start (point-max))
-    (unless (string-empty-p input)
-      input)))
+              (input (string-trim (buffer-substring-no-properties start (point-max))))
+              ((not (string-empty-p input))))
+    input))
+
+(defun agent-shell--clear-prompt-input ()
+  "Clear what is typed at the live prompt, leaving the prompt itself.
+
+The shell keeps somewhere to type, so a buffer ending
+
+  Claude> list the files
+
+ends
+
+  Claude>"
+  (when-let* ((start (agent-shell--prompt-input-start))
+              ((< start (point-max))))
+    (delete-region start (point-max))))
+
+(defun agent-shell--take-prompt-input ()
+  "Clear and return the text typed at the live prompt, or nil when empty.
+
+`agent-shell--prompt-input' and `agent-shell--clear-prompt-input' in one
+step, for callers that want the text out of the way before they act.
+Callers that might not act at all should use the two separately, so what
+the user typed survives untouched when nothing comes of it."
+  (prog1 (agent-shell--prompt-input)
+    (agent-shell--clear-prompt-input)))
 
 (defun agent-shell--point-in-live-input-p ()
   "Non-nil when point sits in the live prompt's input area.
