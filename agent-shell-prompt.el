@@ -24,8 +24,8 @@
 ;; has been typed into it, and render above it.
 ;;
 ;; A shell keeps a prompt at the buffer end for the whole turn, not just
-;; between turns (see `agent-shell--persistent-prompt'), so everything a
-;; turn renders has to land above it.  `agent-shell--with-buffer-narrowed-to'
+;; between turns (see `agent-shell-persistent-prompt-enabled'), so
+;; everything a turn renders has to land above it.  `agent-shell--with-buffer-narrowed-to'
 ;; is how callers do that.
 ;;
 ;; Its own file so the macro is defined before the files expanding it are
@@ -42,21 +42,24 @@
 (require 'shell-maker)
 (eval-when-compile (require 'cl-lib))
 
-(defvar agent-shell--persistent-prompt nil
-  "When non-nil, keep a writable prompt at the end of the shell at all times.
+(defcustom agent-shell-persistent-prompt-enabled nil
+  "Whether a shell keeps a writable prompt at the buffer end at all times.
 
-The prompt returns as soon as a submission is dispatched and stays for the
-whole turn, so there is always somewhere to type.  Submitting from it
-while the agent is busy queues the text (see `agent-shell-prompt-queue')
-and clears the input, the way a TUI agent takes type-ahead.
+When non-nil, the prompt returns as soon as a submission is dispatched
+and stays for the whole turn, so there is always somewhere to type.  What
+submitting into a working agent then does is up to
+`agent-shell-busy-submit-default-function', which queues by default, the
+way a TUI agent takes type-ahead.
 
-Everything a turn renders then lands above that prompt, pushing
-unsubmitted input down rather than writing over it.  Writing below it is
-a bug, and both packages assert rather than let it happen quietly (see
-`agent-shell--live-prompt-start').
+Everything a turn renders lands above that prompt, pushing unsubmitted
+input down rather than writing over it.
 
-Private while the feature settles.  Set it to nil to have the prompt
-consumed on submission and printed again once the turn ends.")
+When nil, the prompt is consumed on submission and printed again once the
+turn ends, so there is nowhere to type mid-turn.  The viewport's compose
+buffer is there either way, and submitting from it mid-turn routes the
+same."
+  :type 'boolean
+  :group 'agent-shell)
 
 (defun agent-shell--live-input-prompt-p (prompt)
   "Non-nil when PROMPT is a live input prompt at the end of the buffer.
@@ -92,7 +95,7 @@ rather than unsetting them, and reading that as a live prompt would have
 Callers narrow to this position to render above the prompt, leaving the
 prompt and any unsubmitted input after it below whatever they write.
 
-Signals instead of returning nil while `agent-shell--persistent-prompt'
+Signals instead of returning nil while `agent-shell-persistent-prompt-enabled'
 is on.  Everything renders above the prompt in that mode, so a missing
 prompt means the next write lands in the input area, past text the user
 is in the middle of typing.  Failing here names the write that lost the
@@ -107,7 +110,7 @@ prompt, rather than leaving a shell that scribbles over its own input."
     nil)
    ((agent-shell--live-input-prompt-p comint-last-prompt)
     (car comint-last-prompt))
-   (agent-shell--persistent-prompt
+   (agent-shell-persistent-prompt-enabled
     (error "No live prompt to render above (buffer: %s)" (buffer-name)))))
 
 (defmacro agent-shell--with-buffer-narrowed-to (prompt-start &rest body)
@@ -211,7 +214,7 @@ The input area runs from the live prompt's end to `point-max': a live
 prompt has nothing but typed text after it (see
 `agent-shell--live-input-prompt-p').  Nil when the prompt nearest the
 buffer end is stale, which is what a shell mid-turn looks like without
-`agent-shell--persistent-prompt'.
+`agent-shell-persistent-prompt-enabled'.
 
 For example, with the buffer ending in `Claude> list', point anywhere
 from just after `Claude> ' to `point-max' answers non-nil, and point up
@@ -239,7 +242,7 @@ prompt printed -- a fresh buffer, one just cleared, or a turn that
 consumed its prompt on submission.
 
 Takes over only when a prompt is already waiting for input, which is
-what `agent-shell--persistent-prompt' arranges.  Printing then would
+what `agent-shell-persistent-prompt-enabled' arranges.  Printing then would
 stack a second prompt below the first and below anything typed at it, so
 this does the rest of what `shell-maker-finish-output' does and no more:
 clears the busy flag, records the input ring on SUCCESS, and runs

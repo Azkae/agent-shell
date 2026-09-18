@@ -4,10 +4,10 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/agent-shell
-;; Version: 0.77.3
+;; Version: 0.77.4
 ;; Package-Requires: ((emacs "29.1") (shell-maker "0.97.3") (acp "0.15.1"))
 
-(defconst agent-shell--version "0.77.3")
+(defconst agent-shell--version "0.77.4")
 
 ;; Minimum dependency versions, as declared in the `Package-Requires'
 ;; header above.  Package managers that resolve versions enforce the
@@ -1319,9 +1319,9 @@ Submitting mid-turn hands the text to
 `agent-shell-busy-submit-default-function' and clears the input, which
 queues by default and drains when the turn ends.  Whether there is a
 prompt to submit from mid-turn is up to
-`agent-shell--persistent-prompt', but the routing does not depend on it:
-the same setting governs the viewport's compose buffer, which is there
-either way.
+`agent-shell-persistent-prompt-enabled', but the routing does not depend
+on it: the same setting governs the viewport's compose buffer, which is
+there either way.
 
 With \[universal-argument] prefix ARG, submit through
 `agent-shell-busy-submit-override-function' instead, which steers by
@@ -2287,8 +2287,8 @@ See also `agent-shell-confirm-interrupt'."
      ;; shell-maker has just committed the input and is about to hand the
      ;; turn over.  Bring the prompt back before anything renders, so there
      ;; is somewhere to type for the whole turn and every write has a prompt
-     ;; to land above (see `agent-shell--persistent-prompt').
-     (when agent-shell--persistent-prompt
+     ;; to land above (see `agent-shell-persistent-prompt-enabled').
+     (when agent-shell-persistent-prompt-enabled
        (agent-shell--print-prompt))
      (agent-shell--handle
       :command command
@@ -4885,7 +4885,7 @@ variable (see makunbound)"))
       ;; Show the prompt immediately, before bootstrapping, so shell
       ;; always has a prompt to type into regardless of strategy.  It then
       ;; stays for the rest of the session, not just until the first
-      ;; submission (see `agent-shell--persistent-prompt').
+      ;; submission (see `agent-shell-persistent-prompt-enabled').
       (agent-shell--finish-output :config shell-maker--config :success nil)
       ;; Land point on the freshly shown prompt (see #668).  Later context
       ;; insertion / user edits move it from here; bootstrapping does not.
@@ -5076,7 +5076,7 @@ NAVIGATION for navigation style, EXPANDED to show block expanded
 by default, RENDER-BODY-IMAGES to enable inline image rendering in
 body, ABOVE-LAST-PROMPT to land content above the active prompt
 instead of after it (typical for notifications arriving out of
-turn).  Ignored while `agent-shell--persistent-prompt' is on, where a
+turn).  Ignored while `agent-shell-persistent-prompt-enabled' is on, where a
 prompt is live for the whole turn and everything renders above it.
 Programmatic fragment updates do not enter undo history.
 
@@ -5087,7 +5087,7 @@ with GROUP-EXPANDED as the group's initial fold state."
   ;; to render above and every write goes there.  Callers decide
   ;; ABOVE-LAST-PROMPT from whether the shell is busy, which only tells
   ;; them about the out-of-turn case.
-  (when agent-shell--persistent-prompt
+  (when agent-shell-persistent-prompt-enabled
     (setq above-last-prompt t))
   (when label-right
     (setq label-right (string-trim label-right)))
@@ -5279,9 +5279,10 @@ BLOCK-ID uniquely identifies the entry.
 TEXT is the string to insert or append.
 APPEND and CREATE-NEW control update behavior.
 
-Lands above the live prompt while `agent-shell--persistent-prompt' is on,
-the same as `agent-shell--update-fragment'.  Without it this appends at
-`point-max', which mid-turn is past whatever the user is typing."
+Lands above the live prompt while
+`agent-shell-persistent-prompt-enabled' is on, the same as
+`agent-shell--update-fragment'.  Without it this appends at `point-max',
+which mid-turn is past whatever the user is typing."
   (let ((ns (or namespace-id (map-elt state :request-count))))
     (when-let* (((map-elt state :buffer))
                 (viewport-buffer (agent-shell-viewport--buffer
@@ -5300,7 +5301,7 @@ the same as `agent-shell--update-fragment'.  Without it this appends at
            :no-undo t))))
     (with-current-buffer (map-elt state :buffer)
       (let ((auto-scroll (eobp))
-            (late-prompt-start (and agent-shell--persistent-prompt
+            (late-prompt-start (and agent-shell-persistent-prompt-enabled
                                     (agent-shell--live-prompt-start))))
         (agent-shell--with-buffer-narrowed-to late-prompt-start
       (shell-maker-with-auto-scroll-edit
@@ -11089,8 +11090,9 @@ consult this to insert the character while a prompt is being
 composed, acting as commands anywhere else in the shell.
 
 Where point is decides it, not whether the shell is busy: with
-`agent-shell--persistent-prompt' a prompt is composed for the whole turn,
-so type-ahead starting with a bound character has to reach the buffer.
+`agent-shell-persistent-prompt-enabled' a prompt is composed for the
+whole turn, so type-ahead starting with a bound character has to reach
+the buffer.
 Without it there is no live prompt to compose into mid-turn, and this
 answers nil regardless."
   (and (agent-shell--point-in-live-input-p)

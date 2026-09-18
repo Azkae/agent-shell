@@ -119,11 +119,11 @@ in progress), the request is immediately rejected with an error."
 (defun agent-shell-experimental--remove-trailing-prompt ()
   "Remove the trailing empty shell prompt if it is at end of buffer.
 
-No-op under `agent-shell--persistent-prompt', where the shell is meant
+No-op under `agent-shell-persistent-prompt-enabled', where the shell is meant
 to keep a prompt at the buffer end at all times: the push renders above
 it, and deleting it here would take any unsubmitted input with it and
 leave the shell with nowhere to type."
-  (when-let* (((not agent-shell--persistent-prompt))
+  (when-let* (((not agent-shell-persistent-prompt-enabled))
               (comint-last-prompt)
               (prompt-start (car comint-last-prompt))
               (prompt-end (cdr comint-last-prompt))
@@ -364,7 +364,7 @@ send it as input."
     ;; Both inserts land above a live input prompt.
     ;; `shell-maker-insert-end-of-prompt-marker' documents that narrowing as
     ;; the way to synthesize history above a live prompt.
-    (let ((late-prompt-start (and (or agent-shell--persistent-prompt
+    (let ((late-prompt-start (and (or agent-shell-persistent-prompt-enabled
                                       (not (shell-maker-busy)))
                                   (agent-shell--live-prompt-start))))
       (agent-shell--with-buffer-narrowed-to late-prompt-start

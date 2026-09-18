@@ -4684,7 +4684,7 @@ down."
           (set-window-buffer (selected-window) shell-buf)
           (insert (make-string 200 ?\n))
           ;; The prompt the fragment renders above, which a shell always has
-          ;; waiting for input (see `agent-shell--persistent-prompt').
+          ;; waiting for input (see `agent-shell-persistent-prompt-enabled').
           (let ((prompt-start (point-max)))
             (insert "Claude> ")
             (setq-local comint-last-prompt (cons (copy-marker prompt-start)
@@ -6145,7 +6145,7 @@ markers shell-maker's writers set, a `cat' process for the process mark,
 and a prompt printed through the output filter so `comint-last-prompt'
 brackets it the way a real one does.  BODY is called with no arguments
 and its value returned."
-  (let* ((agent-shell--persistent-prompt t)
+  (let* ((agent-shell-persistent-prompt-enabled t)
          (buffer (generate-new-buffer " *agent-shell-persistent-prompt-test*"))
          (fake-process (start-process "fake-agent" buffer "cat")))
     (set-process-query-on-exit-flag fake-process nil)
@@ -6252,7 +6252,7 @@ busy state, decides it."
 (ert-deftest agent-shell--point-in-live-input-p-stale-prompt-test ()
   "A prompt with output streaming below it is not somewhere to type.
 
-Without `agent-shell--persistent-prompt' that is what a busy shell looks
+Without `agent-shell-persistent-prompt-enabled' that is what a busy shell looks
 like: `comint-last-prompt' still points at the submitted prompt, and
 point sits at the end of the output rather than in an input area."
   (with-temp-buffer
@@ -6308,14 +6308,14 @@ prompt's first character, with the user's own draft ahead of it."
 (ert-deftest agent-shell--live-prompt-start-asserts-missing-prompt-test ()
   "A missing prompt is an error rather than a write into the input area.
 
-Everything renders above the prompt while `agent-shell--persistent-prompt'
+Everything renders above the prompt while `agent-shell-persistent-prompt-enabled'
 is on, so a lost prompt means the next write lands wherever the user
 happens to be typing.  Failing names the write that lost it."
   (with-temp-buffer
     (setq-local comint-last-prompt nil)
-    (let ((agent-shell--persistent-prompt nil))
+    (let ((agent-shell-persistent-prompt-enabled nil))
       (should-not (agent-shell--live-prompt-start)))
-    (let ((agent-shell--persistent-prompt t))
+    (let ((agent-shell-persistent-prompt-enabled t))
       (should-error (agent-shell--live-prompt-start)))))
 
 (ert-deftest agent-shell--live-prompt-start-tolerates-outer-narrowing-test ()
@@ -6628,7 +6628,7 @@ a real button."
   "A character key typed at the live prompt is input, not a command.
 
 Busy state does not enter into it.  A prompt stays live for the whole
-turn (see `agent-shell--persistent-prompt'), and type-ahead starting
+turn (see `agent-shell-persistent-prompt-enabled'), and type-ahead starting
 with a bound character like `n' has to reach the buffer rather than
 navigate.  Where point is decides it, which
 `agent-shell--point-in-live-input-p' answers."
@@ -7031,7 +7031,7 @@ fragment) and `interrupted' (the running turn cancelled)."
 
 IDLE renders as though the turn ended while the steer was in flight.  A
 live input prompt sits at the buffer end either way, because
-`agent-shell--persistent-prompt' is bound on here: the shell keeps one
+`agent-shell-persistent-prompt-enabled' is bound on here: the shell keeps one
 there for the whole turn, so the steer renders above it whether or not
 the turn has ended.  Bound rather than inherited, so this covers the
 persistent prompt regardless of which way the default points.
@@ -7042,7 +7042,7 @@ part way through composing when the steer lands.
 Returns an alist of the resulting buffer text, the `:last-entry-type'
 left behind, the `:events' the render emitted, and `:point-at-end',
 non-nil when point came back to where the draft was being typed."
-  (let* ((agent-shell--persistent-prompt t)
+  (let* ((agent-shell-persistent-prompt-enabled t)
          (buffer (generate-new-buffer " *agent-shell-steer-render-test*"))
          (fake-process (start-process "fake-agent" buffer "cat")))
     (set-process-query-on-exit-flag fake-process nil)

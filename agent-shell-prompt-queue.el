@@ -86,7 +86,7 @@ TODO: Remove after 2026-08-28."
     ;; inserts at `point-max', which would put it ahead of that draft and
     ;; send the two as one message.  Set the draft aside and type it back
     ;; into the prompt the submission leaves behind.
-    (let ((draft (and agent-shell--persistent-prompt
+    (let ((draft (and agent-shell-persistent-prompt-enabled
                       (agent-shell--take-prompt-input))))
       (agent-shell--insert-to-shell-buffer
        :text next-prompt
