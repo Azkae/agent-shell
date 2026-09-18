@@ -30,6 +30,7 @@ With agent-shell, you can interact with any ACP-driven agent like:
 - [[https://www.kimi.com/code][Kimi Code CLI]]
 - [[https://www.codebuddy.ai][CodeBuddy]]
 - [[https://kiro.dev][Kiro CLI]]
+- [[https://qoder.com][Qoder CLI]]
 - [[https://github.com/QwenLM/qwen-code][Qwen Code]]
 - [[https://docs.augmentcode.com/cli/overview][Auggie]]
 - [[https://github.com/mistralai/mistral-vibe][Mistral Vibe]]
@@ -197,6 +198,27 @@ curl -fsSL https://cli.kiro.dev/install | bash
 #+end_src
 
 See https://kiro.dev/docs/cli/acp/ for details.
+
+*** Qoder CLI
+
+Install Qoder CLI following the [[https://docs.qoder.com/cli/installation][Qoder installation instructions]],
+then log in once:
+
+#+begin_src bash
+qoder login
+#+end_src
+
+Qoder CLI includes an ACP server.  Start it from =agent-shell= with
+=M-x agent-shell-qoder-start-agent=; the backend launches:
+
+#+begin_src bash
+qoder --acp
+#+end_src
+
+Qoder uses the CLI's existing login state, so a Qoder subscription can be used
+without configuring a separate model API key.  For non-interactive
+authentication, set =QODER_PERSONAL_ACCESS_TOKEN=...= in
+=agent-shell-qoder-environment=.  See the [[https://docs.qoder.com/cli/acp][Qoder ACP documentation]].
 
 *** Qwen Code
 
