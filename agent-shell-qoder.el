@@ -49,7 +49,7 @@ For token-based authentication, add `QODER_PERSONAL_ACCESS_TOKEN=...` here."
    :buffer-name "Qoder"
    :shell-prompt "Qoder> "
    :shell-prompt-regexp "Qoder> "
-   :icon-name "qoder.png"
+   :icon-name "qoder-color.png"
    :client-maker (lambda (buffer)
                    (agent-shell-qoder-make-client :buffer buffer))
    :install-instructions
