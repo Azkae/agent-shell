@@ -1649,31 +1649,31 @@ default bindings."
   "List of fragment qualified-ids that were opened during isearch.")
 
 (defun agent-shell-ui--isearch-filter-predicate (beg end)
-  "Custom isearch filter that expands collapsed fragments when matches are found.
-BEG and END define the match region."
-  ;; Check if the match contains invisible text
-  (let ((pos beg)
-        (found-invisible nil))
-    (while (and (< pos end) (not found-invisible))
-      (when (get-text-property pos 'invisible)
-        (setq found-invisible t))
-      (setq pos (1+ pos)))
+  "Isearch filter that honors `search-invisible' for collapsed fragments.
 
-    ;; If we found invisible text, expand the fragment
-    (when found-invisible
-      (save-excursion
-        (goto-char beg)
-        (when-let* ((state (get-text-property (point) 'agent-shell-ui-state))
-                    (qualified-id (map-elt state :qualified-id))
-                    ((map-elt state :collapsed)))
-          ;; Track which fragments we've opened
-          (unless (member qualified-id agent-shell-ui--isearch-opened-fragments)
-            (push qualified-id agent-shell-ui--isearch-opened-fragments))
-          ;; Expand the fragment
-          (agent-shell-ui--toggle-fragment-at-point))))
+BEG and END delimit the match.  Collapsed bodies hide text with the
+`invisible' text property, which isearch can only skip, never open
+\(it opens overlays only), so this stands in for `isearch-filter-visible'."
+  (cond
+   ((not search-invisible)
+    (isearch-filter-visible beg end))
+   ((eq search-invisible 'open)
+    (agent-shell-ui--isearch-expand-fragment beg end)
+    t)
+   (t t)))
 
-    ;; Always return t to include the match
-    t))
+(defun agent-shell-ui--isearch-expand-fragment (beg end)
+  "Expand the collapsed fragment hiding the isearch match between BEG and END.
+Does nothing when the match is fully visible."
+  (when (text-property-not-all beg end 'invisible nil)
+    (save-excursion
+      (goto-char beg)
+      (when-let* ((state (get-text-property (point) 'agent-shell-ui-state))
+                  (qualified-id (map-elt state :qualified-id))
+                  ((map-elt state :collapsed)))
+        (unless (member qualified-id agent-shell-ui--isearch-opened-fragments)
+          (push qualified-id agent-shell-ui--isearch-opened-fragments))
+        (agent-shell-ui--toggle-fragment-at-point)))))
 
 (defun agent-shell-ui--isearch-cleanup ()
   "Clean up isearch state when search ends."
@@ -1692,14 +1692,12 @@ BEG and END define the match region."
   (if agent-shell-ui-mode
       (progn
         (cursor-sensor-mode 1)
-        ;; Enable searching in invisible text and auto-expansion
-        (setq-local search-invisible 'open-all)
-        ;; Use custom filter predicate to expand fragments during search
+        ;; Collapsed bodies use the `invisible' text property, which
+        ;; isearch can't open on its own.  The predicate honors
+        ;; `search-invisible' and expands fragments as matches are visited.
         (setq-local isearch-filter-predicate #'agent-shell-ui--isearch-filter-predicate)
-        ;; Clean up when search ends
         (add-hook 'isearch-mode-end-hook #'agent-shell-ui--isearch-cleanup nil 'local))
     (cursor-sensor-mode -1)
-    (kill-local-variable 'search-invisible)
     (kill-local-variable 'isearch-filter-predicate)
     (remove-hook 'isearch-mode-end-hook #'agent-shell-ui--isearch-cleanup 'local)))
 

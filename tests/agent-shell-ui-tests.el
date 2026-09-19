@@ -235,6 +235,68 @@ Returns the buffer.  Caller must kill it."
           (should (agent-shell-ui-tests--fragment-collapsed-p "ns" "1")))
       (kill-buffer buf))))
 
+;;; isearch
+
+(defun agent-shell-ui-tests--isearch-filter-on (needle)
+  "Run the isearch filter predicate on the first occurrence of NEEDLE.
+Returns the predicate's result.  Errors if NEEDLE is not in the buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (should (search-forward needle nil t))
+    (agent-shell-ui--isearch-filter-predicate (match-beginning 0)
+                                              (match-end 0))))
+
+(ert-deftest agent-shell-ui-isearch-search-invisible-nil-skips-collapsed-test ()
+  "With `search-invisible' nil, hidden matches are rejected and stay hidden.
+Visible matches are still accepted."
+  (let ((buf (agent-shell-ui-tests--make-buffer-with-fragments
+              '(((:namespace-id . "ns") (:block-id . "1")
+                 (:label-left . "label") (:body . "hidden needle"))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((search-invisible nil))
+            (should-not (agent-shell-ui-tests--isearch-filter-on "needle"))
+            (should (agent-shell-ui-tests--fragment-collapsed-p "ns" "1"))
+            (should (agent-shell-ui-tests--isearch-filter-on "label"))))
+      (kill-buffer buf))))
+
+(ert-deftest agent-shell-ui-isearch-search-invisible-open-expands-collapsed-test ()
+  "With `search-invisible' `open', a hidden match expands its fragment."
+  (let ((buf (agent-shell-ui-tests--make-buffer-with-fragments
+              '(((:namespace-id . "ns") (:block-id . "1")
+                 (:label-left . "label") (:body . "hidden needle"))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((search-invisible 'open))
+            (should (agent-shell-ui-tests--isearch-filter-on "needle"))
+            (should-not (agent-shell-ui-tests--fragment-collapsed-p "ns" "1"))))
+      (kill-buffer buf))))
+
+(ert-deftest agent-shell-ui-isearch-lazy-highlight-does-not-expand-test ()
+  "Lazy highlight and match counting must not expand fragments.
+They bind `search-invisible' to t or `can-be-opened' while looking
+ahead, never `open', so a hidden match counts but stays collapsed."
+  (let ((buf (agent-shell-ui-tests--make-buffer-with-fragments
+              '(((:namespace-id . "ns") (:block-id . "1")
+                 (:label-left . "label") (:body . "hidden needle"))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (dolist (value '(t can-be-opened))
+            (let ((search-invisible value))
+              (should (agent-shell-ui-tests--isearch-filter-on "needle"))
+              (should (agent-shell-ui-tests--fragment-collapsed-p "ns" "1")))))
+      (kill-buffer buf))))
+
+(ert-deftest agent-shell-ui-mode-leaves-search-invisible-alone-test ()
+  "`agent-shell-ui-mode' must not shadow the user's `search-invisible'.
+Isearch seeds its per-search setting from it, so a buffer-local
+override would defeat customizing it to nil."
+  (with-temp-buffer
+    (agent-shell-ui-mode 1)
+    (should-not (local-variable-p 'search-invisible))
+    (should (eq isearch-filter-predicate
+                #'agent-shell-ui--isearch-filter-predicate))))
+
 (ert-deftest agent-shell-ui-toggle-survives-surgical-replace-test ()
   "Toggle target stays consistent after `--surgical-replace-body'.
 
