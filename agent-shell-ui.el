@@ -1349,6 +1349,27 @@ state-property range first.  User-facing toggling goes through
              t)
         (agent-shell-ui--toggle-fragment-at-point)))))
 
+(defun agent-shell-ui--collapse-expanded-fragment (qualified-id)
+  "Collapse QUALIFIED-ID's fragment when it is currently expanded.
+
+Unlike `agent-shell-ui-collapse-fragment-by-id', which toggles whatever
+state it finds, this is a no-op when the fragment is already collapsed
+or no longer rendered.
+
+  ;; Fragment \"ns-1\" is expanded.
+  (agent-shell-ui--collapse-expanded-fragment \"ns-1\")
+  ;; Its body is hidden and its indicator reads `▶'."
+  (save-mark-and-excursion
+    (goto-char (point-max))
+    (when-let* (((text-property-search-backward
+                  'agent-shell-ui-state qualified-id
+                  (lambda (_ state)
+                    (equal (map-elt state :qualified-id) qualified-id))
+                  t))
+                ((not (map-elt (get-text-property (point) 'agent-shell-ui-state)
+                               :collapsed))))
+      (agent-shell-ui--toggle-fragment-at-point))))
+
 (cl-defun agent-shell-ui-set-group-collapsed-by-id (&key namespace-id block-id collapsed no-undo)
   "Fold or unfold the group header NAMESPACE-ID/BLOCK-ID to match COLLAPSED.
 
@@ -1646,14 +1667,34 @@ default bindings."
                        'rear-nonsticky t))))
 
 (defvar-local agent-shell-ui--isearch-opened-fragments nil
-  "List of fragment qualified-ids that were opened during isearch.")
+  "Qualified-ids of the fragments the ongoing search expanded.
+
+Most recent first, groups included, for example:
+
+  (\"ns-t2\" \"ns-grp\")
+
+A child is pushed after the group it sits in, so collapsing in order
+folds the child back before its group.
+`agent-shell-ui--isearch-cleanup' does that when the search ends, so
+searching leaves folds as it found them.")
 
 (defun agent-shell-ui--isearch-filter-predicate (beg end)
-  "Isearch filter that honors `search-invisible' for collapsed fragments.
+  "Return non-nil when isearch should accept the match between BEG and END.
 
-BEG and END delimit the match.  Collapsed bodies hide text with the
-`invisible' text property, which isearch can only skip, never open
-\(it opens overlays only), so this stands in for `isearch-filter-visible'."
+Honors `search-invisible', which `agent-shell-ui-mode' previously
+overrode:
+
+  nil            skip matches hidden inside collapsed fragments
+  `open'         accept them, expanding the fragment on the way
+  t              accept them, leaving the fragment collapsed
+
+Lazy highlighting and match counting bind `search-invisible' to t or
+`can-be-opened', never `open', so they count hidden matches without
+unfolding anything.
+
+Collapsed bodies hide text with the `invisible' text property, which
+isearch can only skip, never open \(it opens overlays only), so this
+stands in for `isearch-filter-visible'."
   (cond
    ((not search-invisible)
     (isearch-filter-visible beg end))
@@ -1662,21 +1703,73 @@ BEG and END delimit the match.  Collapsed bodies hide text with the
     t)
    (t t)))
 
+(defun agent-shell-ui--isearch-track-opened (qualified-id)
+  "Record QUALIFIED-ID as expanded by the ongoing search."
+  (unless (member qualified-id agent-shell-ui--isearch-opened-fragments)
+    (push qualified-id agent-shell-ui--isearch-opened-fragments)))
+
+(defun agent-shell-ui--isearch-expand-group (group-qualified-id)
+  "Expand group GROUP-QUALIFIED-ID when it is currently collapsed.
+
+Expanding a child on its own would clear the `invisible' property the
+group laid over it, leaving the body on display under a header still
+reading `▶', with the child's own label line still hidden.  Nil
+GROUP-QUALIFIED-ID (an ungrouped fragment) is a no-op."
+  ;; `--set-group-collapsed' leaves point on the header indicator it
+  ;; rewrites, which would send the caller's toggle to the group.
+  (save-mark-and-excursion
+    (when-let* ((group-qualified-id)
+                (header (agent-shell-ui--group-header-range group-qualified-id))
+                (state (get-text-property (map-elt header :start)
+                                          'agent-shell-ui-state))
+                ((map-elt state :collapsed))
+                (inhibit-read-only t)
+                (buffer-undo-list t))
+      (agent-shell-ui--isearch-track-opened group-qualified-id)
+      (agent-shell-ui--set-group-collapsed group-qualified-id nil))))
+
 (defun agent-shell-ui--isearch-expand-fragment (beg end)
   "Expand the collapsed fragment hiding the isearch match between BEG and END.
-Does nothing when the match is fully visible."
+Expands the owning group first, so the match arrives in view under its
+own label rather than orphaned below a collapsed header.  Does nothing
+when the match is fully visible."
   (when (text-property-not-all beg end 'invisible nil)
     (save-excursion
       (goto-char beg)
-      (when-let* ((state (get-text-property (point) 'agent-shell-ui-state))
-                  (qualified-id (map-elt state :qualified-id))
-                  ((map-elt state :collapsed)))
-        (unless (member qualified-id agent-shell-ui--isearch-opened-fragments)
-          (push qualified-id agent-shell-ui--isearch-opened-fragments))
-        (agent-shell-ui--toggle-fragment-at-point)))))
+      (when-let* ((state (get-text-property (point) 'agent-shell-ui-state)))
+        (agent-shell-ui--isearch-expand-group (map-elt state :group-id))
+        (when-let* ((qualified-id (map-elt state :qualified-id))
+                    ((map-elt state :collapsed)))
+          (agent-shell-ui--isearch-track-opened qualified-id)
+          (agent-shell-ui--toggle-fragment-at-point))))))
+
+(defun agent-shell-ui--isearch-fragments-at-point ()
+  "Return qualified-ids of the fragment point sits in and its owning group.
+
+Also looks at the char before point, so a match ending on a fragment's
+last char still counts as landing in that fragment.  For example:
+
+  (\"ns-t2\" \"ns-grp\")"
+  (when-let* ((state (or (get-text-property (point) 'agent-shell-ui-state)
+                         (unless (bobp)
+                           (get-text-property (1- (point))
+                                              'agent-shell-ui-state)))))
+    (seq-remove #'null (list (map-elt state :qualified-id)
+                             (map-elt state :group-id)))))
 
 (defun agent-shell-ui--isearch-cleanup ()
-  "Clean up isearch state when search ends."
+  "Collapse the fragments the search expanded, minus where point landed.
+
+Runs from `isearch-mode-end-hook'.  Only fragments isearch itself
+expanded are collapsed again, so anything unfolded by hand during the
+search stays open.  The fragment point landed on is kept, as is its
+group, which would otherwise fold the match back out of sight.  Quitting
+with \\[isearch-abort] restores point before this runs, so in that case
+every fragment isearch opened folds back."
+  (let ((landed-on (agent-shell-ui--isearch-fragments-at-point)))
+    (dolist (qualified-id agent-shell-ui--isearch-opened-fragments)
+      (unless (member qualified-id landed-on)
+        (agent-shell-ui--collapse-expanded-fragment qualified-id))))
   (setq agent-shell-ui--isearch-opened-fragments nil))
 
 (defvar agent-shell-ui-mode-map
@@ -1694,7 +1787,8 @@ Does nothing when the match is fully visible."
         (cursor-sensor-mode 1)
         ;; Collapsed bodies use the `invisible' text property, which
         ;; isearch can't open on its own.  The predicate honors
-        ;; `search-invisible' and expands fragments as matches are visited.
+        ;; `search-invisible' and expands fragments as matches are
+        ;; visited, while the end hook folds them back.
         (setq-local isearch-filter-predicate #'agent-shell-ui--isearch-filter-predicate)
         (add-hook 'isearch-mode-end-hook #'agent-shell-ui--isearch-cleanup nil 'local))
     (cursor-sensor-mode -1)
