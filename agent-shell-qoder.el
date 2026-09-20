@@ -1,11 +1,19 @@
 ;;; agent-shell-qoder.el --- Qoder agent configurations -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2026 liyanan <liyananfamily@gmail.com>
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
-;; the Free Software Foundation, either version 3, or (at your option)
+;; the Free Software Foundation; either version 3, or (at your option)
 ;; any later version.
+
+;; This package is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 ;;
@@ -36,20 +44,25 @@ The first element is the command name, and the rest are command parameters."
   nil
   "Environment variables for the Qoder CLI ACP server.
 
-This should be a list of environment variables to use when starting Qoder.
-For token-based authentication, add `QODER_PERSONAL_ACCESS_TOKEN=...` here."
+This should be a list of environment variables to be used when
+starting the Qoder CLI ACP server.
+
+For token-based authentication, add an entry of the form
+\"QODER_PERSONAL_ACCESS_TOKEN=...\"."
   :type '(repeat string)
   :group 'agent-shell)
 
 (defun agent-shell-qoder-make-agent-config ()
-  "Create a Qoder agent configuration."
+  "Create a Qoder agent configuration.
+
+Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (agent-shell-make-agent-config
    :identifier 'qoder
    :mode-line-name "Qoder"
    :buffer-name "Qoder"
    :shell-prompt "Qoder> "
    :shell-prompt-regexp "Qoder> "
-   :icon-name "qoder-color.png"
+   :icon-name "qoder.png"
    :client-maker (lambda (buffer)
                    (agent-shell-qoder-make-client :buffer buffer))
    :install-instructions

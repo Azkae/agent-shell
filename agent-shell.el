@@ -92,6 +92,7 @@
 (require 'agent-shell-project)
 (require 'agent-shell-prompt)
 (require 'agent-shell-prompt-queue)
+(require 'agent-shell-qoder)
 (require 'agent-shell-qwen)
 (require 'agent-shell-styles)
 (require 'agent-shell-usage)
@@ -782,6 +783,7 @@ example filtering them.  See `agent-shell-agent-configs'."
         #'agent-shell-omp-make-agent-config
         #'agent-shell-opencode-make-agent-config
         #'agent-shell-pi-make-agent-config
+        #'agent-shell-qoder-make-agent-config
         #'agent-shell-qwen-make-agent-config
         #'agent-shell-xai-make-grok-config))
 
@@ -869,6 +871,7 @@ behavior explicitly."
                  (const :tag "Mistral" le-chat)
                  (const :tag "OpenCode" opencode)
                  (const :tag "Pi" pi)
+                 (const :tag "Qoder" qoder)
                  (const :tag "Qwen Code" qwen-code)
                  (symbol :tag "Custom identifier")
                  (cons :tag "Preselect in picker (still prompt)"

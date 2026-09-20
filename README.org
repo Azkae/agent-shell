@@ -1104,8 +1104,6 @@ always go to Evil modes if you need to with ~C-z~).
 | agent-shell-kiro-default-model-id             | Default Kiro model ID.                                                          |
 | agent-shell-kiro-default-session-mode-id      | Default Kiro session mode ID.                                                   |
 | agent-shell-kiro-environment                  | Environment variables for the Kiro CLI client.                                  |
-| agent-shell-qoder-acp-command                 | Command and parameters for the Qoder CLI ACP server.                            |
-| agent-shell-qoder-environment                 | Environment variables for the Qoder CLI ACP server.                              |
 | agent-shell-list-edit-mode-hook               | Hook run after entering or leaving ‘agent-shell-list-edit-mode’.                |
 | agent-shell-markdown-render-function          | Function called to render markdown in the current narrowed buffer.              |
 | agent-shell-mcp-servers                       | List of MCP servers to initialize when creating a new session.                  |
@@ -1137,6 +1135,8 @@ always go to Evil modes if you need to with ~C-z~).
 | agent-shell-prompt-bar-input-mode-hook        | Hook run after entering or leaving ‘agent-shell-prompt-bar-input-mode’.         |
 | agent-shell-prompt-bar-mode                   | Non-nil if Agent-Shell-Prompt-Bar mode is enabled.                              |
 | agent-shell-prompt-bar-mode-hook              | Hook run after entering or leaving ‘agent-shell-prompt-bar-mode’.               |
+| agent-shell-qoder-acp-command                 | Command and parameters for the Qoder CLI ACP server.                            |
+| agent-shell-qoder-environment                 | Environment variables for the Qoder CLI ACP server.                             |
 | agent-shell-qwen-acp-command                  | Command and parameters for the Qwen Code client.                                |
 | agent-shell-qwen-authentication               | Configuration for Qwen Code authentication.                                     |
 | agent-shell-qwen-environment                  | Environment variables for the Qwen Code client.                                 |
@@ -1252,7 +1252,6 @@ always go to Evil modes if you need to with ~C-z~).
 |                                                       | agent-shell-jump-to-latest-permission-button-row        | Jump to the latest permission button row.                                     |
 |                                                       | agent-shell-kimi-start-agent                            | Start an interactive Kimi Code agent shell.                                   |
 |                                                       | agent-shell-kiro-start-agent                            | Start an interactive Kiro agent shell.                                        |
-|                                                       | agent-shell-qoder-start-agent                           | Start an interactive Qoder agent shell.                                       |
 |                                                       | agent-shell-list-edit-dedent-line                       | De-indent the current list item.                                              |
 |                                                       | agent-shell-list-edit-indent-line                       | Indent the current list item.                                                 |
 |                                                       | agent-shell-list-edit-mode                              | Minor mode for editing markdown-style lists.                                  |
@@ -1294,6 +1293,7 @@ always go to Evil modes if you need to with ~C-z~).
 |                                                       | agent-shell-prompt-queue-remove                         | Remove all pending prompts or a specific prompt by REMOVE-INDEX.              |
 |                                                       | agent-shell-prompt-queue-resume                         | Resume processing pending prompts in the queue.                               |
 |                                                       | agent-shell-prompt-steer                                | Steer PROMPT into the turn the agent is currently running.                    |
+|                                                       | agent-shell-qoder-start-agent                           | Start an interactive Qoder agent shell.                                       |
 | r                                                     | agent-shell-quote-region                                | Quote the active region into the shell's latest prompt.                       |
 |                                                       | agent-shell-qwen-start                                  | Start an interactive Qwen Code CLI agent shell.                               |
 |                                                       | agent-shell-reload                                      | Reload the current session by restarting with the same session ID.            |
