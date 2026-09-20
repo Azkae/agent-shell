@@ -5490,6 +5490,47 @@ any N restores the parked draft the way a plain step does."
     (should (map-elt result :entered-edit))
     (should-not (map-elt result :snapshot-after))))
 
+(ert-deftest agent-shell-viewport-next-page-negative-n-moves-backwards-test ()
+  "Test a negative N reverses `agent-shell-viewport-next-page'.
+
+Emacs motion commands read a negative prefix argument as the same
+motion the other way, so C-u -2 f steps back twice."
+  (let ((result (agent-shell-viewport-tests--with-page-steps
+                 :entries '(("page one" . "one") ("page zero" . "zero"))
+                 :body (lambda () (agent-shell-viewport-next-page :n -2)))))
+    (should (equal (map-elt result :steps) 2))
+    (should (equal (map-elt result :directions) '(t t)))
+    (should (equal (map-elt result :initialized)
+                   '(:prompt "page zero" :response "zero")))))
+
+(ert-deftest agent-shell-viewport-previous-page-negative-n-moves-forwards-test ()
+  "Test a negative N reverses `agent-shell-viewport-previous-page'.
+
+C-u -2 b steps forward twice, mirroring the forward command."
+  (let ((result (agent-shell-viewport-tests--with-page-steps
+                 :entries '(("page three" . "three") ("page four" . "four"))
+                 :body (lambda () (agent-shell-viewport-previous-page -2)))))
+    (should (equal (map-elt result :steps) 2))
+    (should (equal (map-elt result :directions) '(nil nil)))
+    (should (equal (map-elt result :initialized)
+                   '(:prompt "page four" :response "four")))))
+
+(ert-deftest agent-shell-viewport-next-page-zero-n-does-nothing-test ()
+  "Test a zero N leaves the viewport where it is.
+
+Sitting on the newest interaction with a draft parked, C-u 0 f must not
+step, re-render, or consume the snapshot the way a plain step would."
+  (let ((result (agent-shell-viewport-tests--with-page-steps
+                 :entries '(("page three" . "three"))
+                 :position '((:current . 4) (:total . 4))
+                 :snapshot '((:content . "draft") (:location . 1))
+                 :body (lambda () (agent-shell-viewport-next-page :n 0)))))
+    (should (equal (map-elt result :steps) 0))
+    (should-not (map-elt result :initialized))
+    (should-not (map-elt result :entered-edit))
+    (should (equal (map-elt result :snapshot-after)
+                   '((:content . "draft") (:location . 1))))))
+
 (ert-deftest agent-shell-viewport-initialize-rerenders-header-position-test ()
   "Test `agent-shell-viewport--initialize' re-renders the header position.
 

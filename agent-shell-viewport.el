@@ -983,11 +983,22 @@ QUOTED-TEXT is inserted as a block quote as part of the reply."
     (goto-char (map-elt snapshot :location))
     (setq agent-shell-viewport--compose-snapshot nil)))
 
-(defun agent-shell-viewport--move-pages (backwards n)
-  "Move up to N interactions in the current shell buffer.
-Move backwards when BACKWARDS is non-nil.  Return an alist of
-:interaction, the last interaction reached (nil when none was), and
-:exhausted, non-nil when history ran out before N moves."
+(cl-defun agent-shell-viewport--move-pages (&key backwards (n 1))
+  "Return an alist describing a move of up to N interactions.
+
+:interaction is the last interaction reached, nil when none was.
+:exhausted is non-nil when history ran out before N moves.
+Move backwards through the current shell buffer when BACKWARDS is non-nil.
+
+With three interactions ahead:
+
+  (agent-shell-viewport--move-pages :n 2)
+  ;; => ((:interaction . (\"prompt\" . \"response\")) (:exhausted . nil))
+
+With only one interaction ahead:
+
+  (agent-shell-viewport--move-pages :n 2)
+  ;; => ((:interaction . (\"prompt\" . \"response\")) (:exhausted . t))"
   (let ((remaining n)
         (interaction nil)
         (stepped t))
@@ -1003,7 +1014,7 @@ Move backwards when BACKWARDS is non-nil.  Return an alist of
   "Show previous interaction (request / response).
 
 N (default 1) is how many interactions to move back; a prefix argument
-supplies it."
+supplies it.  A negative N moves forward instead."
   (declare (modes agent-shell-viewport-view-mode))
   (interactive "p")
   (agent-shell-viewport-next-page :backwards t :start-at-top t :n n))
@@ -1014,7 +1025,8 @@ supplies it."
 If BACKWARDS is non-nil, go to previous interaction.
 If START-AT-TOP is non-nil, position at point-min regardless of direction.
 N (default 1) is how many interactions to move; a prefix argument
-supplies it.  Moving forward past the newest interaction restores a
+supplies it.  A negative N moves the other way, and a zero N does
+nothing.  Moving forward past the newest interaction restores a
 compose snapshot when one exists, and otherwise stops on the last
 interaction reached.
 
@@ -1024,6 +1036,12 @@ buffer from the snapshot and switch to edit mode."
   (interactive (list :n (prefix-numeric-value current-prefix-arg)))
   (unless (derived-mode-p 'agent-shell-viewport-view-mode)
     (error "Not in a viewport buffer"))
+  (setq n (or n 1))
+  (when (zerop n)
+    (cl-return-from agent-shell-viewport-next-page))
+  (when (< n 0)
+    (setq backwards (not backwards))
+    (setq n (- n)))
   (when (agent-shell-viewport--busy-p)
     (user-error "Busy... please wait"))
   (let ((shell-buffer (agent-shell-viewport--shell-buffer))
@@ -1057,7 +1075,7 @@ buffer from the snapshot and switch to edit mode."
                                       (= orig-line (point))))
                               (error "No next page")))
                           (agent-shell-viewport--move-pages
-                           backwards (max 1 (or n 1)))))
+                           :backwards backwards :n n)))
                   (next (map-elt move :interaction)))
         ;; A jump that ran past the newest interaction carries on into the
         ;; parked draft, so a prefix argument does what pressing the key
