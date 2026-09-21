@@ -1695,13 +1695,14 @@ unfolding anything.
 Collapsed bodies hide text with the `invisible' text property, which
 isearch can only skip, never open \(it opens overlays only), so this
 stands in for `isearch-filter-visible'."
-  (cond
-   ((not search-invisible)
-    (isearch-filter-visible beg end))
-   ((eq search-invisible 'open)
-    (agent-shell-ui--isearch-expand-fragment beg end)
-    t)
-   (t t)))
+  (save-match-data
+    (cond
+     ((not search-invisible)
+      (isearch-filter-visible beg end))
+     ((eq search-invisible 'open)
+      (agent-shell-ui--isearch-expand-fragment beg end)
+      t)
+     (t t))))
 
 (defun agent-shell-ui--isearch-track-opened (qualified-id)
   "Record QUALIFIED-ID as expanded by the ongoing search."
