@@ -4327,12 +4327,33 @@ other unknown ones."
 
 (ert-deftest agent-shell--format-cost-test ()
   "Test `agent-shell--format-cost' renders USD as $ and keeps other codes."
-  (should (equal "$0.42" (agent-shell--format-cost
+  (should (equal "$0.43" (agent-shell--format-cost
                           '((:cost-amount . 0.4237) (:cost-currency . "USD")))))
   (should (equal "$1.50" (agent-shell--format-cost '((:cost-amount . 1.5)))))
   (should (equal "CHF 0.42" (agent-shell--format-cost
                              '((:cost-amount . 0.42) (:cost-currency . "CHF")))))
   (should (equal "$0.00" (agent-shell--format-cost nil))))
+
+(ert-deftest agent-shell--format-cost-rounds-up-test ()
+  "Test `agent-shell--format-cost' rounds any spend up to the next cent."
+  (should (equal "$0.01" (agent-shell--format-cost '((:cost-amount . 0.000597)))))
+  (should (equal "$0.01" (agent-shell--format-cost '((:cost-amount . 0.004)))))
+  (should (equal "$0.02" (agent-shell--format-cost '((:cost-amount . 0.011847)))))
+  (should (equal "$29.65" (agent-shell--format-cost '((:cost-amount . 29.64120499999999)))))
+  (should (equal "CHF 0.01" (agent-shell--format-cost
+                             '((:cost-amount . 0.0001) (:cost-currency . "CHF")))))
+  (should (equal "$0.00" (agent-shell--format-cost '((:cost-amount . 0))))))
+
+(ert-deftest agent-shell--format-cost-exact-cent-test ()
+  "Test `agent-shell--format-cost' leaves exact cents alone.
+
+Scaling an exact cent overshoots it, for example (* 0.07 100) is
+7.00000000000000089, so rounding up must not gain a spurious cent."
+  (should (equal "$0.07" (agent-shell--format-cost '((:cost-amount . 0.07)))))
+  (should (equal "$0.14" (agent-shell--format-cost '((:cost-amount . 0.14)))))
+  (should (equal "$0.55" (agent-shell--format-cost '((:cost-amount . 0.55)))))
+  (should (equal "$1.10" (agent-shell--format-cost '((:cost-amount . 1.10)))))
+  (should (equal "$2.18" (agent-shell--format-cost '((:cost-amount . 2.18))))))
 
 (ert-deftest agent-shell--cost-indicator-test ()
   "Test `agent-shell--cost-indicator' shows the cost in the secondary face."
@@ -4344,7 +4365,7 @@ other unknown ones."
                (lambda () agent-shell--state)))
       (let ((agent-shell-show-cost-indicator t))
         (let ((result (agent-shell--cost-indicator)))
-          (should (equal "$0.42" (substring-no-properties result)))
+          (should (equal "$0.43" (substring-no-properties result)))
           (should (eq (get-text-property 0 'face result) 'agent-shell-secondary))
           (should (get-text-property 0 'help-echo result)))))))
 
@@ -4384,14 +4405,14 @@ other unknown ones."
       (let ((agent-shell-header-style 'text)
             (agent-shell--header-cache nil)
             (agent-shell-show-cost-indicator t))
-        (should (string-match-p "➤ \\$0\\.42"
+        (should (string-match-p "➤ \\$0\\.43"
                                 (substring-no-properties
                                  (agent-shell--make-header agent-shell--state)))))
       ;; Disabled: cost absent
       (let ((agent-shell-header-style 'text)
             (agent-shell--header-cache nil)
             (agent-shell-show-cost-indicator nil))
-        (should-not (string-match-p "\\$0\\.42"
+        (should-not (string-match-p "\\$0\\.43"
                                     (substring-no-properties
                                      (agent-shell--make-header agent-shell--state))))))))
 
@@ -4424,7 +4445,7 @@ other unknown ones."
              (svg-data (plist-get (cdr (get-text-property 1 'display header))
                                   :data)))
         (should (string-match-p
-                 (format "<tspan[^>]*fill=\"%s\"[^>]*>\\$0\\.42</tspan>"
+                 (format "<tspan[^>]*fill=\"%s\"[^>]*>\\$0\\.43</tspan>"
                          (agent-shell--svg-fill-color 'agent-shell-secondary))
                  svg-data))))))
 

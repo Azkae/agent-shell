@@ -66,7 +66,10 @@ Only appears when the ACP server provides usage information."
 
 When non-nil, the header shows the cost reported by the agent, for
 example \"$0.42\", after the context usage indicator.  Only appears
-once the ACP server reports a cost above zero."
+once the ACP server reports a cost above zero.
+
+Has no effect when `agent-shell-header-style' is nil or none, since
+the cost is not shown in the mode line."
   :type 'boolean
   :group 'agent-shell)
 
@@ -205,12 +208,21 @@ When MULTILINE is non-nil, format as right-aligned labeled rows."
 Dollars are the common case, so USD (or no currency at all) renders
 as \"$\".  Any other ISO 4217 code is kept as reported.
 
+Amounts round up to the next cent, so a session that spent a
+fraction of a cent never reads as free.
+
 For example, :cost-amount 0.4237 with :cost-currency \"USD\" gives
-\"$0.42\", with \"CHF\" gives \"CHF 0.42\", and no cost gives \"$0.00\"."
+\"$0.43\", with \"CHF\" gives \"CHF 0.43\", :cost-amount 0.000597
+gives \"$0.01\", and no cost gives \"$0.00\"."
   (concat (if (member (map-elt usage :cost-currency) '(nil "USD"))
               "$"
             (concat (map-elt usage :cost-currency) " "))
-          (format "%.2f" (or (map-elt usage :cost-amount) 0))))
+          ;; Back off by a tolerance before rounding up, since an exact
+          ;; cent does not survive the scaling: (* 0.07 100) is
+          ;; 7.00000000000000089, which would otherwise reach 8 cents.
+          (format "%.2f" (/ (ceiling (- (* (or (map-elt usage :cost-amount) 0) 100)
+                                        1e-9))
+                            100.0))))
 
 (defun agent-shell--cost-indicator ()
   "Return the session's cumulative cost for the header, or nil.
